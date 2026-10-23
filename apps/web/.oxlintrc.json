@@ -1,0 +1,11 @@
+{
+  "plugins": ["typescript", "react", "jsx-a11y", "nextjs"],
+  "env": {
+    "browser": true
+  },
+  "settings": {
+    "next": {
+      "rootDir": "."
+    }
+  }
+}

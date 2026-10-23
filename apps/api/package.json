@@ -1,0 +1,34 @@
+{
+  "name": "@neo-bank/api",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "nest start --watch",
+    "build": "nest build",
+    "start": "node dist/main.js",
+    "lint": "oxlint",
+    "format": "oxfmt --write .",
+    "format:check": "oxfmt --check .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:e2e": "vitest run --config test/vitest-e2e.config.ts",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@nestjs/common": "12.2.0",
+    "@nestjs/core": "12.2.0",
+    "@nestjs/platform-express": "12.2.0",
+    "reflect-metadata": "0.2.2",
+    "rxjs": "7.8.2"
+  },
+  "devDependencies": {
+    "@nestjs/cli": "12.0.10",
+    "@nestjs/testing": "12.2.0",
+    "@types/node": "24.10.1",
+    "@types/supertest": "6.0.3",
+    "supertest": "7.1.4",
+    "vitest": "5.0.5"
+  }
+}

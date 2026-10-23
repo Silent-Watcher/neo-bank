@@ -1,0 +1,7 @@
+{
+  "plugins": ["typescript", "node", "vitest"],
+  "env": {
+    "node": true,
+    "vitest": true
+  }
+}
