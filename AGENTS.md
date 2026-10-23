@@ -1,21 +1,103 @@
-# Agent Workflow
+# AGENTS.md
 
-## Feature records and commits
+## Project Overview
 
-1. Treat each user prompt as one feature unless the user explicitly splits it.
-2. Create one prompt record in `prompts/` for that feature. Include the user request and a concise record of the completed work.
-3. Make no more than one commit for that feature.
-4. Include the feature's prompt record in that commit.
-5. Never create a commit until the user explicitly approves it.
+This is a TypeScript monorepo managed with pnpm and Turborepo.
 
-## Required checks
+- `apps/api`: NestJS backend.
+- `apps/web`: Next.js web application.
+- `apps/admin`: React + Vite admin dashboard.
+- `prompts/`: Feature records and implementation prompts.
 
-- Before committing, run the checks relevant to the changed feature.
-- Pre-commit formats and lints staged supported files.
-- Pre-push runs the repository test suite.
+## General Rules
 
-## Process cleanup
+- Inspect existing code, configuration, Git status, and relevant documentation before making changes.
+- Follow established conventions and official documentation for installed dependency versions.
+- Prefer simple, maintainable solutions over unnecessary abstractions or dependencies.
+- Avoid `any`, unsafe type assertions, and unrelated refactoring.
+- Preserve existing functionality and user changes.
+- Never claim a check passed unless it actually succeeded.
+- Do not suppress errors or weaken validation to make checks pass.
 
-- Stop every development server, preview server, test watcher, and child process started for a task before reporting completion.
-- Terminate active command sessions after collecting the required result; do not leave application ports listening.
-- The execution platform owns the sandbox lifecycle. Clean up processes started inside it, but do not attempt to terminate the host sandbox.
+## Monorepo
+
+- Use pnpm for package management and Turborepo for task orchestration.
+- Respect workspace boundaries and keep dependencies in the appropriate workspace.
+- Keep `.nvmrc`, `engines.node`, `packageManager`, and the lockfile consistent.
+- Use root scripts for common development and validation tasks.
+- Do not modify the lockfile manually or introduce unnecessary workspaces.
+
+## Backend — NestJS
+
+- Follow NestJS conventions for modules, dependency injection, controllers, and providers.
+- Use TypeScript and ESM where supported by the selected tooling.
+- Validate external input and handle errors consistently.
+- Follow secure coding practices; never expose secrets or sensitive data in logs or responses.
+- Use Oxlint for linting and Oxfmt for formatting.
+- Do not introduce ESLint or Prettier as duplicate tooling without a concrete compatibility requirement.
+
+## Frontend — Next.js and Vite
+
+- Follow the conventions of each framework and its installed version.
+- Respect TypeScript types, React component boundaries, accessibility, and error states.
+- Prefer Next.js Server Components when appropriate; use `"use client"` only when needed.
+- Keep frontend-specific tooling and dependencies within their respective workspaces.
+- Do not apply backend-specific configurations indiscriminately to frontend applications.
+
+## Code Quality and Testing
+
+- Follow `.editorconfig` and the formatter configured for each workspace.
+- Add or update tests for meaningful behavior changes.
+- Before committing, run checks relevant to the changed feature.
+- Run broader monorepo checks when shared configuration or multiple applications are affected.
+- Pre-commit hooks must format and lint supported staged files through lint-staged.
+- Pre-push hooks must run the repository test suite.
+- Fix regressions introduced by your changes and report checks that could not run.
+- Review the final diff for unintended changes.
+
+## Git and Commits
+
+- Follow Conventional Commits using Commitizen, `cz-conventional-changelog`, and Commitlint.
+- Respect Husky hooks and lint-staged configuration.
+- Never bypass Git hooks unless explicitly authorized by the user.
+- Never create a commit until the user explicitly approves it.
+- Create no more than one commit per feature.
+- Include the feature's prompt record in its commit.
+- Do not amend, reset, or rewrite existing commits unless explicitly authorized.
+
+## Agent Workflow
+
+### Feature Records
+
+1. Treat each user prompt as one feature unless the user explicitly splits it into multiple features.
+2. Create one Markdown record in `prompts/` for each feature.
+3. Use sequential, zero-padded filenames in lowercase kebab-case, such as `_01-monorepo-foundation.md`.
+4. Include the original user request and a concise record of the implementation, relevant decisions, and validation results.
+5. Write prompt records in English.
+6. Preserve existing records and determine the next available number before creating a new file.
+7. Include the feature record in its commit when the user approves committing.
+8. Never overwrite existing records without authorization.
+
+### Execution Process
+
+1. Inspect the relevant code, configuration, Git status, and existing changes.
+2. Identify the simplest maintainable solution.
+3. Implement the requested changes and update relevant tests.
+4. Run applicable validation commands and review their actual results.
+5. Update the feature record and relevant documentation.
+6. Review the final diff and summarize the changes, checks, and remaining limitations.
+7. Wait for explicit user approval before committing.
+
+### Process Cleanup
+
+- Stop every development server, preview server, test watcher, and child process started for the task before reporting completion.
+- Terminate active command sessions after collecting the required results.
+- Ensure processes started by the task are not left listening on application ports.
+- Do not terminate processes that were already running before the task began.
+- The execution platform owns the sandbox lifecycle. Clean up processes started inside it, but never attempt to terminate the host sandbox.
+
+## Definition of Done
+
+A feature is complete when its implementation and prompt record are updated, relevant checks have been executed, unintended changes have been ruled out, task-created processes have been cleaned up, and remaining limitations are reported.
+
+Do not report successful validation for checks that were skipped or failed.
