@@ -78,6 +78,11 @@ This is a TypeScript monorepo managed with pnpm and Turborepo.
 7. Include the feature record in its commit when the user approves committing.
 8. Never overwrite existing records without authorization.
 
+### Decision Records
+
+- When a change is significant enough to document in `DECISIONS.md`, create its decision record with **Pending** status.
+- Present the pending decision to the user and wait for explicit acceptance before continuing development that depends on it.
+
 ### Execution Process
 
 1. Inspect the relevant code, configuration, Git status, and existing changes.
