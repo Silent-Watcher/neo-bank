@@ -7,7 +7,6 @@ describe('HealthController', () => {
       check: vi.fn<() => Promise<{ status: string }>>().mockResolvedValue({ status: 'ok' }),
     };
     const controller = new HealthController(health as never);
-
     const result = await controller.check();
 
     expect(result).toEqual({ status: 'ok' });

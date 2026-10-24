@@ -36,6 +36,12 @@ This is a TypeScript monorepo managed with pnpm and Turborepo.
 - Use Oxlint for linting and Oxfmt for formatting.
 - Do not introduce ESLint or Prettier as duplicate tooling without a concrete compatibility requirement.
 
+### NestJS Configuration
+
+For any task involving NestJS configuration, environment variables, environment validation, or configuration namespaces, follow `agents/rules/nest-config.md` and read `agents/skills/nest-config/SKILL.md` before making changes.
+
+Treat this convention as the default project architecture. Inspect existing files before creating new ones, and do not introduce a competing configuration approach.
+
 ## Frontend — Next.js and Vite
 
 - Follow the conventions of each framework and its installed version.
