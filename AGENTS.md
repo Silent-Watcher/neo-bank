@@ -48,7 +48,11 @@ This is a TypeScript monorepo managed with pnpm and Turborepo.
 
 - Follow `.editorconfig` and the formatter configured for each workspace.
 - Add or update tests for meaningful behavior changes.
+- Write unit tests for features following the Arrange–Act–Assert (AAA) pattern, and accompany them with integration tests where the feature warrants end-to-end verification. Testing both levels is a project requirement, not an optional extra.
 - Before committing, run checks relevant to the changed feature.
+- Do not run every formatting, linting, and test command after each short implementation step, and do not start run scripts (such as `pnpm dev`) just to verify that all applications are running during intermediate steps.
+- When a feature is implemented or the prompt's target is reached, run the formatter, then the linter, and then the test suite to verify everything is working correctly.
+- When modified files do not relate to the main source code (for example documentation or prompt records), do not run lint or test commands and do not verify that the applications still run, because no source code changed.
 - Run broader monorepo checks when shared configuration or multiple applications are affected.
 - Pre-commit hooks must format and lint supported staged files through lint-staged.
 - Pre-push hooks must run the repository test suite.
@@ -58,6 +62,8 @@ This is a TypeScript monorepo managed with pnpm and Turborepo.
 ## Git and Commits
 
 - Follow Conventional Commits using Commitizen, `cz-conventional-changelog`, and Commitlint.
+- When the user asks to submit a commit, call Commitizen (`git cz` or `pnpm cm`) and answer its prompts to build the commit message; do not hand-write it with `git commit -m`.
+- Do not run Commitlint manually to check the commit message format; the Husky `commit-msg` hook validates it automatically. If the hook rejects the message, adjust it and retry.
 - Respect Husky hooks and lint-staged configuration.
 - Never bypass Git hooks unless explicitly authorized by the user.
 - Never create a commit until the user explicitly approves it.
@@ -80,8 +86,15 @@ This is a TypeScript monorepo managed with pnpm and Turborepo.
 
 ### Decision Records
 
-- When a change is significant enough to document in `DECISIONS.md`, create its decision record with **Pending** status.
+- Whenever an addition or change is significant enough to be worth an architecture decision record, propose one proactively instead of waiting to be asked.
+- Before adding the record to `DECISIONS.md`, present the proposal to the user and ask whether it should be added; only write it after explicit approval.
+- Create approved decision records with **Pending** status.
 - Present the pending decision to the user and wait for explicit acceptance before continuing development that depends on it.
+
+### Delegated Validation
+
+- Delegate validation work such as formatting, linting, running tests, and type checking to a subagent instead of executing those commands yourself.
+- Read the subagent's report and base your conclusions on its results; never claim a check passed without its report confirming it.
 
 ### Execution Process
 

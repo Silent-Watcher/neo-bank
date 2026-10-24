@@ -88,3 +88,83 @@ Reconsider this decision if:
 
 - [Turborepo Documentation](https://turborepo.com/docs)
 - [Nx Documentation](https://nx.dev/docs)
+
+## ADR-002: Adopt Fastify as the NestJS HTTP Platform
+
+- **Status:** Accepted
+- **Date:** 2026-10-24
+
+### Context
+
+The project targets high request rates per second and is still new, making this the ideal time to choose its HTTP platform. The API application (`apps/api`) currently runs NestJS on the default Express adapter with no Express-specific middleware or integrations in place, so a platform switch carries minimal migration cost today.
+
+### Decision
+
+Use Fastify instead of Express as the HTTP platform for the NestJS API, via `@nestjs/platform-fastify` and `FastifyAdapter`.
+
+### Benefits
+
+- Strong performance characteristics and a suitable foundation for high-throughput workloads.
+- No Express-specific middleware must be ported at this time because none exists yet.
+
+Actual performance improvements are not guaranteed and must be confirmed with benchmarks before being claimed.
+
+### Alternatives Considered
+
+#### Retain Express
+
+Express is the most familiar Node.js framework and has the broadest middleware ecosystem.
+
+Retaining it was rejected because the project's high-RPS target favors Fastify's performance characteristics, and the project is new enough that switching costs are minimal now and only grow later.
+
+### Consequences
+
+Fastify-compatible integrations and APIs must be used.
+
+**Positive consequences**
+
+- The API starts from a platform aligned with its high-throughput goals.
+
+**Trade-offs**
+
+- Lower familiarity among some developers.
+- Incompatibility with certain Express middleware and tools; equivalent Fastify plugins or alternatives must be used when needed.
+
+## ADR-003: Adopt SWC for TypeScript Compilation
+
+- **Status:** Accepted
+- **Date:** 2026-10-24
+
+### Context
+
+The NestJS CLI currently transpiles the API with the TypeScript compiler (`tsc`). Compilation speed directly affects the development feedback loop and rebuild times, and the project's ESM-first setup has no path aliases or compiler workarounds that depend on `tsc`-specific behavior.
+
+### Decision
+
+Use SWC for TypeScript transpilation in the NestJS CLI build (`"builder": "swc"` with a `.swcrc` configuration that preserves decorators, metadata, source maps, and the ESM module format).
+
+### Benefits
+
+- Faster compilation and recompilation, improving the development feedback loop.
+
+### Alternatives Considered
+
+#### Continue Using the TypeScript Compiler
+
+`tsc` performs transpilation and semantic type checking in one step and requires no extra dependencies.
+
+It was rejected as the transpiler because SWC transpiles significantly faster, and semantic type checking is preserved anyway through a separate explicit type-check step.
+
+### Consequences
+
+A compatible SWC configuration must be maintained, and type checking must stay explicit and separate because SWC transpilation does not perform semantic type checking.
+
+**Positive consequences**
+
+- Faster builds and watch-mode recompilation.
+
+**Trade-offs**
+
+- Additional development dependencies (`@swc/core`).
+- A separate type-checking requirement (`tsc --noEmit`), which already exists as the `typecheck` script.
+- SWC does not emit `.d.ts` declaration files; nothing currently consumes them in this private application.
