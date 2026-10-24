@@ -10,6 +10,7 @@ description: Implement and maintain the NestJS configuration system using Config
 Follow the project's established configuration architecture whenever implementing or modifying environment configuration in a NestJS application.
 
 The configuration system must:
+
 - Load environment variables through Node.js `--env-file`, not through NestJS ConfigModule.
 - Validate environment variables with Zod before exposing them to application configuration.
 - Organize environment schemas by responsibility.
@@ -52,6 +53,7 @@ Define the primary NestJS configuration settings in:
 This file is the single source of truth for the application's ConfigModule setup.
 
 Requirements:
+
 - Use `ConfigModule.forRoot`.
 - Set `ignoreEnvFile: true` so NestJS ConfigModule does not load `.env` files.
 - Environment variables are supplied through Node.js `--env-file` and are already available in `process.env`.
@@ -89,11 +91,13 @@ Create environment schema files inside:
 Separate variables by responsibility rather than placing every environment variable in a single large schema.
 
 Examples:
+
 - `db.env.ts`: database connection settings.
 - `server.env.ts`: HTTP server settings.
 - Additional files only when another distinct configuration domain requires them.
 
 Each schema file must:
+
 1. Define a Zod object schema.
 2. Validate the expected environment variable names and constraints.
 3. Export the schema.
@@ -191,6 +195,7 @@ export const _env = validateEnv();
 Treat this as a structural example. Adapt the error class name, constructor arguments, imports, and error-handling conventions to the existing codebase.
 
 Requirements:
+
 - Reuse the existing custom error class if one already exists.
 - If none exists, create a focused error class under `src/shared/errors/`.
 - Do not introduce another validation library.
@@ -209,6 +214,7 @@ Use a dedicated error class for invalid environment configuration.
 Its responsibility is to distinguish environment validation failures from unrelated application errors while preserving a readable message.
 
 Before creating a new class:
+
 1. Inspect `src/shared/errors/`.
 2. Reuse an existing suitable error class if available.
 3. Otherwise, create a minimal class following existing project conventions.
@@ -220,10 +226,12 @@ Do not add a general-purpose error framework or unnecessary abstractions for thi
 Create configuration factory files directly under `src/config/`, outside the `env/` directory.
 
 Examples:
+
 - `database.config.ts`
 - `server.config.ts`
 
 Each factory must:
+
 1. Import the validated `_env` object.
 2. Define a namespace token using a symbol.
 3. Use `registerAs` to create the configuration factory.

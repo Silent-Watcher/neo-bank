@@ -18,6 +18,9 @@ This is a TypeScript monorepo managed with pnpm and Turborepo.
 - Preserve existing functionality and user changes.
 - Never claim a check passed unless it actually succeeded.
 - Do not suppress errors or weaken validation to make checks pass.
+- Never read `process.env` or use `console.log` in application source code.
+- The only permitted `process.env` access is the single environment validation call in the environment validation layer (`apps/api/src/shared/config/env/env.config.ts`).
+- Read validated configuration through configuration factories and `ConfigService`, and use the NestJS `Logger` for runtime logging.
 
 ## Monorepo
 

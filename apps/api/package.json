@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "nest start --watch",
+    "dev": "node --env-file=env/.env.development node_modules/@nestjs/cli/bin/nest.js start --watch",
     "build": "nest build",
     "start": "node dist/main.js",
     "lint": "oxlint",
@@ -13,16 +13,18 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:e2e": "vitest run --config test/vitest-e2e.config.ts",
+    "test:e2e": "node --env-file=env/.env.test node_modules/vitest/vitest.mjs run --config test/vitest-e2e.config.ts",
     "clean": "rm -rf dist"
   },
   "dependencies": {
     "@nestjs/common": "12.2.0",
+    "@nestjs/config": "^12.0.1",
     "@nestjs/core": "12.2.0",
     "@nestjs/platform-fastify": "12.2.0",
     "@nestjs/terminus": "12.1.0",
     "reflect-metadata": "0.2.2",
-    "rxjs": "7.8.2"
+    "rxjs": "7.8.2",
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@nestjs/cli": "12.0.10",

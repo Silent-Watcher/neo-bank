@@ -168,3 +168,56 @@ A compatible SWC configuration must be maintained, and type checking must stay e
 - Additional development dependencies (`@swc/core`).
 - A separate type-checking requirement (`tsc --noEmit`), which already exists as the `typecheck` script.
 - SWC does not emit `.d.ts` declaration files; nothing currently consumes them in this private application.
+
+## ADR-004: Use @nestjs/config and Zod for Configuration and Environment Validation
+
+- **Status:** Pending
+- **Date:** 2026-10-24
+
+### Context
+
+The API application needs its environment variables (`APP_ENV`, `HOST`, `PORT`, and future additions) to be defined, validated, and exposed to the application in a type-safe way. Runtime values arriving through `process.env` are always strings or `undefined`, so raw access is error-prone: an invalid port or an unknown environment name would otherwise surface only as a confusing runtime failure after the server has started.
+
+### Decision
+
+Use **`@nestjs/config`** together with **Zod** as the configuration and environment-validation foundation:
+
+- Environment files are loaded by Node.js `--env-file` (via `NODE_OPTIONS` in the relevant scripts), not by NestJS ConfigModule; ConfigModule runs with `ignoreEnvFile: true`.
+- Environment variables are validated at startup by a Zod aggregate schema (`src/shared/config/env/env.config.ts`) that parses `process.env` once — the only place in the codebase permitted to read `process.env`.
+- The `AppEnv` enum (`src/shared/enums`) is reused directly inside the Zod schema, so the allowed application environments are defined exactly once.
+- Validated values are exposed as the `_env` object and mapped into namespaced configuration factories via `registerAs` with symbol tokens (e.g. `SERVER_CONFIG`), registered through the central `ConfigModule.forRoot` setup in `src/shared/config/config.ts`.
+- Consumers read configuration through `ConfigService` using the namespace symbol (e.g. `app.get(ConfigService).get<ServerConfig>(SERVER_CONFIG)`), never from `process.env`.
+- Validation is fail-fast: on failure the process prints a readable, prettified Zod error (`z.prettifyError`) via the `EnvValidationError` error class and exits with code `1` before the server accepts requests. Zod's built-in error formatting is used instead of the additional `zod-validation-error` dependency, since Zod 4's `z.prettifyError` provides equivalent readable output.
+- Direct `process.env` and `console.log` usage in source code is banned (enforced by the oxlint `no-process-env` and `no-console` rules, with a single exception for the validation layer).
+
+### Alternatives Considered
+
+#### ConfigModule-Managed `.env` Loading with Joi or class-validator
+
+`@nestjs/config` natively supports `.env` file loading and schema validation with Joi or `class-validator`.
+
+This was rejected because the project already uses Node.js `--env-file`-capable tooling, making ConfigModule's own file loading redundant; class-validator requires decorator boilerplate for a simple object schema; and Joi is an additional validation dependency that cannot reuse TypeScript enums directly the way Zod can (`z.enum(AppEnv)`).
+
+#### Plain `process.env` Access with Manual Checks
+
+Reading `process.env` directly and hand-writing guards is dependency-free.
+
+It was rejected because it scatters validation logic, offers no type inference, and cannot guarantee fail-fast startup validation without duplicating checks at every consumer.
+
+### Consequences
+
+All environment variables must be declared in a Zod schema under `src/shared/config/env/schema/` and mapped through a namespaced configuration factory before any code can consume them.
+
+**Positive consequences**
+
+- Fail-fast startup with clear, human-readable validation errors.
+- Fully typed configuration derived from the schemas.
+- A single, auditable place where `process.env` is read.
+- No duplicate definitions of allowed environment values, thanks to reusing the `AppEnv` enum in the schema.
+- No extra formatting dependency for validation errors.
+
+**Trade-offs**
+
+- Zod and `@nestjs/config` are new runtime dependencies.
+- New environment variables require touching a schema file and a configuration factory.
+- Configuration consumers depend on `ConfigService` and the namespace symbols instead of reading values directly.

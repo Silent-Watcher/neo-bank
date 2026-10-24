@@ -3,5 +3,17 @@
   "env": {
     "node": true,
     "vitest": true
-  }
+  },
+  "rules": {
+    "no-console": "error",
+    "no-process-env": "error"
+  },
+  "overrides": [
+    {
+      "files": ["src/shared/config/env/env.config.ts"],
+      "rules": {
+        "no-process-env": "off"
+      }
+    }
+  ]
 }
