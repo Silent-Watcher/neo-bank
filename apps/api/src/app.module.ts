@@ -10,4 +10,4 @@ import { configModule } from './shared/config/config.js';
   controllers: [AppController, HealthController],
   providers: [AppService],
 })
-export class AppModule { }
+export class AppModule {}

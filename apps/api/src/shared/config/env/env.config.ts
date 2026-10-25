@@ -1,11 +1,21 @@
 import { z } from 'zod';
 
 import { EnvValidationError } from '../../errors/env-validation.error.js';
-import { serverEnvSchema } from './schema/server.env.js';
+import { isCorsOriginRequiredInProduction, serverEnvSchema } from './schema/server.env.js';
 
-export const envSchema = z.object({
-  ...serverEnvSchema.shape,
-});
+export const envSchema = z
+  .object({
+    ...serverEnvSchema.shape,
+  })
+  .superRefine((env, ctx) => {
+    if (isCorsOriginRequiredInProduction(env)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['CORS_ORIGIN'],
+        message: 'CORS_ORIGIN is required when APP_ENV is production.',
+      });
+    }
+  });
 
 export type Env = z.infer<typeof envSchema>;
 

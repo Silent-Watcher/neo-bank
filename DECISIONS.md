@@ -221,3 +221,127 @@ All environment variables must be declared in a Zod schema under `src/shared/con
 - Zod and `@nestjs/config` are new runtime dependencies.
 - New environment variables require touching a schema file and a configuration factory.
 - Configuration consumers depend on `ConfigService` and the namespace symbols instead of reading values directly.
+
+## ADR-005: Use URI-Based API Versioning
+
+- **Status:** Pending
+- **Date:** 2026-10-25
+
+### Context
+
+The API is in early development and currently serves every route unversioned. A versioning strategy should be established before meaningful endpoints accumulate, so that future breaking changes do not require retrofitting version identifiers onto an established public surface.
+
+### Decision
+
+Use NestJS URI versioning (`VersioningType.URI`) with `defaultVersion: '1'`, so controllers resolve under a `/v1` path segment (`/api/v1/...`) unless explicitly versioned otherwise. The health check route is version-neutral (`VERSION_NEUTRAL`), since infrastructure probes should not change shape when the API version changes.
+
+### Benefits
+
+- Version identifiers are visible in URLs: requests are self-describing, routing is explicit, and access logs, metrics, and debugging output show which version served each request.
+- Simple for clients: a version change is a path change, with no reliance on custom headers or content negotiation.
+- NestJS routes it natively, with no additional dependency or middleware.
+
+### Alternatives Considered
+
+#### Header-Based Versioning
+
+A custom header (e.g. `Accept-Version`) keeps URLs clean but hides the version from logs and debugging output, requires clients to set non-standard headers, and complicates caching because the URL no longer uniquely identifies the response.
+
+#### Media-Type Versioning
+
+Encoding the version into the `Accept` header is the most HTTP-idiomatic option, but it is the hardest for clients to get right, the least visible operationally, and over-engineered for an API that currently has one version.
+
+### Consequences
+
+**Positive consequences**
+
+- `/api/v1/...` routes are predictable and observable.
+- New controllers default to v1 automatically via `defaultVersion`.
+- The health check stays stable at `/health` regardless of API versions.
+
+**Trade-offs**
+
+- Version identifiers occupy the URL path.
+- URI versioning implies resource-level versioning rather than fine-grained per-representation versioning.
+- If clients or requirements later demand header-based negotiation, the strategy can be revisited while the API is still young.
+
+## ADR-006: Configure a Maximum Request Body Size of 1 MiB
+
+- **Status:** Pending
+- **Date:** 2026-10-25
+
+### Context
+
+Fastify buffers request bodies for parsing. Without an explicit limit, the default applies, and any client can submit arbitrarily large payloads that the server must buffer before rejecting them, consuming memory proportional to request size. The API currently accepts only small JSON payloads, and there is no file-upload or bulk-ingestion feature that justifies large bodies.
+
+### Decision
+
+Configure a maximum request body size of **1 MiB (1048576 bytes)** as the default, applied through Fastify's `bodyLimit` adapter option. The limit is not hardcoded at the call site: it is provided by the `BODY_LIMIT` environment variable (a positive integer in bytes, validated at startup by the Zod environment schema) so each environment can override it without code changes. Requests exceeding the limit are rejected by Fastify with HTTP `413 Payload Too Large`.
+
+### Benefits
+
+- Bounds per-request memory consumption and reduces exposure to oversized-payload abuse.
+- The default is sane for the current JSON-only API, while remaining environment-configurable.
+
+### Alternatives Considered
+
+#### Accepting the Fastify Default
+
+Leaving `bodyLimit` unset would work today, but the effective limit would be implicit, undocumented, and not tied to the project's validated configuration mechanism.
+
+#### A Smaller or Larger Fixed Limit
+
+A fixed limit without an environment variable would force a code change whenever an environment needs a different maximum (e.g. an environment that introduces a legitimately larger endpoint later).
+
+### Consequences
+
+**Positive consequences**
+
+- Explicit, validated, per-environment control of the maximum payload size.
+- Deterministic `413` responses instead of unbounded buffering.
+
+**Trade-offs**
+
+- Legitimate requests larger than the configured limit are rejected; the limit must be raised deliberately if future endpoints (e.g. uploads) need more.
+- One more environment variable to document and configure.
+
+## ADR-007: Use a Global `api` Prefix with a `/health` Exception
+
+- **Status:** Pending
+- **Date:** 2026-10-25
+
+### Context
+
+The API currently registers routes at the server root (`/health`, and application endpoints at `/`). As the project grows toward serving both API consumers and potential non-API surfaces (docs, webhooks, infrastructure endpoints), an undifferentiated root namespace provides no separation between them.
+
+### Decision
+
+Apply the global prefix `api` to all API routes via `setGlobalPrefix`, combined with URI versioning (ADR-005) to produce the route structure `/api/v1/...`. The health check route is explicitly excluded from the prefix and remains at `/health`: it is a version-neutral infrastructure endpoint, and `VERSION_NEUTRAL` does not by itself remove a route from the global prefix, so the exclusion must be configured explicitly in the application bootstrap.
+
+### Benefits
+
+- API routes are separated from non-API routes, leaving the root namespace free for future non-API endpoints.
+- Operational clarity: infrastructure tooling, load balancers, and humans can distinguish API traffic by path.
+- The health endpoint stays at a stable, conventional location that probes can rely on regardless of API versioning decisions.
+
+### Alternatives Considered
+
+#### No Prefix
+
+Keeping routes at the root is marginally shorter but mixes API and non-API namespaces and leaves no room for future root-level surfaces.
+
+#### Versioned Health Check
+
+Serving `/api/v1/health` would tie infrastructure probing to API versions, forcing probe configuration updates on every version bump for no operational benefit.
+
+### Consequences
+
+**Positive consequences**
+
+- A clear, uniform route structure: `/api/v1/...` for the API, `/health` for probing.
+- The `/health` exception is explicit and documented in the bootstrap code rather than accidental.
+
+**Trade-offs**
+
+- Every API path is slightly longer due to the `api` prefix.
+- The health route requires an explicit exclusion that developers must remember to preserve when touching the application bootstrap.

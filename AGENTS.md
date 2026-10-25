@@ -45,6 +45,11 @@ For any task involving NestJS configuration, environment variables, environment 
 
 Treat this convention as the default project architecture. Inspect existing files before creating new ones, and do not introduce a competing configuration approach.
 
+### Application Bootstrap
+
+- Keep all bootstrap-time application configuration — Fastify adapter options such as `trustProxy` and `bodyLimit`, the global API prefix, URI versioning, and CORS — directly inside the `bootstrap` function in `apps/api/src/main.ts`.
+- Do not extract bootstrap configuration into a separate file such as `app.setup.ts`.
+
 ## Frontend — Next.js and Vite
 
 - Follow the conventions of each framework and its installed version.

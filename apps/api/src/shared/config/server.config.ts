@@ -9,6 +9,9 @@ const serverConfig = registerAs(SERVER_CONFIG, () => ({
   env: _env.APP_ENV,
   host: _env.HOST,
   port: _env.PORT,
+  corsOrigins: _env.CORS_ORIGIN,
+  trustProxy: _env.TRUST_PROXY,
+  bodyLimit: _env.BODY_LIMIT,
 }));
 
 export default serverConfig;
