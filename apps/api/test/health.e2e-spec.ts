@@ -4,7 +4,7 @@ import request from 'supertest';
 import { createTestApp } from './create-test-app.js';
 
 describe('Health (e2e)', () => {
-  it('returns 200 when the application is healthy', async () => {
+  it('returns 200 with the health payload wrapped in the envelope', async () => {
     // Arrange
     const app = await createTestApp();
 
@@ -13,7 +13,10 @@ describe('Health (e2e)', () => {
 
     // Assert
     expect(response.status).toBe(200);
-    expect(response.body.status).toBe('ok');
+    expect(response.body.message).toBe('Success');
+    expect(response.body.status).toBe(200);
+    expect(response.body.apiVersion).toBe('neutral');
+    expect(response.body.data.status).toBe('ok');
     await app.close();
   });
 
@@ -26,6 +29,7 @@ describe('Health (e2e)', () => {
 
     // Assert
     expect(response.status).toBe(404);
+    expect(response.headers['content-type']).toContain('application/problem+json');
     await app.close();
   });
 });

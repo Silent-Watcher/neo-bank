@@ -345,3 +345,190 @@ Serving `/api/v1/health` would tie infrastructure probing to API versions, forci
 
 - Every API path is slightly longer due to the `api` prefix.
 - The health route requires an explicit exclusion that developers must remember to preserve when touching the application bootstrap.
+
+## ADR-008: Choose Pino for Structured Application Logging
+
+- **Status:** Pending
+- **Date:** 2026-10-25
+
+### Context
+
+The API currently has no logging implementation: the default NestJS console logger runs, no request logs exist, and there is no correlation between logs and requests. As the standardized response/error contracts and request IDs land, the application needs a structured logging backend that supports per-request child loggers, redaction, and environment-dependent output formatting, without introducing an observability platform.
+
+### Decision
+
+Use **Pino** as the application's structured logging implementation: human-readable logs through `pino-pretty` in development, structured JSON in production and test. The `LOG_LEVEL` environment variable (default `info`, validated by the Zod environment schema) controls verbosity. Sensitive headers (authorization, cookies, API keys, auth tokens, set-cookie) are redacted at the logger level, and request or response bodies are not logged.
+
+### Benefits
+
+- Structured JSON output is the de-facto format for production log ingestion, produced without an observability dependency.
+- First-class child loggers and serialization performance make per-request context (`reqId`) cheap.
+- Redaction is configured centrally in the logger rather than scattered across call sites.
+
+### Alternatives Considered
+
+#### Retain the Default NestJS Console Logger
+
+The default logger is human-oriented, unstructured, and has no request context or redaction support.
+
+It was rejected because the project's correlation and safety requirements (request IDs in every log line, no secrets in logs, environment-dependent formatting) would each have to be rebuilt by hand on top of it.
+
+#### Winston / Bunyan
+
+Mature general-purpose loggers, but with heavier dependency footprints and slower serialization than Pino.
+
+They were rejected because Pino meets the requirements with a smaller, better-maintained core and is the standard pairing with Fastify.
+
+### Consequences
+
+**Positive consequences**
+
+- One logging system for framework logs and application logs.
+- Request-scoped log context with zero manual parameter passing.
+- Environment-appropriate formatting with no code changes between environments.
+
+**Trade-offs**
+
+- Pino and `pino-pretty` (development-only) are new dependencies.
+- Log-based integrations must consume JSON in production rather than formatted text.
+
+## ADR-009: Use nestjs-pino for the NestJS Integration
+
+- **Status:** Pending
+- **Date:** 2026-10-25
+
+### Context
+
+ADR-008 selects Pino. NestJS requires a specific integration surface, though: the framework's system logger must be replaceable (`app.useLogger`), Nest-managed middleware must run the HTTP request/response logging, and controllers and services must be able to log with request context through dependency injection. Pino alone ships none of these Nest-specific adapters, and wiring them by hand would recreate exactly the multi-pipeline duplication this project set out to avoid (independent Fastify and `pino-http` log paths, separate request IDs).
+
+### Decision
+
+Use the official integration package **`nestjs-pino`** (v5) to connect Pino with NestJS 12:
+
+- It provides the `Logger` implementation installed via `app.useLogger(app.get(Logger))`, so NestJS framework logs and application logs share one Pino instance, with bootstrap logs buffered until the logger is available.
+- It runs `pino-http` as the single HTTP access-log pipeline; with the Fastify adapter it reuses Fastify's own `request.id` (assigned by the adapter's `genReqId`), so there is exactly one request ID and one access-log path.
+- Its `PinoLogger` and `Logger` services carry request-scoped context through `AsyncLocalStorage`, so logs inside controllers, services, and the global exception filter include the current request ID without passing it manually.
+
+### Alternatives Considered
+
+#### Pino Alone
+
+Using Pino directly would still require hand-writing: a `LoggerService` adapter for `useLogger`, middleware registration and lifetime management for `pino-http`, and an AsyncLocalStorage correlation layer for request-scoped logging.
+
+This was rejected as re-implementing the integration package with more code and more risk of divergent request IDs and duplicated access logs.
+
+#### Configuring Pino Directly on the Fastify Adapter
+
+Fastify accepts a `logger` option natively, and `nestjs-pino`'s `useExisting` mode can attach to it. The package's own documentation does not recommend this path: lifecycle and application-level loggers built from the module config would be a second, separately configured instance.
+
+This was rejected to keep a single logger configuration (the `LOG_CONFIG` namespace) and Fastify's built-in request logging disabled.
+
+### Consequences
+
+**Positive consequences**
+
+- Clean, supported integration with NestJS 12 and Pino 10, including request-scoped logging via DI.
+- One request ID, one access-log pipeline, one logger configuration.
+
+**Trade-offs**
+
+- One additional runtime dependency bound to NestJS major versions.
+- Nest logs outside the HTTP pipeline use the root logger without request context, as expected.
+
+## ADR-010: Use UUIDv4 for Request IDs
+
+- **Status:** Pending
+- **Date:** 2026-10-25
+
+### Context
+
+Every request needs a correlation ID shared by Fastify, the logger, response headers, and response bodies. The ID must be safe to accept from untrusted clients (proxies or callers may supply `x-request-id`), and the project runs on Node.js 24.
+
+### Decision
+
+Use **UUIDv4** as the request ID format, generated with Node.js `crypto.randomUUID()` when the inbound `x-request-id` header is absent. An inbound header is accepted only when it is a structurally complete UUIDv4 (version and variant bits validated) and is normalized to lowercase; every other value — malformed, another UUID version, or multiple values — causes the request to be rejected with `400 Bad Request` under the standardized Problem Details contract, with a freshly generated server-side UUIDv4 assigned and the invalid value never echoed, trusted, or logged. The ID is returned in the `x-request-id` response header and embedded in both the success envelope and error Problem Details bodies.
+
+### Benefits
+
+- `crypto.randomUUID()` is available in the standard library: no ID-generation dependency, and cryptographically random values avoid enumeration.
+- UUIDv4 is universally understood and trivially validated with full structural checks, which keeps untrusted input from smuggling malformed IDs into logs and downstream systems.
+- Correlation needs are met: one ID per request across headers, bodies, and logs.
+
+### Alternatives Considered
+
+#### Time-Ordered UUIDs (UUIDv6/v7)
+
+Time-ordered IDs index better in log stores and databases.
+
+They were rejected because the application does not currently index requests by ID, and strict ordering is not a requirement; revisiting this later would only require changing the generator, since the ID is validated and consumed opaquely.
+
+#### Fastify's Default Incrementing Counter
+
+Fastify's built-in generator is cheap but not globally unique across instances and restarts, and it ignores inbound correlation headers.
+
+It was rejected because the application must honor and validate `x-request-id` from trusted infrastructure.
+
+### Consequences
+
+**Positive consequences**
+
+- Standards-based, dependency-free ID generation with strong validation of inbound values.
+- Consistent correlation across Fastify, Pino, and response payloads.
+
+**Trade-offs**
+
+- UUIDv4 values are larger and unordered compared to counters or time-ordered UUIDs; if log-store indexing by ID becomes important, the generator decision should be revisited.
+
+## ADR-011: Exclude Special Response Types from the Standard Success Envelope
+
+- **Status:** Pending
+- **Date:** 2026-10-25
+
+### Context
+
+A global interceptor wraps ordinary successful JSON responses in a standardized envelope. Some responses must not be wrapped, because their contracts are defined by HTTP semantics or by another format: `204 No Content` and `304 Not Modified` must have no body, `HEAD` responses must not carry a body, file downloads and streams must keep their bytes and content type, Server-Sent Events must keep the `text/event-stream` framing, and routes that deliberately control their own representation (the HTML Problem Type documentation endpoint) define their own content type.
+
+### Decision
+
+Wrap only ordinary successful JSON responses. The interceptor skips responses when:
+
+- the request method is `HEAD`;
+- the status is `204` or `304`;
+- the reply has already been sent (raw reply usage, custom streaming);
+- the payload is `undefined` or a `StreamableFile`;
+- the handler is an `@Sse()` handler;
+- the route set an explicit non-JSON `Content-Type`.
+
+Error responses are not affected by this ADR: they follow the separate RFC 9457 Problem Details contract.
+
+### Benefits
+
+- HTTP caching and probing semantics (`304`, `204`, `HEAD`) remain exactly as specified.
+- Binary and streamed payloads are never serialized into JSON.
+- The Problem Type documentation endpoint resolves as real HTML at the URI referenced by error responses.
+
+### Alternatives Considered
+
+#### Wrapping Everything
+
+A uniform body shape for all responses would be simpler conceptually.
+
+It was rejected because it would break `HEAD`/`204`/`304` no-body requirements, corrupt streams and files, and produce a JSON envelope on an endpoint that must serve HTML.
+
+#### Opt-In Wrapping per Controller
+
+Requiring each controller to opt in would avoid exclusions but would scatter the contract across every future feature module and invite inconsistent envelopes.
+
+It was rejected in favor of a single global default with explicit, tested exclusions.
+
+### Consequences
+
+**Positive consequences**
+
+- HTTP semantics and non-JSON contracts are preserved verbatim.
+- The exclusion rules are centralized in one interceptor and covered by unit and e2e tests.
+
+**Trade-offs**
+
+- Clients see two body shapes: the envelope for ordinary JSON, raw payloads for excluded types. This is documented in the Problem Type page and tests.
+- New response kinds (e.g. WebSockets, other streaming formats) must evaluate whether further exclusions are needed.
