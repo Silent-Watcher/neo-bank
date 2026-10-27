@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { AppEnv } from '../../../enums/app-env.enum.js';
+import { AppEnv } from '#enums/app-env.enum.js';
 import {
   isCorsOriginRequiredInProduction,
   parseCorsOrigins,

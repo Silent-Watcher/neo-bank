@@ -10,7 +10,8 @@
     "format": "oxfmt --write .",
     "format:check": "turbo format:check",
     "typecheck": "turbo typecheck",
-    "test": "turbo test",
+    "test": "turbo test test:e2e",
+    "test:e2e": "turbo test:e2e",
     "clean": "turbo clean",
     "cm": "cz",
     "prepare": "husky"

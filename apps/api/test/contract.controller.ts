@@ -3,6 +3,7 @@ import {
   Controller,
   Get,
   Head,
+  Header,
   HttpCode,
   HttpStatus,
   NotFoundException,
@@ -13,8 +14,8 @@ import {
 import type { MessageEvent } from '@nestjs/common';
 import { Observable } from 'rxjs';
 
-import { AppHttpException } from '../src/shared/errors/app-http.exception.js';
-import { ErrorCode } from '../src/shared/errors/error.code.js';
+import { AppHttpException } from '#src/shared/errors/app-http.exception.js';
+import { ErrorCode } from '#src/shared/errors/error.code.js';
 
 // Throwaway routes used by e2e specs to exercise the global response and
 // error contracts. Registered only inside the testing module.
@@ -53,6 +54,7 @@ export class ContractController {
   }
 
   @Get('text')
+  @Header('Content-Type', 'text/plain')
   text(): string {
     return 'plain-text-body';
   }

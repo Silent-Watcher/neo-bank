@@ -22,6 +22,11 @@ This is a TypeScript monorepo managed with pnpm and Turborepo.
 - The only permitted `process.env` access is the single environment validation call in the environment validation layer (`apps/api/src/shared/config/env/env.config.ts`).
 - Read validated configuration through configuration factories and `ConfigService`, and use the Pino-backed NestJS `Logger` (provided by `nestjs-pino`, see `apps/api/src/shared/logging/`) for runtime logging; never use `console.log`.
 
+## Imports and Type Safety
+
+- **Import aliases:** Use the Node.js native `#...` subpath aliases for cross-directory imports instead of parent-relative imports. If a required alias does not exist, define it consistently for Node.js runtime, TypeScript, and tests before using it.
+- **Type safety from the start:** Design all new functions, methods, classes, and other code to be type-safe from the initial implementation. Do not write loosely typed code first and postpone type safety until a type-checking error appears. Use appropriate parameter, return, and data types; avoid `any`, unsafe type assertions, and suppressions of type errors. When handling untrusted or insufficiently typed values, prefer `unknown` with proper type narrowing. Follow the project's existing TypeScript conventions without introducing unnecessary annotations or abstractions.
+
 ## Monorepo
 
 - Use pnpm for package management and Turborepo for task orchestration.

@@ -3,11 +3,11 @@ import type { ArgumentsHost, ExceptionFilter } from '@nestjs/common';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import { PinoLogger } from 'nestjs-pino';
 
-import { AppHttpException } from '../errors/app-http.exception.js';
-import { ErrorCode, errorCodeForStatus } from '../errors/error.code.js';
-import { buildProblemDetails } from '../errors/problem-details.js';
-import { resolveApiVersion } from '../http/api-version.js';
-import { X_REQUEST_ID_HEADER } from '../http/request-id.js';
+import { AppHttpException } from '#errors/app-http.exception.js';
+import { ErrorCode, errorCodeForStatus } from '#errors/error.code.js';
+import { buildProblemDetails } from '#errors/problem-details.js';
+import { resolveApiVersion } from '#http/api-version.js';
+import { X_REQUEST_ID_HEADER } from '#http/request-id.js';
 
 const GENERIC_SERVER_ERROR_DETAIL = 'An unexpected error occurred.';
 

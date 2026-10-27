@@ -2,8 +2,8 @@ import { HttpStatus } from '@nestjs/common';
 import type { FastifyInstance } from 'fastify';
 import { Logger } from 'nestjs-pino';
 
-import { ErrorCode } from '../errors/error.code.js';
-import { buildProblemDetails } from '../errors/problem-details.js';
+import { ErrorCode } from '#errors/error.code.js';
+import { buildProblemDetails } from '#errors/problem-details.js';
 import { resolveApiVersion } from './api-version.js';
 import { X_REQUEST_ID_HEADER, isValidUuidV4 } from './request-id.js';
 

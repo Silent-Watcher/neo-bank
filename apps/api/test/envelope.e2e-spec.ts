@@ -90,7 +90,10 @@ describe('Response envelope (e2e)', () => {
 
     // Assert
     expect(response.status).toBe(200);
-    expect(response.text).toBe('');
+    // Fastify delivers no HEAD body at all; the content-length of the raw
+    // handler payload (16 = '{"example":true}') proves no envelope was attached.
+    expect(response.text).toBeUndefined();
+    expect(response.headers['content-length']).toBe('16');
     await app.close();
   });
 
@@ -104,7 +107,8 @@ describe('Response envelope (e2e)', () => {
     // Assert
     expect(response.status).toBe(200);
     expect(response.headers['content-type']).toContain('application/octet-stream');
-    expect(response.text).toBe('file-content');
+    // supertest exposes octet-stream bodies as a Buffer, not as text.
+    expect(response.body.toString()).toBe('file-content');
     await app.close();
   });
 

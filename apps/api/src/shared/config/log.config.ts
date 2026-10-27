@@ -1,7 +1,7 @@
 import type { ConfigType } from '@nestjs/config';
 import { registerAs } from '@nestjs/config';
 
-import { AppEnv } from '../enums/app-env.enum.js';
+import { AppEnv } from '#enums/app-env.enum.js';
 import { _env } from './env/env.config.js';
 
 export const LOG_CONFIG = Symbol('LOG_CONFIG');

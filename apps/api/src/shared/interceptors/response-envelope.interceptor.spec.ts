@@ -1,4 +1,5 @@
 import { StreamableFile } from '@nestjs/common';
+import { HEADERS_METADATA } from '@nestjs/common/constants.js';
 import type { CallHandler, ExecutionContext } from '@nestjs/common';
 import { of } from 'rxjs';
 import { describe, expect, it, vi } from 'vitest';
@@ -32,9 +33,12 @@ function createInterceptorContext(
     sent: fixture.sent ?? false,
     getHeader: vi.fn(() => fixture.contentType),
   };
+  // A stable handler reference, so tests can attach Reflect metadata to it
+  // before the interceptor reads it back through getHandler().
+  const handler = Object.assign(function handler() {}, fixture.handlerMetadata);
   const context = {
     switchToHttp: () => ({ getRequest: () => request, getResponse: () => reply }),
-    getHandler: () => Object.assign(function handler() {}, fixture.handlerMetadata),
+    getHandler: () => handler,
   } as unknown as ExecutionContext;
   const nextHandle = vi.fn(() => of(handleResult));
 
@@ -143,5 +147,39 @@ describe('ResponseEnvelopeInterceptor', () => {
     const result = await interceptOnce(context, next);
 
     expect(result).toEqual({ example: true });
+  });
+
+  it('does not wrap routes that declare a non-JSON content type via @Header', async () => {
+    // Arrange — the router applies @Header values after interceptors run, so
+    // the interceptor can only see them on the handler's metadata.
+    const { context, next } = createInterceptorContext({}, { example: true });
+    Reflect.defineMetadata(
+      HEADERS_METADATA,
+      [{ name: 'Content-Type', value: 'text/plain' }],
+      context.getHandler(),
+    );
+
+    // Act
+    const result = await interceptOnce(context, next);
+
+    // Assert
+    expect(result).toEqual({ example: true });
+  });
+
+  it('still wraps routes that declare a JSON content type via @Header', async () => {
+    // Arrange
+    const { context, next } = createInterceptorContext({}, { example: true });
+    Reflect.defineMetadata(
+      HEADERS_METADATA,
+      [{ name: 'Content-Type', value: 'application/json; charset=utf-8' }],
+      context.getHandler(),
+    );
+
+    // Act
+    const result = (await interceptOnce(context, next)) as Record<string, unknown>;
+
+    // Assert
+    expect(result.message).toBe('Success');
+    expect(result.data).toEqual({ example: true });
   });
 });

@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-import { AppEnv } from '../../../enums/app-env.enum.js';
+import { AppEnv } from '#enums/app-env.enum.js';
 
 function isOrigin(value: string): boolean {
   try {

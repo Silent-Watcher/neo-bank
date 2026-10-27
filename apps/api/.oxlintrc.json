@@ -1,12 +1,13 @@
 {
-  "plugins": ["typescript", "node", "vitest"],
+  "plugins": ["typescript", "node", "vitest", "import"],
   "env": {
     "node": true,
     "vitest": true
   },
   "rules": {
     "no-console": "error",
-    "no-process-env": "error"
+    "no-process-env": "error",
+    "import/no-relative-parent-imports": "error"
   },
   "overrides": [
     {

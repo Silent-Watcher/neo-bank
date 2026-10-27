@@ -3,6 +3,28 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
+  "imports": {
+    "#src/*": {
+      "types": "./src/*",
+      "default": "./dist/*"
+    },
+    "#config/*": {
+      "types": "./src/shared/config/*",
+      "default": "./dist/shared/config/*"
+    },
+    "#enums/*": {
+      "types": "./src/shared/enums/*",
+      "default": "./dist/shared/enums/*"
+    },
+    "#errors/*": {
+      "types": "./src/shared/errors/*",
+      "default": "./dist/shared/errors/*"
+    },
+    "#http/*": {
+      "types": "./src/shared/http/*",
+      "default": "./dist/shared/http/*"
+    }
+  },
   "scripts": {
     "dev": "node --env-file=env/.env.development node_modules/@nestjs/cli/bin/nest.js start --watch",
     "build": "nest build",

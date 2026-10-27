@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-import { EnvValidationError } from '../../errors/env-validation.error.js';
+import { EnvValidationError } from '#errors/env-validation.error.js';
 import { logEnvSchema } from './schema/log.env.js';
 import { isCorsOriginRequiredInProduction, serverEnvSchema } from './schema/server.env.js';
 

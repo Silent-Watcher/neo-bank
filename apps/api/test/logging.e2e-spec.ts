@@ -1,16 +1,13 @@
 import { Writable } from 'node:stream';
 
-import { VersioningType } from '@nestjs/common';
 import type { NestFastifyApplication } from '@nestjs/platform-fastify';
-import { FastifyAdapter } from '@nestjs/platform-fastify';
 import { Logger, PARAMS_PROVIDER_TOKEN } from 'nestjs-pino';
-import { Test } from '@nestjs/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import request from 'supertest';
 
-import { AppModule } from '../src/app.module.js';
-import serverConfig from '../src/shared/config/server.config.js';
-import { fastifyGenReqId } from '../src/shared/http/request-id.js';
+import { ContractController } from './contract.controller.js';
+import { createTestApp } from './create-test-app.js';
+import { buildPinoHttpOptions } from '#src/shared/logging/pino-http.options.js';
 
 interface LogLine {
   [key: string]: unknown;
@@ -23,8 +20,6 @@ describe('Pino logging (e2e)', () => {
   let lines: string[];
 
   beforeAll(async () => {
-    const { trustProxy, bodyLimit } = serverConfig();
-
     lines = [];
     const sink = new Writable({
       write(chunk: Buffer, _encoding: BufferEncoding, callback: (error?: Error | null) => void) {
@@ -33,19 +28,17 @@ describe('Pino logging (e2e)', () => {
       },
     });
 
-    const module = await Test.createTestingModule({ imports: [AppModule] })
-      .overrideProvider(PARAMS_PROVIDER_TOKEN)
-      .useValue({ pinoHttp: { level: 'info', stream: sink } })
-      .compile();
-
-    app = module.createNestApplication<NestFastifyApplication>(
-      new FastifyAdapter({ trustProxy, bodyLimit, genReqId: fastifyGenReqId }),
-    );
-    app.setGlobalPrefix('api');
-    app.enableVersioning({ type: VersioningType.URI, defaultVersion: '1' });
-    app.useLogger(app.get(Logger));
-    await app.init();
-    await app.getHttpAdapter().getInstance().ready();
+    app = await createTestApp(undefined, {
+      controllers: [ContractController],
+      configureModule: (builder) => {
+        // Rebuild the real pino options so redaction and access-log behavior
+        // stay in play; only the level and destination are test-local.
+        const pinoHttpOptions = buildPinoHttpOptions({ level: 'info', pretty: false });
+        builder
+          .overrideProvider(PARAMS_PROVIDER_TOKEN)
+          .useValue({ pinoHttp: { ...pinoHttpOptions, stream: sink } });
+      },
+    });
   });
 
   afterAll(async () => {

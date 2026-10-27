@@ -22,6 +22,7 @@
     "test": {
       "dependsOn": ["^test"]
     },
+    "test:e2e": {},
     "clean": {
       "cache": false
     }

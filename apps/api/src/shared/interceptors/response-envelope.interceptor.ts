@@ -1,17 +1,37 @@
 import { HttpStatus, Injectable, StreamableFile } from '@nestjs/common';
 import type { CallHandler, ExecutionContext, NestInterceptor } from '@nestjs/common';
-import { SSE_METADATA } from '@nestjs/common/constants.js';
+import { HEADERS_METADATA, SSE_METADATA } from '@nestjs/common/constants.js';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import { map } from 'rxjs';
 import type { Observable } from 'rxjs';
 
-import { resolveApiVersion } from '../http/api-version.js';
+import { resolveApiVersion } from '#http/api-version.js';
 
 const SUCCESS_MESSAGE = 'Success';
 const NO_BODY_STATUSES = new Set<number>([HttpStatus.NO_CONTENT, HttpStatus.NOT_MODIFIED]);
 
 function isJsonContentType(contentType: unknown): boolean {
   return typeof contentType === 'string' && contentType.toLowerCase().includes('json');
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+// @Header()-declared headers are applied by the router after the interceptor
+// pipeline, so the reply header cannot be observed here; the route's own
+// metadata is the only way to see a declared content type in time.
+function declaredContentType(handler: object): string | undefined {
+  const headers: unknown = Reflect.getMetadata(HEADERS_METADATA, handler);
+
+  if (!Array.isArray(headers)) return undefined;
+  for (const header of headers) {
+    if (!isRecord(header)) continue;
+    if (typeof header.name !== 'string' || header.name.toLowerCase() !== 'content-type') continue;
+    if (typeof header.value === 'string') return header.value;
+  }
+
+  return undefined;
 }
 
 // Wraps ordinary successful JSON responses in the standardized envelope.
@@ -59,10 +79,14 @@ export class ResponseEnvelopeInterceptor implements NestInterceptor {
     if (NO_BODY_STATUSES.has(reply.statusCode)) return true;
     // @Sse() handlers stream a plain-text/event stream; wrapping would corrupt it.
     if (Reflect.getMetadata(SSE_METADATA, context.getHandler()) === true) return true;
-    // A route that set an explicit non-JSON content type (e.g. text/html for
-    // the Problem Type docs) controls its own representation.
-    const contentType = reply.getHeader('content-type');
+    // A route that declares its own non-JSON content type (via @Header, e.g.
+    // text/html for the Problem Type docs) controls its own representation.
+    const contentType = declaredContentType(context.getHandler());
     if (contentType !== undefined && !isJsonContentType(contentType)) return true;
+    // A handler that already wrote a non-JSON content type onto the reply
+    // (e.g. raw reply usage) controls its own representation too.
+    const replyContentType = reply.getHeader('content-type');
+    if (replyContentType !== undefined && !isJsonContentType(replyContentType)) return true;
 
     return false;
   }

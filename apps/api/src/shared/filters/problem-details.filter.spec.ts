@@ -6,8 +6,8 @@ import { describe, expect, it, vi } from 'vitest';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import { PinoLogger } from 'nestjs-pino';
 
-import { AppHttpException } from '../errors/app-http.exception.js';
-import { ErrorCode } from '../errors/error.code.js';
+import { AppHttpException } from '#errors/app-http.exception.js';
+import { ErrorCode } from '#errors/error.code.js';
 import { ProblemDetailsFilter } from './problem-details.filter.js';
 
 const REQUEST_ID = '550e8400-e29b-41d4-a716-446655440000';
