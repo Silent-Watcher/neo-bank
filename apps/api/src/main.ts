@@ -4,7 +4,7 @@ import type { NestFastifyApplication } from '@nestjs/platform-fastify';
 import { FastifyAdapter } from '@nestjs/platform-fastify';
 import { Logger } from 'nestjs-pino';
 
-import { AppModule } from './app.module.js';
+import { AppModule } from './modules/app/app.module.js';
 import serverConfig from './shared/config/server.config.js';
 import { fastifyGenReqId } from './shared/http/request-id.js';
 import { registerRequestIdLifecycle } from './shared/http/request-id.lifecycle.js';

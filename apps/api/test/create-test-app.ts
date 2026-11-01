@@ -1,12 +1,12 @@
-import { RequestMethod, VersioningType } from '@nestjs/common';
 import type { Type } from '@nestjs/common';
+import { RequestMethod, VersioningType } from '@nestjs/common';
 import type { NestFastifyApplication } from '@nestjs/platform-fastify';
 import { FastifyAdapter } from '@nestjs/platform-fastify';
-import { Logger } from 'nestjs-pino';
-import { Test } from '@nestjs/testing';
 import type { TestingModuleBuilder } from '@nestjs/testing';
+import { Test } from '@nestjs/testing';
+import { Logger } from 'nestjs-pino';
 
-import { AppModule } from '#src/app.module.js';
+import { AppModule } from '#src/modules/app/app.module.js';
 import serverConfig from '#src/shared/config/server.config.js';
 import { fastifyGenReqId } from '#src/shared/http/request-id.js';
 import { registerRequestIdLifecycle } from '#src/shared/http/request-id.lifecycle.js';

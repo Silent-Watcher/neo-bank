@@ -12,9 +12,21 @@
       "types": "./src/shared/config/*",
       "default": "./dist/shared/config/*"
     },
+    "#modules/*": {
+      "types": "./src/modules/*",
+      "default": "./dist/modules/*"
+    },
     "#enums/*": {
       "types": "./src/shared/enums/*",
       "default": "./dist/shared/enums/*"
+    },
+    "#filters/*": {
+      "types": "./src/shared/filters/*",
+      "default": "./dist/shared/filters/*"
+    },
+    "#interceptors/*": {
+      "types": "./src/shared/interceptors/*",
+      "default": "./dist/shared/interceptors/*"
     },
     "#errors/*": {
       "types": "./src/shared/errors/*",
@@ -42,6 +54,7 @@
     "@nestjs/common": "12.2.0",
     "@nestjs/config": "^12.0.1",
     "@nestjs/core": "12.2.0",
+    "@nestjs/mapped-types": "*",
     "@nestjs/platform-fastify": "12.2.0",
     "@nestjs/terminus": "12.1.0",
     "nestjs-pino": "^5.3.1",

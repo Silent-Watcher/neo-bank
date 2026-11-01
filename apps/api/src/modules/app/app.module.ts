@@ -1,17 +1,18 @@
 import { Module } from '@nestjs/common';
 import { APP_FILTER, APP_INTERCEPTOR } from '@nestjs/core';
 import { TerminusModule } from '@nestjs/terminus';
+import { configModule } from '#config/config.js';
+import { ProblemDetailsFilter } from '#filters/problem-details.filter.js';
+import { ResponseEnvelopeInterceptor } from '#interceptors/response-envelope.interceptor.js';
+import { AppLoggerModule } from '#src/shared/logging/logger.module.js';
+import { EnrollemntsModule } from '#modules/enrollemnts/enrollemnts.module.js';
 import { AppController } from './app.controller.js';
 import { AppService } from './app.service.js';
 import { HealthController } from './health.controller.js';
 import { ProblemsController } from './problems.controller.js';
-import { configModule } from './shared/config/config.js';
-import { ProblemDetailsFilter } from './shared/filters/problem-details.filter.js';
-import { ResponseEnvelopeInterceptor } from './shared/interceptors/response-envelope.interceptor.js';
-import { AppLoggerModule } from './shared/logging/logger.module.js';
 
 @Module({
-  imports: [configModule, AppLoggerModule, TerminusModule],
+  imports: [configModule, AppLoggerModule, TerminusModule, EnrollemntsModule],
   controllers: [AppController, HealthController, ProblemsController],
   providers: [
     AppService,
@@ -19,4 +20,4 @@ import { AppLoggerModule } from './shared/logging/logger.module.js';
     { provide: APP_FILTER, useClass: ProblemDetailsFilter },
   ],
 })
-export class AppModule {}
+export class AppModule { }

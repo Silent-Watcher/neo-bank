@@ -1,6 +1,6 @@
 import { Controller, Get, Header, VERSION_NEUTRAL } from '@nestjs/common';
 
-import { APPLICATION_ERROR_PROBLEM_TYPE } from './shared/errors/error.code.js';
+import { APPLICATION_ERROR_PROBLEM_TYPE } from '#errors/error.code.js';
 
 const APPLICATION_ERROR_DOCUMENTATION = `<!doctype html>
 <html lang="en">
