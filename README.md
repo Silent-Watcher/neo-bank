@@ -6,7 +6,7 @@ Minimal TypeScript monorepo managed with pnpm workspaces and Turborepo.
 
 | Application  | Framework          | Default port |
 | ------------ | ------------------ | ------------ |
-| `apps/api`   | NestJS / Express   | 3001         |
+| `apps/api`   | NestJS / Fastify   | 3001         |
 | `apps/web`   | Next.js App Router | 3000         |
 | `apps/admin` | Vite + React       | 5173         |
 
@@ -19,7 +19,7 @@ Minimal TypeScript monorepo managed with pnpm workspaces and Turborepo.
 
 ```sh
 pnpm install --frozen-lockfile
-cp apps/api/.env.example apps/api/.env
+cp apps/api/env/.env.example apps/api/env/.env.development
 ```
 
 `PORT` can override the API's default port.
@@ -35,10 +35,10 @@ pnpm format:check
 pnpm typecheck
 pnpm test
 pnpm clean
-pnpm commit
+pnpm cm
 ```
 
-`pnpm commit` opens Commitizen. Commits follow Conventional Commits with optional `api`, `web`, `admin`, or `monorepo` scopes, for example `feat(api): add accounts endpoint`. Husky formats and lints staged files before commits, validates commit messages, and runs `pnpm test` before pushes.
+`pnpm cm` opens Commitizen. Commits follow Conventional Commits with optional `api`, `web`, `admin`, or `monorepo` scopes, for example `feat(api): add accounts endpoint`. Husky formats and lints staged files before commits, validates commit messages, and runs `pnpm test` before pushes.
 
 Nest CLI currently requires TypeScript 6 because TypeScript 7 temporarily does not expose the compiler API Nest uses. The root pins `typescript@6.0.3` until that upstream compatibility gap closes.
 

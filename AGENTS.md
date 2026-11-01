@@ -8,6 +8,50 @@ This is a TypeScript monorepo managed with pnpm and Turborepo.
 - `apps/web`: Next.js web application.
 - `apps/admin`: React + Vite admin dashboard.
 - `prompts/`: Feature records and implementation prompts.
+- `docs/`: Repository-level architecture documentation.
+
+## Documentation and Context Management
+
+- Read this root file first; it applies to every task in the repository.
+- Identify the application or package the task concerns before exploring the
+  codebase, then read that workspace's nested `AGENTS.md` (for example
+  `apps/api/AGENTS.md`) before changing its code.
+- Consult `docs/architecture.md` when a task involves cross-application
+  architecture or workspace boundaries.
+- Consult `docs/current-state.md` before implementing functionality that
+  might already exist, partially exist, or depend on an unfinished feature.
+- Inspect only the source files relevant to the current task; do not read the
+  entire repository unnecessarily.
+- Never assume documentation is more accurate than the actual implementation;
+  when they conflict, trust the code and flag the discrepancy.
+
+### Documentation Update Triggers
+
+Documentation is part of the deliverable. Whenever a change matches a trigger
+below, update the listed files **in the same task, before reporting
+completion** — the same way code and tests are. Update only what the change
+actually affects; do not rewrite unrelated content. If a documented fact
+becomes stale during the task but cannot be corrected (unknown outcome,
+pending decision), report it in the final summary instead of leaving it
+silently wrong.
+
+| Trigger (any change that…) | Files to update |
+| --- | --- |
+| Adds or changes an environment variable (API) | `apps/api/env/.env.example` (with a comment), `apps/api/ONBOARDING.md` (env table) |
+| Adds, completes, or removes a feature or endpoint | `docs/current-state.md` (implemented/partial/planned lists) |
+| Adds or changes shared infrastructure, response/error/validation conventions, or module structure conventions | `apps/api/AGENTS.md` |
+| Changes what a feature module looks like (new file layout, new required files) | `apps/api/AGENTS.md` + `apps/api/ONBOARDING.md` (project structure / workflow) |
+| Adds, removes, or renames a workspace (app or package) | `docs/architecture.md`, `docs/current-state.md`, `README.md` (applications table), and create `AGENTS.md` + `ONBOARDING.md` in the new workspace |
+| Adds or changes a dependency (in any workspace) | That workspace's `ONBOARDING.md` (technology stack table) |
+| Adds, removes, or changes a script/command (workspace or root) | That workspace's `ONBOARDING.md` (useful commands); root `README.md` for root-level scripts |
+| Changes a port, default value, or runtime requirement (Node/pnpm versions) | Root `README.md` and affected `ONBOARDING.md` files |
+| Creates, accepts, or supersedes an ADR | `DECISIONS.md` (per its own workflow), `docs/current-state.md` (ADR status list), `docs/architecture.md` if a boundary or structure it describes changes |
+| Changes a naming, coding, or testing convention | The affected workspace's `AGENTS.md` |
+| Adds a new `#` import alias (API) | No doc change needed (rule is documented generically), but keep `apps/api/package.json` and `apps/api/test/subpath-import-aliases.ts` in sync |
+| Makes any statement in `docs/architecture.md` or `docs/current-state.md` inaccurate | That file, immediately |
+
+When a change matches no trigger, no documentation update is required — but
+if you are unsure whether a change is "material", update rather than skip.
 
 ## General Rules
 
@@ -121,7 +165,7 @@ Treat this convention as the default project architecture. Inspect existing file
 2. Identify the simplest maintainable solution.
 3. Implement the requested changes and update relevant tests.
 4. Run applicable validation commands and review their actual results.
-5. Update the feature record and relevant documentation.
+5. Update the feature record and documentation, checking the Documentation Update Triggers table and applying every trigger the change matches.
 6. Review the final diff and summarize the changes, checks, and remaining limitations.
 7. Wait for explicit user approval before committing.
 
@@ -135,6 +179,6 @@ Treat this convention as the default project architecture. Inspect existing file
 
 ## Definition of Done
 
-A feature is complete when its implementation and prompt record are updated, relevant checks have been executed, unintended changes have been ruled out, task-created processes have been cleaned up, and remaining limitations are reported.
+A feature is complete when its implementation and prompt record are updated, every matched entry from the Documentation Update Triggers table has been applied, relevant checks have been executed, unintended changes have been ruled out, task-created processes have been cleaned up, and remaining limitations are reported.
 
 Do not report successful validation for checks that were skipped or failed.
