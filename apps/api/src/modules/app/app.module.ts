@@ -5,14 +5,14 @@ import { configModule } from '#config/config.js';
 import { ProblemDetailsFilter } from '#filters/problem-details.filter.js';
 import { ResponseEnvelopeInterceptor } from '#interceptors/response-envelope.interceptor.js';
 import { AppLoggerModule } from '#src/shared/logging/logger.module.js';
-import { EnrollemntsModule } from '#modules/enrollemnts/enrollemnts.module.js';
+import { EnrollmentsModule } from '#modules/enrollments/enrollments.module.js';
 import { AppController } from './app.controller.js';
 import { AppService } from './app.service.js';
 import { HealthController } from './health.controller.js';
 import { ProblemsController } from './problems.controller.js';
 
 @Module({
-  imports: [configModule, AppLoggerModule, TerminusModule, EnrollemntsModule],
+  imports: [configModule, AppLoggerModule, TerminusModule, EnrollmentsModule],
   controllers: [AppController, HealthController, ProblemsController],
   providers: [
     AppService,
@@ -20,4 +20,4 @@ import { ProblemsController } from './problems.controller.js';
     { provide: APP_FILTER, useClass: ProblemDetailsFilter },
   ],
 })
-export class AppModule { }
+export class AppModule {}

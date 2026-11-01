@@ -14,5 +14,14 @@ export const subpathImportAliases = [
     find: '#errors/',
     replacement: fileURLToPath(new URL('../src/shared/errors/', import.meta.url)),
   },
+  {
+    find: '#filters/',
+    replacement: fileURLToPath(new URL('../src/shared/filters/', import.meta.url)),
+  },
   { find: '#http/', replacement: fileURLToPath(new URL('../src/shared/http/', import.meta.url)) },
+  {
+    find: '#interceptors/',
+    replacement: fileURLToPath(new URL('../src/shared/interceptors/', import.meta.url)),
+  },
+  { find: '#modules/', replacement: fileURLToPath(new URL('../src/modules/', import.meta.url)) },
 ];
