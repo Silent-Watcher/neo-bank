@@ -156,6 +156,16 @@ Treat this convention as the default project architecture. Inspect existing file
 - Fix regressions introduced by your changes and report checks that could not run.
 - Review the final diff for unintended changes.
 
+## Semantic Versioning & Release Rules
+
+- Follow Semantic Versioning 2.0.0 (`MAJOR.MINOR.PATCH`, https://semver.org/spec/v2.0.0.html).
+- **MAJOR** for backward-incompatible public API, behavior, or data contract changes; **MINOR** for backward-compatible functionality and public API deprecations; **PATCH** for backward-compatible fixes and internal corrections. When multiple changes exist, apply the highest required increment.
+- Version updates happen only during explicit release tasks — never as a side effect of ordinary development.
+- Version decisions are based on the actual code changes since the latest applicable release tag (API contracts, behavior, configuration, data compatibility), not on commit messages.
+- The repository uses independent-package versioning: every workspace carries its own `package.json` version. Never bump unrelated workspace packages.
+- Git release tags must match the corresponding `package.json` versions, point at the commit containing that version update, and be annotated. Never overwrite or force-update an existing release tag, and never tag uncommitted changes.
+- Never push tags or create release commits without explicit authorization.
+
 ## Git and Commits
 
 - Follow Conventional Commits using Commitizen, `cz-conventional-changelog`, and Commitlint.
@@ -216,3 +226,19 @@ Treat this convention as the default project architecture. Inspect existing file
 A feature is complete when its implementation and prompt record are updated, every matched entry from the Documentation Update Triggers table has been applied, relevant checks have been executed, unintended changes have been ruled out, task-created processes have been cleaned up, and remaining limitations are reported.
 
 Do not report successful validation for checks that were skipped or failed.
+
+## Dependency and Utility Evaluation
+
+Before introducing any new dependency, package, helper, utility, or external tool, you MUST follow the [Dependency Evaluation Skill](.agents/skills/dependency-evaluation/SKILL.md).
+
+- Evaluate whether the requirement can be implemented reliably with no more than 200 lines of production code, excluding tests.
+- Identify relevant edge cases and write tests before integrating a new internal implementation.
+- Prefer existing project capabilities or a small internal implementation over unnecessary dependencies.
+- Evaluate security, maintenance status, compatibility, licensing, and supply-chain risks before installing any external package.
+- Verify and select the latest stable release compatible with the project.
+- Document every newly introduced external dependency or tool in `DECISIONS.md` using the established Architecture Decision Record (ADR) format.
+- If no suitable and sufficiently safe solution can be identified, stop and ask the user before proceeding.
+
+Do not skip this process for convenience. Follow the full procedure defined in the linked skill.
+
+Ponytail's simplicity principles MUST NOT override the skill's requirements for security, compatibility, testing, documentation, or explicit user approval.
