@@ -1,0 +1,28 @@
+# Dockerfile.prod-specific ignore (replaces the root .dockerignore, not
+# merged). Excludes everything the admin build does not need; the other apps
+# keep only their manifests for turbo prune's workspace graph.
+.git
+.turbo
+.idea
+.vscode
+.DS_Store
+**/node_modules
+**/dist
+**/.next
+**/coverage
+**/*.tsbuildinfo
+**/.env
+**/.env.*
+!**/.env.example
+*.log
+logs/
+compose.dev.yml
+compose.prod.yml
+docs/
+prompts/
+.agents/
+# Unrelated application source is not part of the admin build.
+apps/api/**
+!apps/api/package.json
+apps/web/**
+!apps/web/package.json

@@ -15,3 +15,7 @@ minimumReleaseAgeExclude:
   - '@nestjs/swagger@12.1.0'
 allowBuilds:
   '@swc/core': true
+  # NestJS telemetry collector: its postinstall must never run — denied
+  # explicitly so non-interactive installs (Docker, CI) do not fail with
+  # ERR_PNPM_IGNORED_BUILDS.
+  '@scarf/scarf': false

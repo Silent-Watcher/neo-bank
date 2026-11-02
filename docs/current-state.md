@@ -99,7 +99,10 @@ None. The workspace contains only `apps/*`; no `packages/` directory exists.
 
 **Implemented:** Redis client integration in the API (global `RedisModule`,
 ioredis 6, degraded-mode health, standardized key naming); the enrollments
-challenge feature stores its OTP in Redis. Beyond that,
+challenge feature stores its OTP in Redis. Docker infrastructure
+(`docs/docker.md`): dev and prod Compose stacks with PostgreSQL and Redis,
+per-app dev/prod images (`turbo prune`, non-root, hot reloading in dev;
+Redis intentionally has no persistence volume). Beyond that,
 only the build/test toolchain itself: Turborepo local caching (`.turbo/`),
 Husky hooks, commitlint, lint-staged.
 

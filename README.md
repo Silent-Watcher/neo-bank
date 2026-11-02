@@ -40,6 +40,10 @@ pnpm cm
 
 `pnpm cm` opens Commitizen. Commits follow Conventional Commits with optional `api`, `web`, `admin`, or `monorepo` scopes, for example `feat(api): add accounts endpoint`. Husky formats and lints staged files before commits, validates commit messages, and runs `pnpm test` before pushes.
 
+## Docker
+
+The full stack — API, web, admin, PostgreSQL, Redis — can also run in Docker, in development (hot reloading) and production configurations. See [`docs/docker.md`](./docs/docker.md).
+
 Nest CLI currently requires TypeScript 6 because TypeScript 7 temporarily does not expose the compiler API Nest uses. The root pins `typescript@6.0.3` until that upstream compatibility gap closes.
 
 ## Agent workflow and prompt records

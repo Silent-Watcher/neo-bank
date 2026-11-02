@@ -1,0 +1,40 @@
+# Production image for the Next.js web app. Multi-stage: turbo prune isolates
+# the web app's workspace slice, the build stage produces the standalone
+# output, and the runtime stage carries only the standalone server plus its
+# bundled dependencies as a non-root user (no devDependencies, no build
+# toolchain).
+FROM node:24.20.0-slim AS pruner
+WORKDIR /repo
+RUN corepack enable
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml turbo.json ./
+COPY apps/api/package.json apps/api/
+COPY apps/web/package.json apps/web/
+COPY apps/admin/package.json apps/admin/
+RUN pnpm install --frozen-lockfile
+COPY . .
+RUN pnpm exec turbo prune @neo-bank/web --docker
+
+FROM node:24.20.0-slim AS builder
+WORKDIR /repo
+RUN corepack enable
+COPY --from=pruner /repo/out/json/ ./
+RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
+    pnpm install --frozen-lockfile
+COPY --from=pruner /repo/out/full/ ./
+RUN pnpm exec turbo build --filter=@neo-bank/web
+
+FROM node:24.20.0-slim AS runner
+ENV NODE_ENV=production
+# Next.js standalone servers bind to the HOSTNAME environment value.
+ENV HOSTNAME=0.0.0.0
+ENV PORT=3000
+WORKDIR /repo
+COPY --from=builder /repo/apps/web/.next/standalone ./
+COPY --from=builder /repo/apps/web/.next/static ./apps/web/.next/static
+# If a apps/web/public directory is ever introduced, copy it here:
+# COPY --from=builder /repo/apps/web/public ./apps/web/public
+
+RUN useradd --system --uid 1001 --user-group neo \
+    && chown -R neo:neo /repo
+USER neo
+CMD ["node", "apps/web/server.js"]

@@ -1,0 +1,154 @@
+# Production environment: hardened application images plus PostgreSQL and
+# Redis on an isolated internal network. No source or node_modules mounts;
+# no infrastructure ports on the host.
+#
+# Compose variable interpolation values come from an explicit env file
+# (copy .env.docker.example to .env.docker and adjust; POSTGRES_PASSWORD and
+# REDIS_PASSWORD are required):
+#   docker compose --env-file .env.docker -f compose.prod.yml up --build -d
+#
+# The API receives its application configuration from
+# apps/api/env/.env.production (create it from apps/api/env/.env.example).
+# Values that must differ per deployment target — the container-to-container
+# Redis hostname and the Redis password, which Compose interpolates from
+# .env.docker — are set under `environment`, which takes precedence over
+# `env_file`.
+
+name: neo-bank-prod
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile.prod
+    env_file:
+      - apps/api/env/.env.production
+    environment:
+      HOST: 0.0.0.0
+      REDIS_URL: redis://redis:6379
+      REDIS_USERNAME: default
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD is required in .env.docker}
+    ports:
+      - '${API_PORT:-3001}:3001'
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+    networks:
+      - edge
+      - internal
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:3001/health').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile.prod
+    ports:
+      - '${WEB_PORT:-3000}:3000'
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      # Next.js may write build caches (ISR, image optimization) at runtime.
+      - /repo/apps/web/.next/cache
+      - /tmp
+    networks:
+      - edge
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:3000').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  admin:
+    build:
+      context: .
+      dockerfile: apps/admin/Dockerfile.prod
+    ports:
+      - '${ADMIN_PORT:-8080}:8080'
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+    networks:
+      - edge
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -q -O /dev/null http://127.0.0.1:8080/ || exit 1']
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  postgres:
+    image: postgres:17.6-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-neo_bank}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required in .env.docker}
+      POSTGRES_DB: ${POSTGRES_DB:-neo_bank}
+    volumes:
+      - postgres_prod_data:/var/lib/postgresql/data
+    restart: unless-stopped
+    networks:
+      - internal
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:8.2-alpine
+    # Data is intentionally ephemeral: no persistence, no volume, no AOF.
+    # Authentication is enabled via requirepass; the API receives the same
+    # password through its REDIS_PASSWORD environment value.
+    command:
+      [
+        'redis-server',
+        '--save',
+        '',
+        '--appendonly',
+        'no',
+        '--requirepass',
+        '${REDIS_PASSWORD:?REDIS_PASSWORD is required in .env.docker}',
+      ]
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD is required in .env.docker}
+    restart: unless-stopped
+    networks:
+      - internal
+    healthcheck:
+      test: ['CMD-SHELL', 'redis-cli -a "$$REDIS_PASSWORD" ping | grep PONG']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  postgres_prod_data:
+
+networks:
+  edge:
+  # internal: not routable from the host; only api, postgres, and redis join.
+  internal:
+    internal: true

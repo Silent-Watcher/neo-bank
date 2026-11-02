@@ -1,0 +1,47 @@
+# Production image for the NestJS API. Multi-stage: turbo prune isolates the
+# API's slice of the pnpm workspace, the build stage compiles with the SWC
+# toolchain, and the runtime stage carries only dist plus production
+# dependencies as a non-root user.
+FROM node:24.20.0-slim AS pruner
+WORKDIR /repo
+RUN corepack enable
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml turbo.json ./
+COPY apps/api/package.json apps/api/
+COPY apps/web/package.json apps/web/
+COPY apps/admin/package.json apps/admin/
+RUN pnpm install --frozen-lockfile
+COPY . .
+RUN pnpm exec turbo prune @neo-bank/api --docker
+
+FROM node:24.20.0-slim AS builder
+WORKDIR /repo
+RUN corepack enable
+COPY --from=pruner /repo/out/json/ ./
+RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
+    pnpm install --frozen-lockfile
+COPY --from=pruner /repo/out/full/ ./
+RUN pnpm exec turbo build --filter=@neo-bank/api
+
+FROM node:24.20.0-slim AS prod-deps
+WORKDIR /repo
+RUN corepack enable
+COPY --from=pruner /repo/out/json/ ./
+RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
+    pnpm install --frozen-lockfile --prod
+
+FROM node:24.20.0-slim AS runner
+ENV NODE_ENV=production
+WORKDIR /repo
+# package.json (ESM "type" and native # import aliases) must sit next to the
+# compiled output for Node to resolve it.
+COPY package.json ./
+COPY --from=prod-deps /repo/node_modules ./node_modules
+COPY --from=prod-deps /repo/apps/api/node_modules ./apps/api/node_modules
+COPY --from=builder /repo/apps/api/dist ./apps/api/dist
+COPY apps/api/package.json ./apps/api/package.json
+
+RUN useradd --system --uid 1001 --user-group neo \
+    && chown -R neo:neo /repo
+USER neo
+WORKDIR /repo/apps/api
+CMD ["node", "dist/main.js"]

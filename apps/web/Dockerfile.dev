@@ -1,0 +1,18 @@
+# Development image for the Next.js web app. Dependencies are baked into the
+# image; source is bind-mounted by compose.dev.yml, so edits hot-reload
+# through the existing `pnpm dev` script without rebuilding the image.
+FROM node:24.20.0-slim
+
+WORKDIR /repo
+RUN corepack enable
+
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY apps/api/package.json apps/api/
+COPY apps/web/package.json apps/web/
+COPY apps/admin/package.json apps/admin/
+
+RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
+    pnpm install --frozen-lockfile
+
+WORKDIR /repo/apps/web
+CMD ["pnpm", "dev"]

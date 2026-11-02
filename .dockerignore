@@ -1,0 +1,38 @@
+# Root build context ignore. NOTE: when building with a Dockerfile that has a
+# Dockerfile-specific ignore file (Dockerfile.dev.dockerignore /
+# Dockerfile.prod.dockerignore next to it), that file is used INSTEAD of this
+# one — it is not merged.
+
+# VCS and tooling state
+.git
+.turbo
+.idea
+.vscode
+.DS_Store
+
+# Dependencies and build outputs (installed/built inside images)
+**/node_modules
+**/dist
+**/.next
+**/coverage
+**/*.tsbuildinfo
+
+# Environment files never enter an image (values are injected at runtime)
+**/.env
+**/.env.*
+!**/.env.example
+
+# Logs and reports
+*.log
+logs/
+
+# Docker and repository documentation not needed inside images
+compose.dev.yml
+compose.prod.yml
+docs/
+prompts/
+.agents/
+
+# API env directory: containers receive configuration via Compose env_file at
+# runtime, never through the build context.
+apps/api/env/

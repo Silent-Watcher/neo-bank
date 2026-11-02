@@ -1,0 +1,15 @@
+# Dockerfile.dev-specific ignore (replaces the root .dockerignore, not merged).
+# The dev image only bakes in workspace manifests; source arrives via bind
+# mounts at runtime, so the build context is reduced to the manifests.
+**
+!package.json
+!pnpm-lock.yaml
+!pnpm-workspace.yaml
+!turbo.json
+!apps
+!apps/api
+!apps/api/package.json
+!apps/web
+!apps/web/package.json
+!apps/admin
+!apps/admin/package.json
