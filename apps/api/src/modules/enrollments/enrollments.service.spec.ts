@@ -27,6 +27,8 @@ const { randomIntMock } = vi.hoisted(() => ({
 vi.mock('node:crypto', () => ({ randomInt: randomIntMock }));
 
 import { RedisService } from '#src/shared/redis/redis.service.js';
+import { AppHttpException } from '#errors/app-http.exception.js';
+import { ErrorCode } from '#errors/error.code.js';
 import { CHALLENGE_OTP_TTL_SECONDS, EnrollmentsService } from './enrollments.service.js';
 
 describe('EnrollmentsService', () => {
@@ -34,6 +36,9 @@ describe('EnrollmentsService', () => {
     set: vi
       .fn<(key: string, value: string, options?: { ttlSeconds?: number }) => Promise<void>>()
       .mockResolvedValue(undefined),
+    deleteIfEquals: vi
+      .fn<(key: string, value: string) => Promise<boolean>>()
+      .mockResolvedValue(false),
   };
   let service: EnrollmentsService;
 
@@ -41,6 +46,8 @@ describe('EnrollmentsService', () => {
     randomIntMock.mockReset();
     redisService.set.mockReset();
     redisService.set.mockResolvedValue(undefined);
+    redisService.deleteIfEquals.mockReset();
+    redisService.deleteIfEquals.mockResolvedValue(false);
 
     const module = await Test.createTestingModule({
       providers: [EnrollmentsService, { provide: RedisService, useValue: redisService }],
@@ -113,5 +120,49 @@ describe('EnrollmentsService', () => {
 
     // Act & Assert
     await expect(service.requestChallenge('09123456789')).rejects.toThrow('connection lost');
+  });
+
+  describe('verifyChallenge', () => {
+    it('consumes the OTP under the naming-convention key and returns the phone number on success', async () => {
+      // Arrange
+      redisService.deleteIfEquals.mockResolvedValue(true);
+
+      // Act
+      const result = await service.verifyChallenge('09123456789', '048391');
+
+      // Assert
+      expect(redisService.deleteIfEquals).toHaveBeenCalledWith(
+        'neo-bank:enrollments:challenge:otp:09123456789',
+        '048391',
+      );
+      expect(result).toEqual({ phoneNumber: '09123456789' });
+      expect(Object.keys(result)).toEqual(['phoneNumber']);
+    });
+
+    it('rejects every failure condition with the same generic error', async () => {
+      // Arrange — false covers missing, expired, and incorrect OTPs alike.
+      redisService.deleteIfEquals.mockResolvedValue(false);
+
+      // Act & Assert — one error code for all of them (the identical detail
+      // text is asserted in the e2e suite; the HTTP status is part of the
+      // filter contract covered there too).
+      await expect(service.verifyChallenge('09123456789', '999999')).rejects.toThrow(
+        AppHttpException,
+      );
+      await expect(service.verifyChallenge('09123456789', '999999')).rejects.toMatchObject({
+        code: ErrorCode.OtpVerificationFailed,
+      });
+    });
+
+    it('propagates Redis failures instead of converting them into verification failures', async () => {
+      // Arrange
+      redisService.deleteIfEquals.mockRejectedValue(new Error('connection lost'));
+
+      // Act & Assert — a plain Error, not the verification failure, so the
+      // global filter serves its generic 500 (asserted in e2e).
+      await expect(service.verifyChallenge('09123456789', '048391')).rejects.toThrow(
+        'connection lost',
+      );
+    });
   });
 });

@@ -53,14 +53,21 @@ auth, no deployment setup.
   random 6-digit OTP (100000–999999), and stores it in Redis under
   `neo-bank:enrollments:challenge:otp:<phone>` with an exact 120-second TTL.
   The response contains only the phone number; the OTP value is never
-  returned and no SMS is sent. Delivery, verification, and rate limiting are
-  not implemented — deliberately incomplete.
-- Tests: Vitest unit (24 files / 167 tests) and e2e (13 files / 57 tests).
+  returned and no SMS is sent.
+- Feature module `enrollments`: `POST /api/v1/enrollments/verify` —
+  validates the phone and a six-character numeric OTP (string, leading zeros
+  preserved) with Zod before any Redis access, then atomically verifies and
+  consumes the stored code via a single Lua script (read-compare-UNLINK).
+  Missing, expired, and incorrect OTPs all return the identical generic
+  `OTP_VERIFICATION_FAILED` Problem Details response. No registration or
+  authentication steps yet.
+- Tests: Vitest unit (24 files / 178 tests) and e2e (13 files / 62 tests).
 
 **Partial**
 
-- `enrollments` module: the OTP is now generated and stored in Redis (120s
-  TTL); SMS delivery, verification, and rate limiting are planned.
+- `enrollments` module: the OTP is generated, stored (120s TTL), and
+  verified atomically; SMS delivery and the registration flow after
+  verification are planned.
 
 **Planned / Not started**
 

@@ -5,6 +5,7 @@ export enum ErrorCode {
   BadRequest = 'BAD_REQUEST',
   InvalidRequestId = 'INVALID_REQUEST_ID',
   NotFound = 'NOT_FOUND',
+  OtpVerificationFailed = 'OTP_VERIFICATION_FAILED',
 }
 
 // Stable fallback codes for built-in HTTP exceptions, keyed by status.
@@ -25,6 +26,7 @@ export const APPLICATION_ERROR_PROBLEM_TYPE = '/problems/application-error';
 const ERROR_CODE_PROBLEM_TYPES: ReadonlyMap<ErrorCode, string> = new Map([
   [ErrorCode.ApplicationError, APPLICATION_ERROR_PROBLEM_TYPE],
   [ErrorCode.InvalidRequestId, APPLICATION_ERROR_PROBLEM_TYPE],
+  [ErrorCode.OtpVerificationFailed, APPLICATION_ERROR_PROBLEM_TYPE],
 ]);
 
 export function problemTypeForErrorCode(code: ErrorCode): string | undefined {
@@ -36,6 +38,7 @@ export function problemTypeForErrorCode(code: ErrorCode): string | undefined {
 const ERROR_CODE_TITLES: ReadonlyMap<ErrorCode, string> = new Map([
   [ErrorCode.ApplicationError, 'Application Error'],
   [ErrorCode.InvalidRequestId, 'Invalid Request Id'],
+  [ErrorCode.OtpVerificationFailed, 'Verification Failed'],
 ]);
 
 export function titleForErrorCode(code: ErrorCode): string | undefined {

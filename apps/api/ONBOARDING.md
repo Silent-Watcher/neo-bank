@@ -10,8 +10,10 @@ development. It is a REST API built with NestJS 12 running on Fastify
 instead of Express. It currently serves health checks, a Problem Type
 documentation page, and the first feature (enrollment challenge: it
 validates a phone number, stores a six-digit OTP in Redis for 120 seconds,
-and returns only the phone number — delivery and verification are not
-implemented yet). It has no database; Redis is its only external store.
+and a verify endpoint consumes the stored code atomically; verification
+failures are deliberately generic). Delivery via SMS and the registration
+steps after verification are not implemented yet. It has no database; Redis
+is its only external store.
 
 Within the monorepo it is the `apps/api` workspace; the web and admin
 frontends do not call it yet. Architectural context:

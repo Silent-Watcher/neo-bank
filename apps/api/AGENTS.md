@@ -112,6 +112,12 @@ Constraints:
   co-located keys file per feature module (see
   `src/modules/enrollments/enrollments.keys.ts`); never concatenate raw
   strings at call sites.
+- Multi-step Redis flows that must execute together (read-check-delete,
+  read-check-write) go through an atomic Lua script on the shared client
+  (see `RedisService.deleteIfEquals`), never as separate commands issued
+  from feature code; the root AGENTS.md error-response-security rules apply
+  to anything built on Redis state (e.g. OTP verification failures must be
+  generic and indistinguishable).
 - Never use `KEYS`; iterate with `SCAN` (`RedisService.scanKeys`, bounded).
   Delete with `UNLINK`, never `DEL` (requires Redis server ≥ 4.0 — a
   deployment requirement, not a runtime fallback).

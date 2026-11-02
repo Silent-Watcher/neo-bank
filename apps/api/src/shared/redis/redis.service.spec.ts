@@ -212,6 +212,53 @@ describe('RedisService', () => {
     });
   });
 
+  describe('atomic deleteIfEquals', () => {
+    it('executes a single atomic Lua read-check-delete with the key and expected value', async () => {
+      // Arrange
+      const service = await createService(client);
+      const evalSpy = vi.spyOn(client, 'eval').mockResolvedValue(1);
+
+      // Act
+      const consumed = await service.deleteIfEquals('some:key', '048391');
+
+      // Assert
+      expect(consumed).toBe(true);
+      expect(evalSpy).toHaveBeenCalledTimes(1);
+      const [script, numKeys, key, value] = evalSpy.mock.calls[0];
+      expect(numKeys).toBe(1);
+      expect(key).toBe('some:key');
+      expect(value).toBe('048391');
+      // The script performs the read, the comparison, and the deletion
+      // together; no separate GET/DEL commands are issued.
+      expect(script).toContain("redis.call('GET', KEYS[1])");
+      expect(script).toContain('== ARGV[1]');
+      expect(script).toContain("redis.call('UNLINK', KEYS[1])");
+    });
+
+    it('maps the script result to a boolean', async () => {
+      // Arrange
+      const service = await createService(client);
+      const evalSpy = vi.spyOn(client, 'eval');
+
+      // Act & Assert
+      evalSpy.mockResolvedValue(1);
+      await expect(service.deleteIfEquals('some:key', '048391')).resolves.toBe(true);
+      evalSpy.mockResolvedValue('1');
+      await expect(service.deleteIfEquals('some:key', '048391')).resolves.toBe(true);
+      evalSpy.mockResolvedValue(0);
+      await expect(service.deleteIfEquals('some:key', 'wrong')).resolves.toBe(false);
+    });
+
+    it('propagates Redis errors from the script execution', async () => {
+      // Arrange
+      const service = await createService(client);
+      vi.spyOn(client, 'eval').mockRejectedValue(new Error('connection lost'));
+
+      // Act & Assert
+      await expect(service.deleteIfEquals('some:key', '048391')).rejects.toThrow('connection lost');
+    });
+  });
+
   describe('connection lifecycle', () => {
     it('registers listeners exactly once and initiates the connection on init', async () => {
       // Arrange

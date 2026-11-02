@@ -15,13 +15,15 @@ import {
   toJsonSchemaObject,
 } from '#src/shared/swagger/openapi.schemas.js';
 
-import { challengeRequestSchema } from './enrollments.schema.js';
-import type { ChallengeRequestBody } from './enrollments.schema.js';
+import { challengeRequestSchema, verifyRequestSchema } from './enrollments.schema.js';
+import type { ChallengeRequestBody, VerifyRequestBody } from './enrollments.schema.js';
 import { EnrollmentsService } from './enrollments.service.js';
 
-// The Zod schema stays the single source of truth for validation; its native
-// JSON Schema output documents the request body, so the two cannot drift.
+// The Zod schemas stay the single source of truth for validation; their
+// native JSON Schema output documents the request bodies, so the two cannot
+// drift.
 const challengeRequestJsonSchema = toJsonSchemaObject(challengeRequestSchema);
+const verifyRequestJsonSchema = toJsonSchemaObject(verifyRequestSchema);
 
 @ApiTags('enrollments')
 @Controller('enrollments')
@@ -64,5 +66,44 @@ export class EnrollmentsController {
     @Body(new ZodValidationPipe(challengeRequestSchema)) body: ChallengeRequestBody,
   ) {
     return this.enrollmentsService.requestChallenge(body.phoneNumber);
+  }
+
+  @Post('verify')
+  @ApiOperation({
+    summary: 'Verify an enrollment challenge',
+    description:
+      'Verifies the six-digit OTP previously issued for the phone number. On success the stored code is consumed. Verification failures are deliberately generic: the response never reveals whether the code was missing, expired, or incorrect.',
+  })
+  @ApiBody({
+    schema: verifyRequestJsonSchema,
+    description:
+      'The phone number is normalized before validation; the documented pattern is the validated form. The OTP is a six-character numeric string (leading zeros are significant).',
+  })
+  @ApiOkResponse({
+    description:
+      'Verification succeeded and the stored code was consumed, wrapped in the standard response envelope. The OTP is never part of any response.',
+    schema: successEnvelopeSchema({
+      type: 'object',
+      properties: {
+        phoneNumber: { type: 'string', examples: ['09121234567'] },
+      },
+      required: ['phoneNumber'],
+    }),
+  })
+  @ApiBadRequestResponse({
+    description:
+      'Verification failed — the response is identical whether the code was missing, expired, or incorrect; served as RFC 9457 Problem Details.',
+    schema: problemDetailsSchema,
+  })
+  @ApiResponse({
+    status: HttpStatus.INTERNAL_SERVER_ERROR,
+    description:
+      'The verification could not be completed; served as RFC 9457 Problem Details without internal details.',
+    schema: problemDetailsSchema,
+  })
+  verify(
+    @Body(new ZodValidationPipe(verifyRequestSchema)) { phoneNumber, otp }: VerifyRequestBody,
+  ) {
+    return this.enrollmentsService.verifyChallenge(phoneNumber, otp);
   }
 }

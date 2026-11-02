@@ -19,11 +19,25 @@ function toNationalMobile(value: string): string {
   return trimmed;
 }
 
+// Shared phone normalization + validation: transforms common spellings to
+// the national mobile format, then validates. Reused by every enrollment
+// request carrying a phone number so the normalization rules exist once.
+export const phoneNumberSchema = z
+  .string()
+  .transform(toNationalMobile)
+  .pipe(z.string().regex(IRANIAN_MOBILE_PATTERN, IRANIAN_MOBILE_MESSAGE));
+
 export const challengeRequestSchema = z.object({
-  phoneNumber: z
-    .string()
-    .transform(toNationalMobile)
-    .pipe(z.string().regex(IRANIAN_MOBILE_PATTERN, IRANIAN_MOBILE_MESSAGE)),
+  phoneNumber: phoneNumberSchema,
 });
 
 export type ChallengeRequestBody = z.infer<typeof challengeRequestSchema>;
+
+// The OTP is validated as an exact six-character numeric string: it must not
+// be coerced to a number because leading zeros are significant.
+export const verifyRequestSchema = z.object({
+  phoneNumber: phoneNumberSchema,
+  otp: z.string().regex(/^\d{6}$/, 'OTP must be a six-digit numeric string.'),
+});
+
+export type VerifyRequestBody = z.infer<typeof verifyRequestSchema>;

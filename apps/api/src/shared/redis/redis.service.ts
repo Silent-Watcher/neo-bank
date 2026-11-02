@@ -12,6 +12,18 @@ import { REDIS_CLIENT } from './redis.constants.js';
 const SCAN_DEFAULT_LIMIT = 100;
 const SCAN_DEFAULT_COUNT = 100;
 
+// Atomic read-check-delete: the key is removed only when it holds exactly
+// the expected value, in a single Lua execution. Running GET and DEL as
+// separate commands would leave a window where the key could change (or be
+// recreated) between the check and the deletion.
+const DELETE_IF_EQUALS_SCRIPT = `
+if redis.call('GET', KEYS[1]) == ARGV[1] then
+  redis.call('UNLINK', KEYS[1])
+  return 1
+end
+return 0
+`;
+
 export interface SetOptions {
   readonly ttlSeconds?: number;
 }
@@ -117,6 +129,19 @@ export class RedisService implements OnModuleInit, OnApplicationShutdown {
     } while (cursor !== '0' && keys.length < limit);
 
     return keys.slice(0, limit);
+  }
+
+  /**
+   * Atomically removes `key` when it holds exactly `value`, as a single Lua
+   * execution (read, compare, and `UNLINK` together). Returns whether the
+   * key existed with the expected value and was consumed. A missing key or a
+   * different value leaves Redis untouched and simply returns false.
+   */
+  async deleteIfEquals(key: string, value: string): Promise<boolean> {
+    const result: unknown = await this.client.eval(DELETE_IF_EQUALS_SCRIPT, 1, key, value);
+    // Redis answers Lua integer returns with a number; stringNumbers clients
+    // would see '1', so both are accepted without asserting the reply type.
+    return result === 1 || result === '1';
   }
 
   /**
