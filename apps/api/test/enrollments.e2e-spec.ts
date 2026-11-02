@@ -121,7 +121,7 @@ describe('EnrollmentsController (e2e)', () => {
       // Act
       const response = await request(app.getHttpServer())
         .post('/api/v1/enrollments/verify')
-        .send({ phone: '09123456789', otp: '048391' });
+        .send({ phoneNumber: '09123456789', otp: '048391' });
 
       // Assert
       expect(response.status).toBe(201);
@@ -142,7 +142,7 @@ describe('EnrollmentsController (e2e)', () => {
       // Act
       const response = await request(app.getHttpServer())
         .post('/api/v1/enrollments/verify')
-        .send({ phone: '+989123456789', otp: '000001' });
+        .send({ phoneNumber: '+989123456789', otp: '000001' });
 
       // Assert
       expect(response.status).toBe(201);
@@ -168,10 +168,10 @@ describe('EnrollmentsController (e2e)', () => {
       // Act
       const incorrect = await request(incorrectApp.getHttpServer())
         .post('/api/v1/enrollments/verify')
-        .send({ phone: '09123456789', otp: '999999' });
+        .send({ phoneNumber: '09123456789', otp: '999999' });
       const missing = await request(missingApp.getHttpServer())
         .post('/api/v1/enrollments/verify')
-        .send({ phone: '09123456789', otp: '111111' });
+        .send({ phoneNumber: '09123456789', otp: '111111' });
 
       // Assert
       expect(incorrect.status).toBe(400);
@@ -232,7 +232,7 @@ describe('EnrollmentsController (e2e)', () => {
       // Act
       const response = await request(app.getHttpServer())
         .post('/api/v1/enrollments/verify')
-        .send({ phone: '09123456789', otp: '048391' });
+        .send({ phoneNumber: '09123456789', otp: '048391' });
 
       // Assert — a generic 500 that says nothing about Redis.
       expect(response.status).toBe(500);

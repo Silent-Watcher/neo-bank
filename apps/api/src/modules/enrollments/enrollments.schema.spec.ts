@@ -124,7 +124,7 @@ describe('challengeRequestSchema', () => {
 describe('verifyRequestSchema', () => {
   it('accepts a canonical phone number and six-digit OTP unchanged', () => {
     // Arrange
-    const input = { phone: '09123456789', otp: '048391' };
+    const input = { phoneNumber: '09123456789', otp: '048391' };
 
     // Act
     const result = parseValid(verifyRequestSchema, input);
@@ -136,7 +136,7 @@ describe('verifyRequestSchema', () => {
   it('normalizes the phone number and preserves the OTP verbatim', () => {
     // Arrange & Act
     const result = parseValid(verifyRequestSchema, {
-      phone: '+989123456789',
+      phoneNumber: '+989123456789',
       otp: '000001',
     });
 
@@ -151,13 +151,13 @@ describe('verifyRequestSchema', () => {
 
     // Act + Assert
     for (const otp of invalidOtps) {
-      expect(parseIssues(verifyRequestSchema, { phone: '09123456789', otp })).toHaveLength(1);
+      expect(parseIssues(verifyRequestSchema, { phoneNumber: '09123456789', otp })).toHaveLength(1);
     }
   });
 
   it('rejects an invalid phone number', () => {
     // Arrange & Act
-    const issues = parseIssues(verifyRequestSchema, { phone: '02112345678', otp: '483921' });
+    const issues = parseIssues(verifyRequestSchema, { phoneNumber: '02112345678', otp: '483921' });
 
     // Assert
     expect(issues).toHaveLength(1);
@@ -166,7 +166,7 @@ describe('verifyRequestSchema', () => {
   it('rejects missing fields', () => {
     // Arrange & Act
     const missingPhone = parseIssues(verifyRequestSchema, { otp: '483921' });
-    const missingOtp = parseIssues(verifyRequestSchema, { phone: '09123456789' });
+    const missingOtp = parseIssues(verifyRequestSchema, { phoneNumber: '09123456789' });
 
     // Assert
     expect(missingPhone).toHaveLength(1);
