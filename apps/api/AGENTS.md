@@ -105,6 +105,13 @@ Constraints:
   add methods only for concrete application needs.
 - Do not bake serialization, key prefixing, or caching policies into the
   shared Redis module without an explicit architectural requirement.
+- Redis keys follow the root AGENTS.md key-naming convention
+  (`<app>:<module>:<feature>:<resource>:<identifier>`, e.g.
+  `neo-bank:enrollments:challenge:otp:<phone>`): build them with
+  `buildRedisKey` from `src/shared/redis/redis-keys.ts` via a single
+  co-located keys file per feature module (see
+  `src/modules/enrollments/enrollments.keys.ts`); never concatenate raw
+  strings at call sites.
 - Never use `KEYS`; iterate with `SCAN` (`RedisService.scanKeys`, bounded).
   Delete with `UNLINK`, never `DEL` (requires Redis server ≥ 4.0 — a
   deployment requirement, not a runtime fallback).
@@ -125,7 +132,8 @@ src/
     enrollments/           # feature modules: controller + service + schema + specs
   shared/
     config/                # config.ts wiring + env/ Zod schemas + factories
-    redis/                 # global RedisModule: provider, RedisService, InjectRedis
+    redis/                 # global RedisModule: provider, RedisService, InjectRedis,
+                           # key builder (redis-keys.ts)
     swagger/               # OpenAPI setup (dev-only), shared response schemas
     enums/ errors/ filters/ http/ interceptors/ logging/ pipes/
 test/

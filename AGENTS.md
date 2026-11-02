@@ -88,6 +88,14 @@ if you are unsure whether a change is "material", update rather than skip.
 - Integrations must use bounded connection and command timeouts, capped retries without retry storms, predictable failure behavior, no unbounded queues, and no unhandled promise rejections.
 - Report dependency degradation honestly in health checks; never mask an outage as healthy, and never let an optional dependency's outage make the process look dead.
 
+## Redis Key Naming Convention
+
+- Every Redis key MUST follow the fixed hierarchical pattern `<app>:<module>:<feature>:<resource>:<identifier>` — for example `neo-bank:enrollments:challenge:otp:<phone>`.
+- Segments are separated by `:` and are lowercase, kebab-case where a segment needs multiple words.
+- The application's root namespace (`neo-bank`) is fixed and centrally defined in the integration layer; features must never invent their own top-level namespace or prefix.
+- The module, feature, and resource segments must reflect the actual ownership and structure of the functionality.
+- Keys must never be concatenated from scattered hardcoded strings: build them with the shared key builder (`buildRedisKey`) from a single co-located keys file per feature module that defines that feature's keys.
+
 ## Backend — NestJS
 
 - Follow NestJS conventions for modules, dependency injection, controllers, and providers.

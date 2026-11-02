@@ -19,11 +19,11 @@ function toNationalMobile(value: string): string {
   return trimmed;
 }
 
-export const requestOtpSchema = z.object({
+export const challengeRequestSchema = z.object({
   phoneNumber: z
     .string()
     .transform(toNationalMobile)
     .pipe(z.string().regex(IRANIAN_MOBILE_PATTERN, IRANIAN_MOBILE_MESSAGE)),
 });
 
-export type RequestOtpBody = z.infer<typeof requestOtpSchema>;
+export type ChallengeRequestBody = z.infer<typeof challengeRequestSchema>;

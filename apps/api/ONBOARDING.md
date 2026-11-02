@@ -8,9 +8,10 @@ who has never seen this repository.
 This application is the backend of Neo Bank, a banking product in early
 development. It is a REST API built with NestJS 12 running on Fastify
 instead of Express. It currently serves health checks, a Problem Type
-documentation page, and the first feature (phone OTP generation for user
-enrollment). It has no database yet; a Redis integration module exists and
-is ready for features (planned for OTP storage), but nothing uses it yet.
+documentation page, and the first feature (enrollment challenge: it
+validates a phone number, stores a six-digit OTP in Redis for 120 seconds,
+and returns only the phone number — delivery and verification are not
+implemented yet). It has no database; Redis is its only external store.
 
 Within the monorepo it is the `apps/api` workspace; the web and admin
 frontends do not call it yet. Architectural context:

@@ -1,4 +1,24 @@
+import { Test } from '@nestjs/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+// Unit tests must not depend on ambient environment state, so the env
+// validation layer is replaced with a fully valid environment.
+vi.mock('#config/env/env.config.js', () => ({
+  _env: {
+    APP_ENV: 'test',
+    HOST: '0.0.0.0',
+    PORT: 3001,
+    LOG_LEVEL: 'info',
+    REDIS_URL: 'redis://localhost:6379',
+    REDIS_USERNAME: '',
+    REDIS_PASSWORD: '',
+    REDIS_TLS: 'false',
+    REDIS_CONNECT_TIMEOUT_MS: 10000,
+    REDIS_COMMAND_TIMEOUT_MS: 5000,
+    REDIS_MAX_RETRIES_PER_REQUEST: 3,
+    REDIS_SHUTDOWN_TIMEOUT_MS: 2000,
+  },
+}));
 
 const { randomIntMock } = vi.hoisted(() => ({
   randomIntMock: vi.fn<(min: number, max: number) => number>(),
@@ -6,62 +26,92 @@ const { randomIntMock } = vi.hoisted(() => ({
 
 vi.mock('node:crypto', () => ({ randomInt: randomIntMock }));
 
-import { EnrollmentsService } from './enrollments.service.js';
+import { RedisService } from '#src/shared/redis/redis.service.js';
+import { CHALLENGE_OTP_TTL_SECONDS, EnrollmentsService } from './enrollments.service.js';
 
 describe('EnrollmentsService', () => {
+  const redisService = {
+    set: vi
+      .fn<(key: string, value: string, options?: { ttlSeconds?: number }) => Promise<void>>()
+      .mockResolvedValue(undefined),
+  };
   let service: EnrollmentsService;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     randomIntMock.mockReset();
-    service = new EnrollmentsService();
+    redisService.set.mockReset();
+    redisService.set.mockResolvedValue(undefined);
+
+    const module = await Test.createTestingModule({
+      providers: [EnrollmentsService, { provide: RedisService, useValue: redisService }],
+    }).compile();
+
+    service = module.get(EnrollmentsService);
   });
 
-  it('returns the submitted phone number with the generated OTP', () => {
+  it('stores the generated OTP in Redis under the naming-convention key with an exact 120-second TTL', async () => {
     // Arrange
     randomIntMock.mockReturnValue(483_921);
 
     // Act
-    const result = service.requestOtp('09123456789');
+    await service.requestChallenge('09123456789');
 
     // Assert
-    expect(result).toEqual({ phoneNumber: '09123456789', otp: '483921' });
+    expect(redisService.set).toHaveBeenCalledTimes(1);
+    const [key, otp, options] = redisService.set.mock.calls[0];
+    expect(key).toBe('neo-bank:enrollments:challenge:otp:09123456789');
+    expect(otp).toBe('483921');
+    expect(options).toEqual({ ttlSeconds: CHALLENGE_OTP_TTL_SECONDS });
+    expect(options?.ttlSeconds).toBe(120);
   });
 
-  it('generates the OTP as a string of exactly six digits', () => {
+  it('returns only the phone number and never the OTP value', async () => {
     // Arrange
     randomIntMock.mockReturnValue(483_921);
 
     // Act
-    const { otp } = service.requestOtp('09123456789');
+    const result = await service.requestChallenge('09123456789');
 
     // Assert
-    expect(otp).toBeTypeOf('string');
-    expect(otp).toMatch(/^\d{6}$/);
+    expect(result).toEqual({ phoneNumber: '09123456789' });
+    expect(Object.keys(result)).toEqual(['phoneNumber']);
   });
 
-  it('supports both range boundaries as six-digit OTPs', () => {
-    // Arrange
+  it('generates the OTP as a string of exactly six digits across the full range', async () => {
+    // Arrange & Act
     randomIntMock.mockReturnValue(100_000);
-    const lower = service.requestOtp('09123456789').otp;
-    randomIntMock.mockReturnValue(999_999);
+    const lower = redisService.set.mock.calls.length;
+    await service.requestChallenge('09123456789');
+    const lowerOtp = redisService.set.mock.calls[lower][1];
 
-    // Act
-    const upper = service.requestOtp('09123456789').otp;
+    randomIntMock.mockReturnValue(999_999);
+    const upper = redisService.set.mock.calls.length;
+    await service.requestChallenge('09123456789');
+    const upperOtp = redisService.set.mock.calls[upper][1];
 
     // Assert
-    expect(lower).toBe('100000');
-    expect(upper).toBe('999999');
+    expect(lowerOtp).toBe('100000');
+    expect(upperOtp).toBe('999999');
   });
 
-  it('draws the OTP from the cryptographically secure randomInt over the six-digit range', () => {
+  it('draws the OTP from the cryptographically secure randomInt over the six-digit range', async () => {
     // Arrange
     randomIntMock.mockReturnValue(123_456);
 
     // Act
-    service.requestOtp('09123456789');
+    await service.requestChallenge('09123456789');
 
     // Assert
     expect(randomIntMock).toHaveBeenCalledTimes(1);
     expect(randomIntMock).toHaveBeenCalledWith(100_000, 1_000_000);
+  });
+
+  it('propagates Redis storage failures to the caller', async () => {
+    // Arrange
+    randomIntMock.mockReturnValue(483_921);
+    redisService.set.mockRejectedValue(new Error('connection lost'));
+
+    // Act & Assert
+    await expect(service.requestChallenge('09123456789')).rejects.toThrow('connection lost');
   });
 });

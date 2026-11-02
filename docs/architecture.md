@@ -117,7 +117,8 @@ repository (not a Turbo task), so formatting is repository-wide.
   ioredis client and exposes it through a `RedisService` abstraction;
   connection settings are validated at boot, while an unreachable server
   only degrades the `/health` endpoint (HTTP 200) and never blocks startup.
-  No feature consumes Redis yet.
+  The first consumer is the enrollments challenge, which stores its OTP in
+  Redis under the standardized key naming convention.
 
 ## Current Architectural Limitations
 

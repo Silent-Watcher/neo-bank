@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { requestOtpSchema } from './enrollments.schema.js';
+import { challengeRequestSchema } from './enrollments.schema.js';
 
 // Parses with the request schema, failing the test when the schema rejects.
 function parseValid(input: unknown): { phoneNumber: string } {
-  const result = requestOtpSchema.safeParse(input);
+  const result = challengeRequestSchema.safeParse(input);
   if (!result.success) {
     throw new Error(`Expected the schema to accept ${JSON.stringify(input)}.`);
   }
@@ -12,14 +12,14 @@ function parseValid(input: unknown): { phoneNumber: string } {
 
 // Expects the schema to reject the input and returns the issue messages.
 function parseIssues(input: unknown): string[] {
-  const result = requestOtpSchema.safeParse(input);
+  const result = challengeRequestSchema.safeParse(input);
   if (result.success) {
     throw new Error(`Expected the schema to reject ${JSON.stringify(input)}.`);
   }
   return result.error.issues.map((issue) => issue.message);
 }
 
-describe('requestOtpSchema', () => {
+describe('challengeRequestSchema', () => {
   it('accepts a canonical Iranian mobile number unchanged', () => {
     // Arrange
     const input = { phoneNumber: '09123456789' };

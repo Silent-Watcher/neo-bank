@@ -47,17 +47,20 @@ auth, no deployment setup.
   Problem Details response schemas; all existing endpoints documented.
 - Health check at `/health` (Terminus) with a Redis indicator: healthy,
   or `degraded` with HTTP 200 when Redis is unreachable.
-- Feature module `enrollments`: `POST /api/v1/enrollments/otp` — validates an
-  Iranian mobile number (with normalization for `+98`/`0098`/`98`/missing
-  zero/whitespace) and returns a cryptographically random 6-digit OTP
-  (100000–999999). No storage, delivery, or verification — deliberately
-  incomplete.
-- Tests: Vitest unit (24 files / 166 tests) and e2e (13 files / 56 tests).
+- Feature module `enrollments`: `POST /api/v1/enrollments/challenge` —
+  validates an Iranian mobile number (with normalization for
+  `+98`/`0098`/`98`/missing zero/whitespace), generates a cryptographically
+  random 6-digit OTP (100000–999999), and stores it in Redis under
+  `neo-bank:enrollments:challenge:otp:<phone>` with an exact 120-second TTL.
+  The response contains only the phone number; the OTP value is never
+  returned and no SMS is sent. Delivery, verification, and rate limiting are
+  not implemented — deliberately incomplete.
+- Tests: Vitest unit (24 files / 167 tests) and e2e (13 files / 57 tests).
 
 **Partial**
 
-- `enrollments` module: OTP lifecycle (storage, SMS delivery, verification,
-  expiry, rate limiting) is planned; the current endpoint is a scaffold for it.
+- `enrollments` module: the OTP is now generated and stored in Redis (120s
+  TTL); SMS delivery, verification, and rate limiting are planned.
 
 **Planned / Not started**
 
@@ -88,7 +91,8 @@ None. The workspace contains only `apps/*`; no `packages/` directory exists.
 ## Infrastructure and Integrations
 
 **Implemented:** Redis client integration in the API (global `RedisModule`,
-ioredis 6, degraded-mode health; no feature consumes it yet). Beyond that,
+ioredis 6, degraded-mode health, standardized key naming); the enrollments
+challenge feature stores its OTP in Redis. Beyond that,
 only the build/test toolchain itself: Turborepo local caching (`.turbo/`),
 Husky hooks, commitlint, lint-staged.
 

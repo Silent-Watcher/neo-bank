@@ -52,36 +52,41 @@ describe('Swagger (e2e)', () => {
     // Assert
     expect(Object.keys(json.body.paths).sort()).toEqual([
       '/api/v1',
-      '/api/v1/enrollments/otp',
+      '/api/v1/enrollments/challenge',
       '/health',
       '/problems/application-error',
     ]);
-    expect(json.body.paths['/api/v1/enrollments/otp'].post).toBeDefined();
+    expect(json.body.paths['/api/v1/enrollments/challenge'].post).toBeDefined();
     expect(json.body.paths['/api/v1'].get).toBeDefined();
     expect(json.body.paths['/health'].get).toBeDefined();
     expect(json.body.paths['/problems/application-error'].get).toBeDefined();
     await app.close();
   });
 
-  it('documents the OTP endpoint contract from the Zod schema', async () => {
+  it('documents the challenge endpoint contract from the Zod schema', async () => {
     // Arrange
     const app = await createTestApp((devApp) => setupSwagger(devApp));
 
     // Act
     const json = await request(app.getHttpServer()).get(`/${SWAGGER_DOCS_PATH}/json`);
-    const otp = json.body.paths['/api/v1/enrollments/otp'].post;
+    const challenge = json.body.paths['/api/v1/enrollments/challenge'].post;
 
     // Assert — request schema derived from the Zod schema (required field,
-    // validated phone pattern), success and error contracts included.
-    const requestBody = otp.requestBody.content['application/json'].schema;
+    // validated phone pattern); the response documents the phone number only
+    // and the OTP value appears nowhere in the document.
+    const requestBody = challenge.requestBody.content['application/json'].schema;
     expect(requestBody.type).toBe('object');
     expect(requestBody.required).toContain('phoneNumber');
     expect(requestBody.properties.phoneNumber.pattern).toBe('^09\\d{9}$');
 
-    expect(otp.responses['200'].description).toContain('envelope');
-    expect(otp.responses['400'].description).toContain('Problem Details');
+    const okSchema = challenge.responses['200'].content['application/json'].schema;
+    expect(okSchema.properties.data.required).toEqual(['phoneNumber']);
+    expect(JSON.stringify(challenge)).not.toContain('"otp"');
+
+    expect(challenge.responses['400'].description).toContain('Problem Details');
+    expect(challenge.responses['500'].description).toContain('Redis');
     const badRequestSchema =
-      otp.responses['400'].content[Object.keys(otp.responses['400'].content)[0]].schema;
+      challenge.responses['400'].content[Object.keys(challenge.responses['400'].content)[0]].schema;
     expect(badRequestSchema.properties.code).toBeDefined();
     expect(badRequestSchema.properties.requestId).toBeDefined();
     await app.close();
