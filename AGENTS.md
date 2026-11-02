@@ -79,6 +79,15 @@ if you are unsure whether a change is "material", update rather than skip.
 - Use root scripts for common development and validation tasks.
 - Do not modify the lockfile manually or introduce unnecessary workspaces.
 
+## External Service Integrations
+
+- Evaluate existing project capabilities before introducing a new dependency; prefer native capabilities plus a small internal abstraction over third-party wrappers unless a wrapper provides concrete value.
+- Do not add a dependency without weighing maintenance cost, lock-in, and alignment with existing conventions (configuration, logging, testing).
+- An external service must not become a mandatory startup dependency unless the architecture explicitly requires it: the application must start and serve non-dependent operations when the service is unreachable.
+- Each integration module owns its connection lifecycle (initiation and shutdown through the framework's lifecycle hooks) and must not leak that responsibility to consumers.
+- Integrations must use bounded connection and command timeouts, capped retries without retry storms, predictable failure behavior, no unbounded queues, and no unhandled promise rejections.
+- Report dependency degradation honestly in health checks; never mask an outage as healthy, and never let an optional dependency's outage make the process look dead.
+
 ## Backend — NestJS
 
 - Follow NestJS conventions for modules, dependency injection, controllers, and providers.

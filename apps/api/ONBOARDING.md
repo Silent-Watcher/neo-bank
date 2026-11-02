@@ -9,7 +9,8 @@ This application is the backend of Neo Bank, a banking product in early
 development. It is a REST API built with NestJS 12 running on Fastify
 instead of Express. It currently serves health checks, a Problem Type
 documentation page, and the first feature (phone OTP generation for user
-enrollment). It has no database yet — everything runs in memory.
+enrollment). It has no database yet; a Redis integration module exists and
+is ready for features (planned for OTP storage), but nothing uses it yet.
 
 Within the monorepo it is the `apps/api` workspace; the web and admin
 frontends do not call it yet. Architectural context:
@@ -20,24 +21,27 @@ feature coverage is minimal.
 
 ## 2. Technology Stack
 
-| Technology                               | Purpose                                                                |
-| ---------------------------------------- | ---------------------------------------------------------------------- |
-| NestJS 12                                | Application framework (modules, DI, pipes, filters, interceptors)      |
-| Fastify (via `@nestjs/platform-fastify`) | HTTP platform — high-throughput target ([ADR-002](../../DECISIONS.md)) |
-| SWC                                      | TypeScript transpilation (fast builds; type checking stays with `tsc`) |
-| Zod 4                                    | Validation for HTTP input and environment variables                    |
-| @nestjs/config                           | Configuration namespaces via `registerAs` + `ConfigService`            |
-| Pino / nestjs-pino                       | Structured logging; request-scoped context, header redaction           |
-| @nestjs/terminus                         | `/health` endpoint                                                     |
-| Vitest + supertest                       | Unit and e2e testing                                                   |
-| Oxlint / Oxfmt                           | Linting and formatting (no ESLint/Prettier)                            |
+| Technology                               | Purpose                                                                                                 |
+| ---------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| NestJS 12                                | Application framework (modules, DI, pipes, filters, interceptors)                                       |
+| Fastify (via `@nestjs/platform-fastify`) | HTTP platform — high-throughput target ([ADR-002](../../DECISIONS.md))                                  |
+| SWC                                      | TypeScript transpilation (fast builds; type checking stays with `tsc`)                                  |
+| Zod 4                                    | Validation for HTTP input and environment variables                                                     |
+| @nestjs/config                           | Configuration namespaces via `registerAs` + `ConfigService`                                             |
+| Pino / nestjs-pino                       | Structured logging; request-scoped context, header redaction                                            |
+| @nestjs/terminus                         | `/health` endpoint                                                                                      |
+| ioredis 6                                | Redis client behind the shared `RedisService` ([ADR-012](../../DECISIONS.md)/[013](../../DECISIONS.md)) |
+| Vitest + supertest                       | Unit and e2e testing                                                                                    |
+| Oxlint / Oxfmt                           | Linting and formatting (no ESLint/Prettier)                                                             |
 
 ## 3. Prerequisites
 
 - Node.js **24.20.0** (allowed range `>=24.15 <25`; see `/.nvmrc`).
 - pnpm **12.10.1** (enabled via `packageManager` in the root `package.json`;
   use `corepack enable` if pnpm is missing).
-- No external services are required.
+- A Redis server (≥ 4.0, required for `UNLINK`) is needed for Redis-backed
+  features, but the API starts without one: connection settings are
+  validated at boot, and an unreachable server only degrades `/health`.
 
 ## 4. Getting Started
 
@@ -52,14 +56,22 @@ cp env/.env.example env/.env.development
 # edit values if needed; defaults work for local development
 ```
 
-| Variable       | Meaning                                 | Default behavior if unset                         |
-| -------------- | --------------------------------------- | ------------------------------------------------- |
-| `APP_ENV`      | `development` \| `production` \| `test` | required                                          |
-| `HOST`, `PORT` | Bind address and port                   | required (dev/test files set `3001`)              |
-| `CORS_ORIGIN`  | Comma-separated allowed origins         | CORS disabled; required when `APP_ENV=production` |
-| `TRUST_PROXY`  | Trust proxy headers (`true`/`false`)    | `false`                                           |
-| `BODY_LIMIT`   | Max request body bytes                  | `1048576` (1 MiB)                                 |
-| `LOG_LEVEL`    | Pino level                              | `info`                                            |
+| Variable                           | Meaning                                   | Default behavior if unset                         |
+| ---------------------------------- | ----------------------------------------- | ------------------------------------------------- |
+| `APP_ENV`                          | `development` \| `production` \| `test`   | required                                          |
+| `HOST`, `PORT`                     | Bind address and port                     | required (dev/test files set `3001`)              |
+| `CORS_ORIGIN`                      | Comma-separated allowed origins           | CORS disabled; required when `APP_ENV=production` |
+| `TRUST_PROXY`                      | Trust proxy headers (`true`/`false`)      | `false`                                           |
+| `BODY_LIMIT`                       | Max request body bytes                    | `1048576` (1 MiB)                                 |
+| `LOG_LEVEL`                        | Pino level                                | `info`                                            |
+| `REDIS_URL`                        | Redis URL (`redis://` or `rediss://`)     | required                                          |
+| `REDIS_USERNAME`, `REDIS_PASSWORD` | Redis ACL credentials                     | required; empty value = no authentication         |
+| `REDIS_DB`                         | Logical database index (0–15)             | server default                                    |
+| `REDIS_TLS`                        | Force TLS for `redis://` (`true`/`false`) | `false` (`rediss://` always uses TLS)             |
+| `REDIS_CONNECT_TIMEOUT_MS`         | Connection timeout (ms)                   | `10000`                                           |
+| `REDIS_COMMAND_TIMEOUT_MS`         | Per-command timeout (ms)                  | `5000`                                            |
+| `REDIS_MAX_RETRIES_PER_REQUEST`    | Command retry budget                      | `3`                                               |
+| `REDIS_SHUTDOWN_TIMEOUT_MS`        | Graceful-QUIT window (ms)                 | `2000`                                            |
 
 Startup fails fast with a readable Zod error if validation fails.
 
@@ -102,6 +114,8 @@ src/
     interceptors/          # global success response envelope
     logging/               # nestjs-pino module and pino-http options
     pipes/                 # ZodValidationPipe
+    redis/                 # global RedisModule: ioredis provider, RedisService,
+                           # @InjectRedis(), degraded-mode health indicator
 test/                      # e2e specs + create-test-app.ts + Vitest alias map
 env/                       # .env.development / .env.test / .env.example
 ```
@@ -163,6 +177,12 @@ tooling (lint, format, Turbo tasks) comes from the root; see
   live in `main.ts` and must stay there.
 - **Sensitive data:** the logger redacts authorization/cookie headers and
   never logs bodies; keep it that way.
+- **Redis:** consume through the global `RedisModule`'s `RedisService`
+  (inject it anywhere — no module import needed); `@InjectRedis()` is an
+  escape hatch for native ioredis needs only. The server may be down at
+  startup: `/health` then reports `degraded` with HTTP 200 and the client
+  reconnects on its own. See `src/shared/redis/` and the API
+  [AGENTS.md](./AGENTS.md) Redis rules.
 - Several ADRs ([../../DECISIONS.md](../../DECISIONS.md)) are **Pending**
   but implemented — follow them; don't reintroduce alternatives.
 

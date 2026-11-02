@@ -31,14 +31,47 @@ neutral `/health` probe on Fastify, port 3001 in development/test.
   Zod schemas, and co-located specs per feature. Registered in
   `src/modules/app/app.module.ts`.
 - **Shared infrastructure:** `src/shared/` — `config/` (Zod env schemas +
-  `registerAs` factories), `logging/` (nestjs-pino), `errors/` +
+  `registerAs` factories), `logging/` (nestjs-pino), `redis/` (global
+  RedisModule: ioredis client provider, `RedisService`,
+  `@InjectRedis()`, health indicator), `errors/` +
   `filters/problem-details.filter.ts` (RFC 9457 error contract),
   `interceptors/response-envelope.interceptor.ts` (success envelope),
   `pipes/zod-validation.pipe.ts`, `http/` (request IDs, API version).
+- **Infrastructure provider tokens:** use `Symbol` tokens for infrastructure
+  providers (e.g. `REDIS_CLIENT`), keep them defined inside the owning
+  module's directory, and expose them to consumers only through the owning
+  module's exports or a dedicated injection decorator.
 - **Request/response contracts:** every successful JSON response is wrapped
   by the envelope interceptor; every error becomes Problem Details
   (ADR-010/011). Do not hand-roll response or error shapes; ADR-011 lists the
   response types that must bypass the envelope.
+- **Redis:** global `RedisModule` in `src/shared/redis/` (ADR-012/013) owns
+  the single ioredis client and its lifecycle; `RedisService` is the
+  application interface. Redis connection settings are mandatory, but the
+  server being unreachable degrades health (HTTP 200), never blocks startup
+  or crashes the process.
+
+## Redis Rules
+
+- Application business logic uses `RedisService` for ordinary Redis
+  operations; direct ioredis injection via `@InjectRedis()` is an exceptional
+  escape hatch that requires a justified use case.
+- Do not import ioredis in feature modules merely to run basic commands, and
+  never reference the internal `REDIS_CLIENT` token outside
+  `src/shared/redis/`.
+- Do not expand `RedisService` into a one-to-one wrapper of the ioredis API;
+  add methods only for concrete application needs.
+- Do not bake serialization, key prefixing, or caching policies into the
+  shared Redis module without an explicit architectural requirement.
+- Never use `KEYS`; iterate with `SCAN` (`RedisService.scanKeys`, bounded).
+  Delete with `UNLINK`, never `DEL` (requires Redis server ≥ 4.0 — a
+  deployment requirement, not a runtime fallback).
+- Use atomic Redis operations (e.g. `INCRBY`) when the use case needs them;
+  do not add transactions, Lua scripts, or locks without a concrete
+  requirement, and never treat pipelining as atomicity.
+- Unit tests must not require a running Redis server: use `lazyConnect`
+  client instances and provider overrides; e2e tests exercise the degraded
+  (unreachable) path against an unroutable URL from `env/.env.test`.
 
 ## Directory Structure
 
@@ -50,6 +83,7 @@ src/
     enrollments/           # feature modules: controller + service + schema + specs
   shared/
     config/                # config.ts wiring + env/ Zod schemas + factories
+    redis/                 # global RedisModule: provider, RedisService, InjectRedis
     enums/ errors/ filters/ http/ interceptors/ logging/ pipes/
 test/
   create-test-app.ts       # e2e app factory mirroring main.ts bootstrap

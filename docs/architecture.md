@@ -91,9 +91,9 @@ repository (not a Turbo task), so formatting is repository-wide.
   package under `packages/` (none exists yet).
 - **API module boundaries:** feature code lives under
   `apps/api/src/modules/<feature>/`; cross-cutting infrastructure (config,
-  logging, errors, filters, interceptors, pipes, HTTP helpers) lives under
-  `apps/api/src/shared/` and is exposed through Node.js `#` subpath import
-  aliases. See `apps/api/AGENTS.md` for the details.
+  logging, Redis, errors, filters, interceptors, pipes, HTTP helpers) lives
+  under `apps/api/src/shared/` and is exposed through Node.js `#` subpath
+  import aliases. See `apps/api/AGENTS.md` for the details.
 - **Configuration boundary (API):** `process.env` may be read only once, in
   `apps/api/src/shared/config/env/env.config.ts` (ADR-004, enforced by the
   oxlint `no-process-env` rule with a single override). All other
@@ -112,9 +112,12 @@ repository (not a Turbo task), so formatting is repository-wide.
 - **Client → API:** not implemented yet. The API exposes
   `http://localhost:3001` (prefix `/api/v1`, health at `/health`), but neither
   frontend contains HTTP client code, shared types, or an API SDK.
-- **API ↔ infrastructure:** none. No database, cache, message broker, or
-  external service is connected; the only integration is the Terminus health
-  check (currently self-referential, no downstream indicators).
+- **API ↔ infrastructure:** Redis is the first external integration: a
+  global `RedisModule` (`apps/api/src/shared/redis/`, ADR-012/013) owns one
+  ioredis client and exposes it through a `RedisService` abstraction;
+  connection settings are validated at boot, while an unreachable server
+  only degrades the `/health` endpoint (HTTP 200) and never blocks startup.
+  No feature consumes Redis yet.
 
 ## Current Architectural Limitations
 

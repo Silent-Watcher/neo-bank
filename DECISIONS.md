@@ -532,3 +532,151 @@ It was rejected in favor of a single global default with explicit, tested exclus
 
 - Clients see two body shapes: the envelope for ordinary JSON, raw payloads for excluded types. This is documented in the Problem Type page and tests.
 - New response kinds (e.g. WebSockets, other streaming formats) must evaluate whether further exclusions are needed.
+
+## ADR-012: Use ioredis Directly Without a Third-Party NestJS Redis Wrapper
+
+- **Status:** Pending
+- **Date:** 2026-11-02
+
+### Context
+
+The API needs a Redis client for upcoming features (OTP storage and rate
+limiting for enrollments first). NestJS has no first-party Redis integration,
+so the choice is between the raw client, a third-party NestJS wrapper such as
+`@nestjs-modules/ioredis`, or a generic caching abstraction.
+
+The project's configuration (Zod-validated env, ADR-004), logging (Pino,
+ADR-008/009), health checks (Terminus), and lifecycle conventions are already
+established; the integration must build on them rather than introduce a
+parallel system.
+
+### Decision
+
+Use **ioredis** directly as the Redis driver, with no additional wrapper
+packages. All NestJS-specific integration — provider registration, lifecycle,
+health, logging — is implemented in-house in the `RedisModule`
+(`apps/api/src/shared/redis/`), which owns the connection lifecycle entirely.
+
+### Alternatives Considered
+
+#### @nestjs-modules/ioredis and similar wrappers
+
+Wrappers provide ready-made injection decorators and multi-client support.
+
+They were rejected because they add a dependency bound to NestJS/ioredis
+major-version compatibility, duplicate what this integration must own anyway
+(lifecycle, resilience, health), and would bypass the project's established
+configuration and logging conventions rather than build on them.
+
+#### node-redis (redis package)
+
+The official client with first-class TypeScript support.
+
+It was rejected because ioredis's TypeScript ergonomics, retry/offline-queue
+options, and reconnect behavior are better documented for exactly the
+resilience requirements this integration has (bounded retries, no offline
+queue, capped backoff); both are mature, so the deciding factor is fit for
+the implemented resilience strategy.
+
+### Consequences
+
+**Positive consequences**
+
+- One runtime dependency (`ioredis`), no wrapper lock-in.
+- Full control over connection lifecycle, reconnection strategy, health
+  reporting, and logging — consistent with the rest of the codebase.
+- Swapping the driver later would require changing only the Redis module's
+  internals, not consumer code.
+
+**Trade-offs**
+
+- The integration code (provider, options, lifecycle, health) is maintained
+  in-house instead of inherited from a wrapper.
+- ioredis major upgrades must be evaluated against the options we rely on
+  (e.g. `maxRetriesPerRequest`, `enableOfflineQueue`).
+
+### Operational Implications
+
+- Connection initiation never blocks startup (lazy connect, background
+  connection with capped exponential backoff and jitter).
+- The reconnection strategy retries indefinitely, so Redis recovery needs no
+  application restart.
+- Graceful shutdown uses `QUIT` with a bounded timeout and `disconnect()`
+  fallback through the NestJS shutdown lifecycle — no extra signal handlers.
+
+## ADR-013: Global Redis Module with an Application-Level Abstraction
+
+- **Status:** Pending
+- **Date:** 2026-11-02
+
+### Context
+
+ADR-012 selects ioredis as the driver. Application code should not couple to
+the driver or know how the connection is constructed, but some exceptional
+use cases still need native capabilities. The module must also be registered
+exactly once to guarantee a single client.
+
+### Decision
+
+Isolate Redis behind a **global NestJS module** (`RedisModule`) registered
+only in `AppModule`:
+
+- The client is provided under a `Symbol` token (`REDIS_CLIENT`) defined
+  inside the module directory; the token is never referenced by consumers.
+- **`RedisService`** is the primary application interface: a small set of
+  app-level operations (get/set with TTL, `UNLINK` deletion, existence, TTL
+  queries, atomic counters, bounded `SCAN`, `PING`) — deliberately not a
+  one-to-one ioredis wrapper. It owns connection initiation, event logging
+  with dedupe, and graceful shutdown.
+- **`InjectRedis()`** exposes the raw client as an explicit escape hatch for
+  exceptional native use cases; its result type makes clear the client is
+  the shared instance.
+- The health indicator (`RedisHealthIndicator`) reports degraded (HTTP 200)
+  instead of down, because Redis is not a liveness dependency.
+
+### Alternatives Considered
+
+#### Expose ioredis directly for injection
+
+Simplest option — no service layer.
+
+It was rejected because it couples every consumer to ioredis, scatters
+connection-state and error-handling concerns, and makes future driver or
+key-convention changes application-wide refactors.
+
+#### String injection token
+
+Matches older NestJS examples.
+
+It was rejected in favor of a `Symbol` token to prevent accidental
+collisions and to keep the token unforgeable and internal.
+
+#### Feature modules import RedisModule themselves
+
+Explicit over global.
+
+It was rejected because it invites accidental double registration and
+per-module client misconfiguration; `@Global()` with a single registration
+in `AppModule` guarantees one client while consumers stay import-free.
+
+### Consequences
+
+**Positive consequences**
+
+- Business logic depends on a narrow, typed interface instead of ioredis.
+- Single client instance guaranteed by construction; DI tested for it.
+- Driver changes stay contained in the module; consumers are untouched.
+
+**Trade-offs**
+
+- The abstraction must be maintained and deliberately restrained: every new
+  method is a decision, and there is a standing risk of it drifting into a
+  redundant command proxy (guarded by API AGENTS.md rules).
+- The escape hatch (`InjectRedis`) can be abused as the default path; its
+  use is therefore exceptional by convention and reviewed as such.
+
+### Operational Implications
+
+- Feature modules need no imports to use Redis — inject `RedisService`.
+- Resilience, shutdown, and health behavior are owned and tested in one
+  place (`src/shared/redis/`), including degraded-mode health semantics.

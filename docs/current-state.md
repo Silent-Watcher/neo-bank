@@ -1,13 +1,14 @@
 # Current Development State
 
-Snapshot of what exists in the repository. Last verified: 2026-11-01.
+Snapshot of what exists in the repository. Last verified: 2026-11-02.
 Legend: **Implemented** / **Partial** / **Planned** / **Unknown**.
 
 ## Maturity
 
 Early-stage pre-product. The backend has real infrastructure (config, logging,
-error contracts, request IDs) and one small feature; both frontends are
-untouched framework scaffolds. No database, no auth, no deployment setup.
+error contracts, request IDs, a Redis integration module) and one small
+feature; both frontends are untouched framework scaffolds. No database, no
+auth, no deployment setup.
 
 ## Applications
 
@@ -22,7 +23,17 @@ untouched framework scaffolds. No database, no auth, no deployment setup.
   `env/` (`.env.development`, `.env.test`, `.env.example`), namespaced
   `registerAs` factories, fail-fast validation. Validated variables:
   `APP_ENV`, `HOST`, `PORT`, `CORS_ORIGIN`, `TRUST_PROXY`, `BODY_LIMIT`,
-  `LOG_LEVEL`.
+  `LOG_LEVEL`, `REDIS_URL`, `REDIS_USERNAME`, `REDIS_PASSWORD`, `REDIS_DB`,
+  `REDIS_TLS`, `REDIS_CONNECT_TIMEOUT_MS`, `REDIS_COMMAND_TIMEOUT_MS`,
+  `REDIS_MAX_RETRIES_PER_REQUEST`, `REDIS_SHUTDOWN_TIMEOUT_MS`.
+- Redis integration (ADR-012/013): global `RedisModule` in
+  `src/shared/redis/` with a single lazy ioredis 6 client (symbol token,
+  `@InjectRedis()` escape hatch), `RedisService` application abstraction
+  (get/set+TTL, UNLINK delete, exists/expire/ttl, atomic counters, bounded
+  SCAN, PING), non-blocking startup connection, capped exponential backoff
+  reconnection, graceful bounded shutdown, and a Terminus indicator that
+  reports `degraded` (HTTP 200) when Redis is unreachable. No feature uses
+  it yet (planned for OTP storage).
 - Logging: Pino via nestjs-pino (ADR-008/009), header redaction,
   `pino-pretty` in development only.
 - Request IDs: UUIDv4, inbound `x-request-id` strictly validated (ADR-010).
@@ -30,13 +41,14 @@ untouched framework scaffolds. No database, no auth, no deployment setup.
   Problem Details error filter; `/problems/application-error` documentation
   page.
 - `ZodValidationPipe` for body/param/query validation against Zod schemas.
-- Health check at `/health` (Terminus, no downstream checks).
+- Health check at `/health` (Terminus) with a Redis indicator: healthy,
+  or `degraded` with HTTP 200 when Redis is unreachable.
 - Feature module `enrollments`: `POST /api/v1/enrollments/otp` — validates an
   Iranian mobile number (with normalization for `+98`/`0098`/`98`/missing
   zero/whitespace) and returns a cryptographically random 6-digit OTP
   (100000–999999). No storage, delivery, or verification — deliberately
   incomplete.
-- Tests: Vitest unit (17 files / 122 tests) and e2e (11 files / 49 tests).
+- Tests: Vitest unit (24 files / 166 tests) and e2e (12 files / 51 tests).
 
 **Partial**
 
@@ -71,11 +83,13 @@ None. The workspace contains only `apps/*`; no `packages/` directory exists.
 
 ## Infrastructure and Integrations
 
-**Implemented:** none beyond the build/test toolchain itself. Turborepo local
-caching (`.turbo/`), Husky hooks, commitlint, lint-staged.
+**Implemented:** Redis client integration in the API (global `RedisModule`,
+ioredis 6, degraded-mode health; no feature consumes it yet). Beyond that,
+only the build/test toolchain itself: Turborepo local caching (`.turbo/`),
+Husky hooks, commitlint, lint-staged.
 
-**Planned / Not started:** database, Redis, SMS provider, remote Turborepo
-cache, CI pipeline, deployment targets.
+**Planned / Not started:** database, SMS provider, remote Turborepo cache,
+CI pipeline, deployment targets.
 
 ## Commands
 
@@ -115,7 +129,8 @@ All ADRs live in [DECISIONS.md](../DECISIONS.md). Status as of this snapshot:
 - **Accepted:** ADR-001 (Turborepo), ADR-002 (Fastify), ADR-003 (SWC).
 - **Pending:** ADR-004 (@nestjs/config + Zod), ADR-005 (URI versioning),
   ADR-006 (1 MiB body limit), ADR-007 (`api` prefix), ADR-008/009 (Pino /
-  nestjs-pino), ADR-010 (UUIDv4 request IDs), ADR-011 (envelope exclusions).
+  nestjs-pino), ADR-010 (UUIDv4 request IDs), ADR-011 (envelope exclusions),
+  ADR-012 (ioredis without a wrapper), ADR-013 (Redis module architecture).
 
 The pending ADRs are implemented in code but not yet formally accepted; do not
 build on their alternatives (e.g. do not introduce header versioning or a
