@@ -31,6 +31,7 @@ feature coverage is minimal.
 | Pino / nestjs-pino                       | Structured logging; request-scoped context, header redaction                                            |
 | @nestjs/terminus                         | `/health` endpoint                                                                                      |
 | ioredis 6                                | Redis client behind the shared `RedisService` ([ADR-012](../../DECISIONS.md)/[013](../../DECISIONS.md)) |
+| @nestjs/swagger + @fastify/static        | OpenAPI docs; Swagger UI at `/docs`, **development only** ([ADR-014](../../DECISIONS.md))               |
 | Vitest + supertest                       | Unit and e2e testing                                                                                    |
 | Oxlint / Oxfmt                           | Linting and formatting (no ESLint/Prettier)                                                             |
 
@@ -116,6 +117,7 @@ src/
     pipes/                 # ZodValidationPipe
     redis/                 # global RedisModule: ioredis provider, RedisService,
                            # @InjectRedis(), degraded-mode health indicator
+    swagger/               # dev-only OpenAPI setup + shared response schemas
 test/                      # e2e specs + create-test-app.ts + Vitest alias map
 env/                       # .env.development / .env.test / .env.example
 ```
@@ -158,6 +160,12 @@ Only `/health` and `/problems/application-error` sit outside the prefix.
 assert the envelope and Problem Details contracts. New top-level `#` import
 aliases must also be added to `test/subpath-import-aliases.ts` or tests
 will not resolve them.
+
+**API documentation is mandatory:** every endpoint implemented or changed
+must get its Swagger/OpenAPI documentation in the same task — see the
+"API Documentation Rule" in [AGENTS.md](./AGENTS.md). In development, the
+Swagger UI is at `http://localhost:3001/docs` and the raw document at
+`/docs/json`; neither route exists in test or production.
 
 **Relation to the rest of the monorepo:** none at runtime yet. Shared
 tooling (lint, format, Turbo tasks) comes from the root; see

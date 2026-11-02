@@ -33,7 +33,8 @@ neutral `/health` probe on Fastify, port 3001 in development/test.
 - **Shared infrastructure:** `src/shared/` — `config/` (Zod env schemas +
   `registerAs` factories), `logging/` (nestjs-pino), `redis/` (global
   RedisModule: ioredis client provider, `RedisService`,
-  `@InjectRedis()`, health indicator), `errors/` +
+  `@InjectRedis()`, health indicator), `swagger/` (dev-only OpenAPI setup +
+  shared response schemas), `errors/` +
   `filters/problem-details.filter.ts` (RFC 9457 error contract),
   `interceptors/response-envelope.interceptor.ts` (success envelope),
   `pipes/zod-validation.pipe.ts`, `http/` (request IDs, API version).
@@ -50,6 +51,47 @@ neutral `/health` probe on Fastify, port 3001 in development/test.
   application interface. Redis connection settings are mandatory, but the
   server being unreachable degrades health (HTTP 200), never blocks startup
   or crashes the process.
+- **Swagger/OpenAPI:** `@nestjs/swagger`, set up by `setupSwagger` in
+  `src/shared/swagger/swagger.setup.ts` and gated to `APP_ENV=development`
+  in `main.ts` (ADR-014). The UI is at `/docs`, the document at
+  `/docs/json`. Request schemas come from Zod via `toJsonSchemaObject`;
+  shared response schemas (envelope, Problem Details) live in
+  `src/shared/swagger/openapi.schemas.ts`.
+
+## Mandatory API Documentation Rule
+
+Every time a new API endpoint is implemented, or an existing endpoint's
+request/response contract changes, its Swagger/OpenAPI documentation MUST be
+implemented or updated in the same task. An endpoint whose documentation is
+missing or outdated is an incomplete implementation — passing tests alone do
+not make it done.
+
+For every endpoint, the implementing agent/developer must:
+
+1. Add appropriate Swagger decorators to the controller and endpoint.
+2. Document purpose and expected behavior with `@ApiOperation()`.
+3. Group endpoints with `@ApiTags()`.
+4. Document all relevant path parameters, query parameters, headers, and
+   request bodies.
+5. Document required and optional request fields accurately.
+6. Document successful response schemas and HTTP status codes.
+7. Document relevant error responses based on the application's actual error
+   contract (`problemDetailsSchema`).
+8. Keep OpenAPI request schemas consistent with the corresponding Zod
+   validation schemas (derive them with `toJsonSchemaObject`; do not restate
+   validation rules by hand).
+9. Verify the generated document contains the correct endpoint, request
+   schema, and response definitions (e2e assertions in `test/swagger.e2e-spec.ts`
+   show the pattern).
+
+Constraints:
+
+- Do not add fake endpoints or test-only controllers for documentation
+  purposes.
+- Do not introduce authentication decorators (`@ApiBearerAuth`, security
+  schemes) unless a dedicated task adds authentication documentation.
+- Keep the development-only registration intact; never expose Swagger in
+  test or production.
 
 ## Redis Rules
 
@@ -84,6 +126,7 @@ src/
   shared/
     config/                # config.ts wiring + env/ Zod schemas + factories
     redis/                 # global RedisModule: provider, RedisService, InjectRedis
+    swagger/               # OpenAPI setup (dev-only), shared response schemas
     enums/ errors/ filters/ http/ interceptors/ logging/ pipes/
 test/
   create-test-app.ts       # e2e app factory mirroring main.ts bootstrap

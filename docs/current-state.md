@@ -41,6 +41,10 @@ auth, no deployment setup.
   Problem Details error filter; `/problems/application-error` documentation
   page.
 - `ZodValidationPipe` for body/param/query validation against Zod schemas.
+- Swagger/OpenAPI (ADR-014): development-only via `@nestjs/swagger` —
+  Swagger UI at `/docs`, document at `/docs/json`/`/docs/yaml`; request
+  schemas generated from Zod with `z.toJSONSchema()`; shared envelope and
+  Problem Details response schemas; all existing endpoints documented.
 - Health check at `/health` (Terminus) with a Redis indicator: healthy,
   or `degraded` with HTTP 200 when Redis is unreachable.
 - Feature module `enrollments`: `POST /api/v1/enrollments/otp` — validates an
@@ -48,7 +52,7 @@ auth, no deployment setup.
   zero/whitespace) and returns a cryptographically random 6-digit OTP
   (100000–999999). No storage, delivery, or verification — deliberately
   incomplete.
-- Tests: Vitest unit (24 files / 166 tests) and e2e (12 files / 51 tests).
+- Tests: Vitest unit (24 files / 166 tests) and e2e (13 files / 56 tests).
 
 **Partial**
 
@@ -130,7 +134,8 @@ All ADRs live in [DECISIONS.md](../DECISIONS.md). Status as of this snapshot:
 - **Pending:** ADR-004 (@nestjs/config + Zod), ADR-005 (URI versioning),
   ADR-006 (1 MiB body limit), ADR-007 (`api` prefix), ADR-008/009 (Pino /
   nestjs-pino), ADR-010 (UUIDv4 request IDs), ADR-011 (envelope exclusions),
-  ADR-012 (ioredis without a wrapper), ADR-013 (Redis module architecture).
+  ADR-012 (ioredis without a wrapper), ADR-013 (Redis module architecture),
+  ADR-014 (Swagger/OpenAPI, development-only).
 
 The pending ADRs are implemented in code but not yet formally accepted; do not
 build on their alternatives (e.g. do not introduce header versioning or a

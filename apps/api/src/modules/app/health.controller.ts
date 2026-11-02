@@ -1,10 +1,18 @@
-import { Controller, Get, VERSION_NEUTRAL } from '@nestjs/common';
+import { Controller, Get, HttpStatus, VERSION_NEUTRAL } from '@nestjs/common';
 import { HealthCheck, HealthCheckService } from '@nestjs/terminus';
+import { ApiOkResponse, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 
+import {
+  problemDetailsSchema,
+  successEnvelopeSchema,
+} from '#src/shared/swagger/openapi.schemas.js';
 import { RedisHealthIndicator } from '#src/shared/redis/redis.health.js';
 
-// VERSION_NEUTRAL keeps the health check out of URI versioning; its exclusion
-// from the global 'api' prefix is applied in the bootstrap function (main.ts).
+// Response decorators are declared above @HealthCheck(): method decorators
+// evaluate bottom-up, and Terminus's own @HealthCheck() registers a bare
+// (unwrapped) health schema — ours must apply after it so the documented
+// contract is the actual envelope-wrapped response.
+@ApiTags('health')
 @Controller({ path: 'health', version: VERSION_NEUTRAL })
 export class HealthController {
   constructor(
@@ -12,8 +20,44 @@ export class HealthController {
     private readonly redisHealth: RedisHealthIndicator,
   ) {}
 
-  @Get()
+  @ApiOperation({
+    summary: 'Application health probe',
+    description:
+      'Infrastructure probe outside the API prefix and versioning. The overall status is ok, degraded (e.g. Redis unreachable — HTTP stays 200), or error (HTTP 503).',
+  })
+  @ApiOkResponse({
+    description: 'Terminus health result, wrapped in the standard response envelope.',
+    schema: successEnvelopeSchema({
+      type: 'object',
+      properties: {
+        status: { type: 'string', enum: ['ok', 'degraded', 'error', 'shutting_down'] },
+        info: {
+          type: 'object',
+          description:
+            'Per-indicator results with status up or degraded, keyed by indicator name (e.g. redis).',
+          additionalProperties: { type: 'object' },
+        },
+        error: {
+          type: 'object',
+          description: 'Per-indicator results with status down, keyed by indicator name.',
+          additionalProperties: { type: 'object' },
+        },
+        details: {
+          type: 'object',
+          description: 'Every indicator result, keyed by indicator name.',
+          additionalProperties: { type: 'object' },
+        },
+      },
+      required: ['status', 'details'],
+    }),
+  })
+  @ApiResponse({
+    status: HttpStatus.SERVICE_UNAVAILABLE,
+    description: 'A critical indicator failed (overall status error), served as Problem Details.',
+    schema: problemDetailsSchema,
+  })
   @HealthCheck()
+  @Get()
   check() {
     return this.health.check([
       // Redis connection settings are mandatory, but the Redis server may be

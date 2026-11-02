@@ -680,3 +680,80 @@ in `AppModule` guarantees one client while consumers stay import-free.
 - Feature modules need no imports to use Redis — inject `RedisService`.
 - Resilience, shutdown, and health behavior are owned and tested in one
   place (`src/shared/redis/`), including degraded-mode health semantics.
+
+## ADR-014: Use Swagger/OpenAPI with Development-Only Availability
+
+- **Status:** Pending
+- **Date:** 2026-11-02
+
+### Context
+
+The API's endpoints are growing (health, enrollments, Problem Type docs), and
+their contracts now include structured conventions — a success envelope,
+RFC 9457 Problem Details, request-ID headers, URI versioning. Undocumented
+endpoints force every consumer (including future frontend work in this
+monorepo) to reverse-engineer behavior from code, and contract drift between
+implementation and any hand-written documentation goes unnoticed.
+
+### Decision
+
+Integrate Swagger/OpenAPI through the official **@nestjs/swagger** package,
+configured with `DocumentBuilder`/`SwaggerModule` on the existing Fastify
+adapter (`@fastify/static` serves the UI assets). Two constraints:
+
+- **Development-only:** Swagger routes are registered exclusively when
+  `APP_ENV` (via the existing validated server configuration) equals
+  `development`. There is no second environment-detection mechanism, and the
+  UI/JSON/YAML routes do not exist in test or production.
+- **Zod is the source of truth:** request schemas are generated from the
+  existing Zod schemas with Zod 4's native `z.toJSONSchema()` — no
+  `class-validator`/`class-transformer`, no duplicated DTO validation, and no
+  additional conversion dependency.
+
+Documentation lives on the real controllers via decorators; shared response
+contracts (envelope, Problem Details) have small reusable schema definitions.
+
+### Alternatives Considered
+
+#### Manual documentation (Markdown kept by hand)
+
+No dependency and no decorators, but it inevitably drifts from the code and
+gives readers no interactive exploration.
+
+It was rejected because the API already has a machine-describable contract
+layer (decorators on the actual handlers), making manual duplication pure
+maintenance cost.
+
+#### External documentation platform (ReadMe, Stoplight, Postman workspaces)
+
+Polished consumer-facing portals, but they add an external dependency and
+still require maintaining the API description somewhere — the same drift
+problem one layer further away.
+
+They were rejected for an early-stage, single-team API; the OpenAPI document
+generated here can be imported into such platforms later if needed.
+
+### Consequences
+
+**Positive consequences**
+
+- Documentation is generated from the actual controllers, so routes,
+  parameters, and status codes cannot silently diverge from the application.
+- Zod schemas and OpenAPI request schemas share one source of truth.
+- Test and production surfaces stay clean; only developers see the UI.
+
+**Trade-offs**
+
+- Every endpoint must carry Swagger decorators, and contract changes must
+  update them (enforced by the API AGENTS.md documentation rule).
+- Decorator-heavy controllers are slightly noisier.
+- OpenAPI 3.0 request schemas are snapshots of Zod's JSON Schema output; the
+  normalization transforms are documented in prose, not as schemas.
+- Authentication documentation (schemes, `@ApiBearerAuth()`) is deliberately
+  absent and requires a future decision.
+
+### Operational Implications
+
+- `/docs` (UI), `/docs/json`, and `/docs/yaml` exist only in development.
+- Endpoint work is not complete until its OpenAPI documentation matches the
+  implementation, per the mandatory rule in `apps/api/AGENTS.md`.

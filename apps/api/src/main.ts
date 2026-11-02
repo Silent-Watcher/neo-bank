@@ -4,13 +4,15 @@ import type { NestFastifyApplication } from '@nestjs/platform-fastify';
 import { FastifyAdapter } from '@nestjs/platform-fastify';
 import { Logger } from 'nestjs-pino';
 
+import { AppEnv } from '#enums/app-env.enum.js';
 import { AppModule } from './modules/app/app.module.js';
 import serverConfig from './shared/config/server.config.js';
 import { fastifyGenReqId } from './shared/http/request-id.js';
 import { registerRequestIdLifecycle } from './shared/http/request-id.lifecycle.js';
+import { setupSwagger } from './shared/swagger/swagger.setup.js';
 
 async function bootstrap() {
-  const { host, port, trustProxy, bodyLimit, corsOrigins } = serverConfig();
+  const { env, host, port, trustProxy, bodyLimit, corsOrigins } = serverConfig();
 
   const app = await NestFactory.create<NestFastifyApplication>(
     AppModule,
@@ -60,6 +62,13 @@ async function bootstrap() {
   // Fastify-level request-ID lifecycle: x-request-id echo on every response
   // and early rejection of invalid inbound IDs, before any route handler runs.
   registerRequestIdLifecycle(app.getHttpAdapter().getInstance(), app.get(Logger));
+
+  // Swagger is a development aid only: it must not appear in e2e route
+  // expectations (test) or expose the API surface publicly (production), so
+  // the routes are registered exclusively in the development environment.
+  if (env === AppEnv.Development) {
+    setupSwagger(app);
+  }
 
   app.enableShutdownHooks();
   await app.listen(port, host);

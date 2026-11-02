@@ -1,4 +1,5 @@
 import { Controller, Get, Header, VERSION_NEUTRAL } from '@nestjs/common';
+import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 
 import { APPLICATION_ERROR_PROBLEM_TYPE } from '#errors/error.code.js';
 
@@ -35,9 +36,20 @@ const APPLICATION_ERROR_DOCUMENTATION = `<!doctype html>
 // Version-neutral so the `type` URI stays stable across API versions. The
 // route is excluded from the global prefix in the bootstrap and serves HTML,
 // so the response envelope interceptor does not wrap it.
+@ApiTags('problems')
 @Controller({ path: 'problems/application-error', version: VERSION_NEUTRAL })
 export class ProblemsController {
   @Get()
+  @ApiOperation({
+    summary: 'Problem Type documentation page',
+    description:
+      'Human-readable HTML description of the application-error Problem Type referenced by the `type` member of RFC 9457 error responses. Version-neutral and excluded from the API prefix so the URI stays stable.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'HTML documentation page (not wrapped in the response envelope).',
+    content: { 'text/html': { schema: { type: 'string' } } },
+  })
   @Header('Content-Type', 'text/html; charset=utf-8')
   applicationError(): string {
     return APPLICATION_ERROR_DOCUMENTATION;
