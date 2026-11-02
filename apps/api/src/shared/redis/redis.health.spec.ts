@@ -1,0 +1,79 @@
+import { HealthIndicatorService } from '@nestjs/terminus';
+import { Test } from '@nestjs/testing';
+import { Redis } from 'ioredis';
+import { describe, expect, it, vi } from 'vitest';
+
+// Unit tests must not depend on ambient environment state, so the env
+// validation layer is replaced with a fully valid environment.
+vi.mock('#config/env/env.config.js', () => ({
+  _env: {
+    REDIS_URL: 'redis://localhost:6379',
+    REDIS_USERNAME: undefined,
+    REDIS_PASSWORD: undefined,
+    REDIS_DB: undefined,
+    REDIS_TLS: false,
+    REDIS_CONNECT_TIMEOUT_MS: 10000,
+    REDIS_COMMAND_TIMEOUT_MS: 5000,
+    REDIS_MAX_RETRIES_PER_REQUEST: 3,
+    REDIS_SHUTDOWN_TIMEOUT_MS: 2000,
+  },
+}));
+
+import { REDIS_CLIENT } from './redis.constants.js';
+import { RedisHealthIndicator } from './redis.health.js';
+import { RedisService } from './redis.service.js';
+
+async function createIndicator(ping: () => Promise<void>) {
+  const module = await Test.createTestingModule({
+    providers: [
+      RedisHealthIndicator,
+      HealthIndicatorService,
+      { provide: RedisService, useValue: { ping } },
+      { provide: REDIS_CLIENT, useValue: new Redis({ lazyConnect: true }) },
+    ],
+  }).compile();
+
+  return module.get(RedisHealthIndicator);
+}
+
+describe('RedisHealthIndicator', () => {
+  it('reports up when PING succeeds', async () => {
+    // Arrange
+    const indicator = await createIndicator(vi.fn().mockResolvedValue(undefined));
+
+    // Act
+    const result = await indicator.check();
+
+    // Assert
+    expect(result).toEqual({ redis: { status: 'up' } });
+  });
+
+  it('reports degraded — not down — when PING fails, keeping the check non-fatal', async () => {
+    // Arrange
+    const indicator = await createIndicator(
+      vi.fn().mockRejectedValue(new Error('connect ECONNREFUSED 127.0.0.1:6379')),
+    );
+
+    // Act
+    const result = await indicator.check();
+
+    // Assert
+    expect(result).toEqual({
+      redis: {
+        status: 'degraded',
+        message: 'connect ECONNREFUSED 127.0.0.1:6379',
+      },
+    });
+  });
+
+  it('degrades with a generic message for non-error rejections', async () => {
+    // Arrange
+    const indicator = await createIndicator(vi.fn().mockRejectedValue('boom'));
+
+    // Act
+    const result = await indicator.check();
+
+    // Assert
+    expect(result).toEqual({ redis: { status: 'degraded', message: 'Redis is unavailable.' } });
+  });
+});

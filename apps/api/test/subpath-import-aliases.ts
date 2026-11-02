@@ -15,4 +15,5 @@ export const subpathImportAliases = [
     replacement: fileURLToPath(new URL('../src/shared/errors/', import.meta.url)),
   },
   { find: '#http/', replacement: fileURLToPath(new URL('../src/shared/http/', import.meta.url)) },
+  { find: '#modules/', replacement: fileURLToPath(new URL('../src/shared/modules/', import.meta.url)) },
 ];

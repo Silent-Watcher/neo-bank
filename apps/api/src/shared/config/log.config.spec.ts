@@ -12,12 +12,19 @@ describe('logConfig factory', () => {
     return logConfig;
   }
 
+  function stubBaseEnv() {
+    vi.stubEnv('HOST', '0.0.0.0');
+    vi.stubEnv('PORT', '3000');
+    vi.stubEnv('REDIS_URL', 'redis://localhost:6379');
+    vi.stubEnv('REDIS_USERNAME', '');
+    vi.stubEnv('REDIS_PASSWORD', '');
+  }
+
   it('enables pretty printing only in the development environment', async () => {
     // Arrange
     vi.stubEnv('APP_ENV', 'development');
-    vi.stubEnv('HOST', '0.0.0.0');
-    vi.stubEnv('PORT', '3000');
     vi.stubEnv('LOG_LEVEL', 'debug');
+    stubBaseEnv();
     vi.resetModules();
 
     // Act
@@ -30,8 +37,8 @@ describe('logConfig factory', () => {
   it('keeps structured JSON logging outside development', async () => {
     // Arrange
     vi.stubEnv('APP_ENV', 'test');
-    vi.stubEnv('HOST', '0.0.0.0');
-    vi.stubEnv('PORT', '3000');
+    vi.stubEnv('LOG_LEVEL', 'info');
+    stubBaseEnv();
     vi.resetModules();
 
     // Act

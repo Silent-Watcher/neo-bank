@@ -2,12 +2,14 @@ import { z } from 'zod';
 
 import { EnvValidationError } from '#errors/env-validation.error.js';
 import { logEnvSchema } from './schema/log.env.js';
+import { redisEnvSchema } from './schema/redis.env.js';
 import { isCorsOriginRequiredInProduction, serverEnvSchema } from './schema/server.env.js';
 
 export const envSchema = z
   .object({
     ...serverEnvSchema.shape,
     ...logEnvSchema.shape,
+    ...redisEnvSchema.shape,
   })
   .superRefine((env, ctx) => {
     if (isCorsOriginRequiredInProduction(env)) {
