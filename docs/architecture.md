@@ -26,11 +26,11 @@ TypeScript pnpm-workspace monorepo orchestrated by Turborepo
 
 ## Applications
 
-| Application     | Path          | Stack                                   | Default port | Status             |
-| --------------- | ------------- | --------------------------------------- | ------------ | ------------------ |
-| API             | `apps/api`    | NestJS 12, Fastify, SWC, ESM            | 3001         | Active development |
-| Web (customer)  | `apps/web`    | Next.js 16 (App Router), React 19       | 3000         | Bare scaffold      |
-| Admin dashboard | `apps/admin`  | Vite 8, React 19                        | 5173         | Bare scaffold      |
+| Application     | Path         | Stack                             | Default port | Status             |
+| --------------- | ------------ | --------------------------------- | ------------ | ------------------ |
+| API             | `apps/api`   | NestJS 12, Fastify, SWC, ESM      | 3001         | Active development |
+| Web (customer)  | `apps/web`   | Next.js 16 (App Router), React 19 | 3000         | Bare scaffold      |
+| Admin dashboard | `apps/admin` | Vite 8, React 19                  | 5173         | Bare scaffold      |
 
 Per-application architecture, conventions, and onboarding guides:
 
@@ -73,13 +73,13 @@ introduced.
 implements the subset of these scripts that applies to it, and the root
 `package.json` delegates via `turbo <task>`:
 
-| Task           | Behavior                                                                 |
-| -------------- | ------------------------------------------------------------------------ |
-| `dev`          | Not cached, persistent (watch/dev servers).                               |
-| `build`        | `dependsOn: ["^build"]`; outputs `dist/**` and Next.js `.next/**` (cache exclusions for `.next/cache` and `.next/dev`). |
-| `lint`, `format:check`, `typecheck`, `test` | `dependsOn: ["^lint"]` etc. (dependency-first ordering). |
-| `test:e2e`     | No dependency ordering; only `apps/api` implements it.                    |
-| `clean`        | Not cached.                                                               |
+| Task                                        | Behavior                                                                                                                |
+| ------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `dev`                                       | Not cached, persistent (watch/dev servers).                                                                             |
+| `build`                                     | `dependsOn: ["^build"]`; outputs `dist/**` and Next.js `.next/**` (cache exclusions for `.next/cache` and `.next/dev`). |
+| `lint`, `format:check`, `typecheck`, `test` | `dependsOn: ["^lint"]` etc. (dependency-first ordering).                                                                |
+| `test:e2e`                                  | No dependency ordering; only `apps/api` implements it.                                                                  |
+| `clean`                                     | Not cached.                                                                                                             |
 
 Root-level `pnpm format` is a direct `oxfmt --write .` call over the whole
 repository (not a Turbo task), so formatting is repository-wide.

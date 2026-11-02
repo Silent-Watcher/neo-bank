@@ -35,20 +35,20 @@ becomes stale during the task but cannot be corrected (unknown outcome,
 pending decision), report it in the final summary instead of leaving it
 silently wrong.
 
-| Trigger (any change that…) | Files to update |
-| --- | --- |
-| Adds or changes an environment variable (API) | `apps/api/env/.env.example` (with a comment), `apps/api/ONBOARDING.md` (env table) |
-| Adds, completes, or removes a feature or endpoint | `docs/current-state.md` (implemented/partial/planned lists) |
-| Adds or changes shared infrastructure, response/error/validation conventions, or module structure conventions | `apps/api/AGENTS.md` |
-| Changes what a feature module looks like (new file layout, new required files) | `apps/api/AGENTS.md` + `apps/api/ONBOARDING.md` (project structure / workflow) |
-| Adds, removes, or renames a workspace (app or package) | `docs/architecture.md`, `docs/current-state.md`, `README.md` (applications table), and create `AGENTS.md` + `ONBOARDING.md` in the new workspace |
-| Adds or changes a dependency (in any workspace) | That workspace's `ONBOARDING.md` (technology stack table) |
-| Adds, removes, or changes a script/command (workspace or root) | That workspace's `ONBOARDING.md` (useful commands); root `README.md` for root-level scripts |
-| Changes a port, default value, or runtime requirement (Node/pnpm versions) | Root `README.md` and affected `ONBOARDING.md` files |
-| Creates, accepts, or supersedes an ADR | `DECISIONS.md` (per its own workflow), `docs/current-state.md` (ADR status list), `docs/architecture.md` if a boundary or structure it describes changes |
-| Changes a naming, coding, or testing convention | The affected workspace's `AGENTS.md` |
-| Adds a new `#` import alias (API) | No doc change needed (rule is documented generically), but keep `apps/api/package.json` and `apps/api/test/subpath-import-aliases.ts` in sync |
-| Makes any statement in `docs/architecture.md` or `docs/current-state.md` inaccurate | That file, immediately |
+| Trigger (any change that…)                                                                                    | Files to update                                                                                                                                          |
+| ------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Adds or changes an environment variable (API)                                                                 | `apps/api/env/.env.example` (with a comment), `apps/api/ONBOARDING.md` (env table)                                                                       |
+| Adds, completes, or removes a feature or endpoint                                                             | `docs/current-state.md` (implemented/partial/planned lists)                                                                                              |
+| Adds or changes shared infrastructure, response/error/validation conventions, or module structure conventions | `apps/api/AGENTS.md`                                                                                                                                     |
+| Changes what a feature module looks like (new file layout, new required files)                                | `apps/api/AGENTS.md` + `apps/api/ONBOARDING.md` (project structure / workflow)                                                                           |
+| Adds, removes, or renames a workspace (app or package)                                                        | `docs/architecture.md`, `docs/current-state.md`, `README.md` (applications table), and create `AGENTS.md` + `ONBOARDING.md` in the new workspace         |
+| Adds or changes a dependency (in any workspace)                                                               | That workspace's `ONBOARDING.md` (technology stack table)                                                                                                |
+| Adds, removes, or changes a script/command (workspace or root)                                                | That workspace's `ONBOARDING.md` (useful commands); root `README.md` for root-level scripts                                                              |
+| Changes a port, default value, or runtime requirement (Node/pnpm versions)                                    | Root `README.md` and affected `ONBOARDING.md` files                                                                                                      |
+| Creates, accepts, or supersedes an ADR                                                                        | `DECISIONS.md` (per its own workflow), `docs/current-state.md` (ADR status list), `docs/architecture.md` if a boundary or structure it describes changes |
+| Changes a naming, coding, or testing convention                                                               | The affected workspace's `AGENTS.md`                                                                                                                     |
+| Adds a new `#` import alias (API)                                                                             | No doc change needed (rule is documented generically), but keep `apps/api/package.json` and `apps/api/test/subpath-import-aliases.ts` in sync            |
+| Makes any statement in `docs/architecture.md` or `docs/current-state.md` inaccurate                           | That file, immediately                                                                                                                                   |
 
 When a change matches no trigger, no documentation update is required — but
 if you are unsure whether a change is "material", update rather than skip.

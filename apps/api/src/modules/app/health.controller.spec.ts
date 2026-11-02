@@ -27,7 +27,11 @@ import { HealthController } from './health.controller.js';
 describe('HealthController', () => {
   const health = {
     check: vi
-      .fn<(indicators: readonly (() => Promise<HealthIndicatorResult>)[]) => Promise<{ status: string }>>()
+      .fn<
+        (
+          indicators: readonly (() => Promise<HealthIndicatorResult>)[],
+        ) => Promise<{ status: string }>
+      >()
       .mockResolvedValue({ status: 'ok' }),
   };
   const redisHealth = {

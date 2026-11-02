@@ -17,12 +17,12 @@ connected yet. Monorepo context:
 
 ## 2. Technology Stack
 
-| Technology | Purpose |
-| --- | --- |
-| Next.js 16 | React framework — App Router, routing, build tooling |
-| React 19 | UI library |
-| TypeScript (strict, `noEmit`) | Type safety; Next.js does the compilation |
-| Oxlint / Oxfmt | Linting and formatting (with `react`, `jsx-a11y`, `nextjs` plugins) |
+| Technology                    | Purpose                                                             |
+| ----------------------------- | ------------------------------------------------------------------- |
+| Next.js 16                    | React framework — App Router, routing, build tooling                |
+| React 19                      | UI library                                                          |
+| TypeScript (strict, `noEmit`) | Type safety; Next.js does the compilation                           |
+| Oxlint / Oxfmt                | Linting and formatting (with `react`, `jsx-a11y`, `nextjs` plugins) |
 
 That is the complete dependency list — the app intentionally has no state
 management, styling, data-fetching, or UI libraries yet.
@@ -104,15 +104,15 @@ introducing them rather than picking silently.
 
 ## 8. Useful Commands
 
-| Command | Effect |
-| --- | --- |
-| `pnpm dev` | Dev server at http://localhost:3000 |
-| `pnpm build` | Production build |
-| `pnpm start` | Serve the production build |
-| `pnpm lint` | Oxlint |
-| `pnpm format` | Oxfmt write |
-| `pnpm typecheck` | TypeScript check |
-| `pnpm clean` | Remove `.next` |
+| Command          | Effect                              |
+| ---------------- | ----------------------------------- |
+| `pnpm dev`       | Dev server at http://localhost:3000 |
+| `pnpm build`     | Production build                    |
+| `pnpm start`     | Serve the production build          |
+| `pnpm lint`      | Oxlint                              |
+| `pnpm format`    | Oxfmt write                         |
+| `pnpm typecheck` | TypeScript check                    |
+| `pnpm clean`     | Remove `.next`                      |
 
 All from `apps/web`; workspace-wide variants exist at the repo root via
 Turborepo.

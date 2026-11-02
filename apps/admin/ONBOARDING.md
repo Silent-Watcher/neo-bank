@@ -17,13 +17,13 @@ connected yet. Monorepo context:
 
 ## 2. Technology Stack
 
-| Technology | Purpose |
-| --- | --- |
-| Vite 8 | Dev server and build tooling |
-| React 19 | UI library |
-| TypeScript (strict, project references) | Type safety; `tsc -b` type-checks and gates builds |
-| @vitejs/plugin-react | React fast-refresh integration |
-| Oxlint / Oxfmt | Linting and formatting (with `react`, `jsx-a11y` plugins) |
+| Technology                              | Purpose                                                   |
+| --------------------------------------- | --------------------------------------------------------- |
+| Vite 8                                  | Dev server and build tooling                              |
+| React 19                                | UI library                                                |
+| TypeScript (strict, project references) | Type safety; `tsc -b` type-checks and gates builds        |
+| @vitejs/plugin-react                    | React fast-refresh integration                            |
+| Oxlint / Oxfmt                          | Linting and formatting (with `react`, `jsx-a11y` plugins) |
 
 That is the complete dependency list — no router, state management, styling,
 or UI library is installed yet.
@@ -108,15 +108,15 @@ introduced — nothing is decided yet.
 
 ## 8. Useful Commands
 
-| Command | Effect |
-| --- | --- |
-| `pnpm dev` | Vite dev server at http://localhost:5173 |
-| `pnpm build` | Type-check + production build |
-| `pnpm preview` | Serve the production build |
-| `pnpm lint` | Oxlint |
-| `pnpm format` | Oxfmt write |
-| `pnpm typecheck` | TypeScript project check |
-| `pnpm clean` | Remove `dist/` |
+| Command          | Effect                                   |
+| ---------------- | ---------------------------------------- |
+| `pnpm dev`       | Vite dev server at http://localhost:5173 |
+| `pnpm build`     | Type-check + production build            |
+| `pnpm preview`   | Serve the production build               |
+| `pnpm lint`      | Oxlint                                   |
+| `pnpm format`    | Oxfmt write                              |
+| `pnpm typecheck` | TypeScript project check                 |
+| `pnpm clean`     | Remove `dist/`                           |
 
 All from `apps/admin`; workspace-wide variants exist at the repo root via
 Turborepo.

@@ -59,9 +59,7 @@ const testRedisConfig = {
 
 @Global()
 @Module({
-  providers: [
-    { provide: ConfigService, useValue: { getOrThrow: () => testRedisConfig } },
-  ],
+  providers: [{ provide: ConfigService, useValue: { getOrThrow: () => testRedisConfig } }],
   exports: [ConfigService],
 })
 class TestConfigModule {}

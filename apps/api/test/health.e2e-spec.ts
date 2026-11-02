@@ -1,13 +1,19 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import request from 'supertest';
 
 import { createTestApp } from './create-test-app.js';
+import { RedisService } from '#src/shared/redis/redis.service.js';
 
 describe('Health (e2e)', () => {
   it('returns 200 with the health payload wrapped in the envelope', async () => {
     // Arrange
-    const app = await createTestApp();
-
+    const app = await createTestApp(undefined, {
+      configureModule: (builder) => {
+        builder.overrideProvider(RedisService).useValue({
+          ping: vi.fn().mockResolvedValue('PONG'),
+        });
+      },
+    });
     // Act
     const response = await request(app.getHttpServer()).get('/health');
 

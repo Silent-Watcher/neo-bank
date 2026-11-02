@@ -20,17 +20,17 @@ feature coverage is minimal.
 
 ## 2. Technology Stack
 
-| Technology | Purpose |
-| --- | --- |
-| NestJS 12 | Application framework (modules, DI, pipes, filters, interceptors) |
+| Technology                               | Purpose                                                                |
+| ---------------------------------------- | ---------------------------------------------------------------------- |
+| NestJS 12                                | Application framework (modules, DI, pipes, filters, interceptors)      |
 | Fastify (via `@nestjs/platform-fastify`) | HTTP platform — high-throughput target ([ADR-002](../../DECISIONS.md)) |
-| SWC | TypeScript transpilation (fast builds; type checking stays with `tsc`) |
-| Zod 4 | Validation for HTTP input and environment variables |
-| @nestjs/config | Configuration namespaces via `registerAs` + `ConfigService` |
-| Pino / nestjs-pino | Structured logging; request-scoped context, header redaction |
-| @nestjs/terminus | `/health` endpoint |
-| Vitest + supertest | Unit and e2e testing |
-| Oxlint / Oxfmt | Linting and formatting (no ESLint/Prettier) |
+| SWC                                      | TypeScript transpilation (fast builds; type checking stays with `tsc`) |
+| Zod 4                                    | Validation for HTTP input and environment variables                    |
+| @nestjs/config                           | Configuration namespaces via `registerAs` + `ConfigService`            |
+| Pino / nestjs-pino                       | Structured logging; request-scoped context, header redaction           |
+| @nestjs/terminus                         | `/health` endpoint                                                     |
+| Vitest + supertest                       | Unit and e2e testing                                                   |
+| Oxlint / Oxfmt                           | Linting and formatting (no ESLint/Prettier)                            |
 
 ## 3. Prerequisites
 
@@ -52,14 +52,14 @@ cp env/.env.example env/.env.development
 # edit values if needed; defaults work for local development
 ```
 
-| Variable | Meaning | Default behavior if unset |
-| --- | --- | --- |
-| `APP_ENV` | `development` \| `production` \| `test` | required |
-| `HOST`, `PORT` | Bind address and port | required (dev/test files set `3001`) |
-| `CORS_ORIGIN` | Comma-separated allowed origins | CORS disabled; required when `APP_ENV=production` |
-| `TRUST_PROXY` | Trust proxy headers (`true`/`false`) | `false` |
-| `BODY_LIMIT` | Max request body bytes | `1048576` (1 MiB) |
-| `LOG_LEVEL` | Pino level | `info` |
+| Variable       | Meaning                                 | Default behavior if unset                         |
+| -------------- | --------------------------------------- | ------------------------------------------------- |
+| `APP_ENV`      | `development` \| `production` \| `test` | required                                          |
+| `HOST`, `PORT` | Bind address and port                   | required (dev/test files set `3001`)              |
+| `CORS_ORIGIN`  | Comma-separated allowed origins         | CORS disabled; required when `APP_ENV=production` |
+| `TRUST_PROXY`  | Trust proxy headers (`true`/`false`)    | `false`                                           |
+| `BODY_LIMIT`   | Max request body bytes                  | `1048576` (1 MiB)                                 |
+| `LOG_LEVEL`    | Pino level                              | `info`                                            |
 
 Startup fails fast with a readable Zod error if validation fails.
 

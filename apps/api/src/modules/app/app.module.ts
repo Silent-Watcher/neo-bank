@@ -6,20 +6,14 @@ import { ProblemDetailsFilter } from '#filters/problem-details.filter.js';
 import { ResponseEnvelopeInterceptor } from '#interceptors/response-envelope.interceptor.js';
 import { AppLoggerModule } from '#src/shared/logging/logger.module.js';
 import { RedisModule } from '#src/shared/redis/redis.module.js';
-import { EnrollemntsModule } from '#modules/enrollemnts/enrollemnts.module.js';
 import { AppController } from './app.controller.js';
 import { AppService } from './app.service.js';
 import { HealthController } from './health.controller.js';
 import { ProblemsController } from './problems.controller.js';
+import { EnrollmentsModule } from '#modules/enrollments/enrollments.module.js';
 
 @Module({
-  imports: [
-    configModule,
-    AppLoggerModule,
-    TerminusModule,
-    RedisModule,
-    EnrollemntsModule,
-  ],
+  imports: [configModule, AppLoggerModule, TerminusModule, RedisModule, EnrollmentsModule],
   controllers: [AppController, HealthController, ProblemsController],
   providers: [
     AppService,
@@ -27,4 +21,4 @@ import { ProblemsController } from './problems.controller.js';
     { provide: APP_FILTER, useClass: ProblemDetailsFilter },
   ],
 })
-export class AppModule { }
+export class AppModule {}
