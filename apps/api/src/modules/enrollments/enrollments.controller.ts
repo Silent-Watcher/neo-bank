@@ -38,7 +38,7 @@ export class EnrollmentsController {
   @ApiOperation({
     summary: 'Request an enrollment challenge',
     description:
-      'Validates an Iranian mobile number (normalizing +98 / 0098 / 98 prefixes and a missing leading zero to the 09XXXXXXXXX format), generates a cryptographically random six-digit OTP, and stores it in Redis under the standard key naming convention with an exact 120-second expiry. The OTP value is never included in the response and no SMS is sent yet; a later verification step will consume the stored code.',
+      'Validates an Iranian mobile number (normalizing +98 / 0098 / 98 prefixes and a missing leading zero to the 09XXXXXXXXX format), generates a cryptographically random six-digit OTP, and stores it in Redis under the standard key naming convention with an exact 120-second expiry (atomic SET NX EX combined with a lockout check, so an OTP is never issued while a verification lockout is active). The OTP value is never included in the response and no SMS is sent yet; a later verification step will consume the stored code.',
   })
   @ApiBody({
     schema: challengeRequestJsonSchema,
@@ -63,7 +63,7 @@ export class EnrollmentsController {
   @ApiResponse({
     status: HttpStatus.BAD_REQUEST,
     description:
-      'Too many OTP requests for this phone number within the last 60 minutes (limit: 5). Served as RFC 9457 Problem Details with a generic message — the exact limit is not exposed to clients.',
+      'Too many OTP requests for this phone number within the last 60 minutes (limit: 5), or a verification lockout is active after too many failed attempts. Served as RFC 9457 Problem Details with a generic message — the exact limit and lockout state are not exposed to clients.',
     schema: problemDetailsSchema,
   })
   @ApiResponse({
@@ -85,7 +85,7 @@ export class EnrollmentsController {
   @ApiOperation({
     summary: 'Verify an enrollment challenge',
     description:
-      'Verifies the six-digit OTP previously issued for the phone number. On success the stored code is consumed. Verification failures are deliberately generic: the response never reveals whether the code was missing, expired, or incorrect.',
+      'Verifies the six-digit OTP previously issued for the phone number. On success the stored code is consumed. Verification failures are deliberately generic: the response never reveals whether the code was missing, expired, incorrect, or blocked by an active lockout. After too many failed attempts (configurable, default 5) a lockout is set that blocks both verification and new OTP issuance for a configurable window (default 15 minutes).',
   })
   @ApiBody({
     schema: verifyRequestJsonSchema,

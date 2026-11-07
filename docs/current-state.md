@@ -66,9 +66,11 @@ auth, no deployment setup.
   `+98`/`0098`/`98`/missing zero/whitespace), generates a cryptographically
   random 6-digit OTP (100000–999999), and stores it in Redis under
   `neo-bank:enrollments:challenge:otp:<phone>` with an exact 120-second TTL
-  using atomic `SET NX EX` (prevents race conditions where concurrent requests
-  could overwrite an existing OTP or extend its TTL). The response contains
-  only the phone number; the OTP value is never returned and no SMS is sent.
+  using atomic `SET NX EX` combined with a lockout check (prevents race
+  conditions where concurrent requests could overwrite an existing OTP or
+  extend its TTL, and an OTP is never issued while a verification lockout is
+  active). The response contains only the phone number; the OTP value is never
+  returned and no SMS is sent.
 - Feature module `enrollments`: `POST /api/v1/enrollments/verify` —
   validates the phone and a six-character numeric OTP (string, leading zeros
   preserved) with Zod before any Redis access, then atomically verifies and
@@ -76,13 +78,18 @@ auth, no deployment setup.
   attempt counting). Missing, expired, incorrect, and exhausted-attempt OTPs
   all return the identical generic `OTP_VERIFICATION_FAILED` Problem Details
   response. Failed attempts are counted up to a configurable maximum
-  (`ENROLLMENTS_MAX_VERIFY_ATTEMPTS`, default 5); when reached, the OTP is
-  invalidated so no further attempts can succeed. Both endpoints are protected
-  by the global rate limiter with endpoint-specific limits aligned to the OTP
-  window: challenge 2 req/120s, verify 5 req/120s. No registration or
-  authentication steps yet.
-- Tests: Vitest unit (26 files / 198 tests), e2e (13 files / 62 tests),
-  Redis integration (2 files / 32 tests via `pnpm test:redis`). All integration
+  (`ENROLLMENTS_MAX_VERIFY_ATTEMPTS`, default 5); when reached, a lockout is
+  set (`neo-bank:enrollments:challenge:lockout:<phone>`, TTL configurable via
+  `ENROLLMENTS_LOCKOUT_TTL_SECONDS`, default 900 s / 15 min) that blocks both
+  verification and new OTP issuance for the lockout window. The lockout is
+  independent of the OTP TTL and cannot be bypassed by requesting a new OTP.
+  Both endpoints are protected by the global rate limiter with endpoint-specific
+  limits aligned to the OTP window: challenge 2 req/120s, verify 5 req/120s.
+  An additional per-phone hourly rate limit (5 sends / rolling 60 min) is
+  enforced atomically via Redis sorted set. No registration or authentication
+  steps yet.
+- Tests: Vitest unit (26 files / 202 tests), e2e (13 files / 65 tests),
+  Redis integration (4 files / 55 tests via `pnpm test:redis`). All integration
   and e2e tests use Testcontainers (`apps/api/test/testcontainers.ts`) to
   start isolated `redis:8.2-alpine` containers per test file with dynamic
   ports — no manual Docker Compose required.
@@ -172,6 +179,6 @@ Per-app commands are listed in each `apps/<app>/ONBOARDING.md`.
 
 All ADRs live in [DECISIONS.md](../DECISIONS.md). Status as of this snapshot:
 
-- **Accepted:** ADR-001 (Turborepo), ADR-002 (Fastify), ADR-003 (SWC), ADR-004 (@nestjs/config + Zod), ADR-005 (URI versioning), ADR-006 (1 MiB body limit), ADR-007 (`api` prefix), ADR-008/009 (Pino / nestjs-pino), ADR-010 (UUIDv4 request IDs), ADR-011 (envelope exclusions), ADR-012 (ioredis without a wrapper), ADR-013 (Redis module architecture), ADR-014 (Swagger/OpenAPI, development-only), ADR-015 (Global HTTP rate limiting with Redis-backed @nestjs/throttler), ADR-016 (Testcontainers for integration and e2e testing).
+- **Accepted:** ADR-001 (Turborepo), ADR-002 (Fastify), ADR-003 (SWC), ADR-004 (@nestjs/config + Zod), ADR-005 (URI versioning), ADR-006 (1 MiB body limit), ADR-007 (`api` prefix), ADR-008/009 (Pino / nestjs-pino), ADR-010 (UUIDv4 request IDs), ADR-011 (envelope exclusions), ADR-012 (ioredis without a wrapper), ADR-013 (Redis module architecture), ADR-014 (Swagger/OpenAPI, development-only), ADR-015 (Global HTTP rate limiting with Redis-backed @nestjs/throttler), ADR-016 (Testcontainers for integration and e2e testing), ADR-017 (OTP verification attempt lockout for enrollment security).
 
 All architectural decisions are accepted and implemented. Do not build on rejected alternatives (e.g. do not introduce header versioning or a second logger).

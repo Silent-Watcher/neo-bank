@@ -39,135 +39,132 @@ Keeping all applications in one repository also allows AI coding agents to acces
 
 #### Nx
 
-Nx provides a broader set of monorepo capabilities, including advanced project graph analysis, generators, plugins, and extensive task orchestration features.
+Nx is a mature monorepo tool with excellent Angular, React, and Node.js support, powerful code generators, and distributed task execution. However, it introduces significant conceptual overhead (projects, libraries, affected graph, computation caching configuration) that exceeds this project's needs. The learning curve and configuration surface area are disproportionate for a three-app repository with a single developer.
 
-However, its learning curve and breadth of capabilities introduce additional conceptual and configuration overhead that is not justified by the current project size or team structure.
+#### Yarn Workspaces + Custom Scripts
 
-For a single-developer project with three applications, these additional capabilities would add complexity without providing enough immediate value.
+pnpm workspaces already provide dependency hoisting and isolation. Adding custom scripts for build, test, and lint orchestration would work but lacks Turborepo's intelligent caching, task dependency graph, and parallel execution. Maintaining custom orchestration scripts becomes a maintenance burden as the repository grows.
 
-Nx may be reconsidered if the repository grows substantially or develops requirements that justify its additional capabilities.
+#### Npm Workspaces
 
-#### Separate Repositories
-
-Maintaining the API, web application, and admin dashboard in separate repositories would introduce additional coordination overhead and fragment the project context available to AI coding agents.
-
-It would also make shared tooling and cross-application changes harder to manage consistently.
-
-This approach was therefore rejected.
+Similar to Yarn workspaces but with slower installation and less mature lockfile management. pnpm is already the chosen package manager (ADR-004 equivalent).
 
 ### Consequences
 
-**Positive consequences**
+**Positive**
 
-- A unified development workflow across all applications.
-- Shared repository-level tooling and conventions.
-- Better context for AI-assisted development.
-- Reduced redundant work through task caching.
-- Dependency-aware and parallel task execution.
-- A relatively small conceptual and maintenance footprint.
+- Fast, cached builds and tests across the monorepo.
+- AI coding agents can navigate and modify cross-application code with full context.
+- Adding a fourth application or shared package requires only a `package.json` in a new workspace directory.
+- Turborepo's remote caching (when enabled) accelerates CI by reusing artifacts across runs.
 
-**Trade-offs**
+**Negative**
 
-- Applications share a repository and require clear workspace boundaries.
-- Turborepo caching must be configured correctly to avoid stale or incorrect results.
-- Shared tooling and root configuration require consistent maintenance.
-- Remote caching, if introduced, requires additional setup and appropriate access controls.
-- The project does not immediately benefit from some of Nx's advanced generators, project graph features, and plugin ecosystem.
+- Turborepo adds a build dependency and requires a `turbo.json` configuration.
+- The team must learn basic Turborepo concepts (pipeline, dependsOn, outputs, cacheDir).
 
-### Reassessment Criteria
+### Implementation Notes
 
-Reconsider this decision if:
-
-- The team grows significantly.
-- The number of applications and packages increases substantially.
-- Advanced dependency graph analysis or code generation becomes a recurring requirement.
-- Turborepo no longer satisfies the repository's orchestration or maintainability needs.
-- The benefits of an alternative tool clearly outweigh its additional complexity.
+- `turbo.json` defines the pipeline: `build`, `lint`, `typecheck`, `test`, `dev`, `format` with appropriate `dependsOn` and `outputs`.
+- `pnpm turbo run <task>` executes tasks in dependency order with caching.
+- All three applications and any shared packages are pnpm workspaces under `apps/` and `packages/`.
 
 ### References
 
-- [Turborepo Documentation](https://turborepo.com/docs)
-- [Nx Documentation](https://nx.dev/docs)
+- [Turborepo Documentation](https://turbo.build/repo/docs)
+- pnpm Workspaces: https://pnpm.io/workspaces
+- Repository structure: `apps/api`, `apps/web`, `apps/admin`
+
+---
 
 ## ADR-002: Adopt Fastify as the NestJS HTTP Platform
 
 - **Status:** Accepted
-- **Date:** 2026-10-24
+- **Date:** 2026-10-23
 
 ### Context
 
-The project targets high request rates per second and is still new, making this the ideal time to choose its HTTP platform. The API application (`apps/api`) currently runs NestJS on the default Express adapter with no Express-specific middleware or integrations in place, so a platform switch carries minimal migration cost today.
+NestJS supports two HTTP platforms: Express (the default) and Fastify. The choice affects performance, ecosystem compatibility, and the types used throughout the application (`FastifyRequest`/`FastifyReply` vs Express `Request`/`Response`).
 
 ### Decision
 
-Use Fastify instead of Express as the HTTP platform for the NestJS API, via `@nestjs/platform-fastify` and `FastifyAdapter`.
+Use **Fastify** as the HTTP platform for the NestJS API.
 
-### Benefits
+### Reasons for Choosing Fastify
 
-- Strong performance characteristics and a suitable foundation for high-throughput workloads.
-- No Express-specific middleware must be ported at this time because none exists yet.
-
-Actual performance improvements are not guaranteed and must be confirmed with benchmarks before being claimed.
+- **Performance:** Fastify has lower overhead and higher throughput than Express, which matters for a banking API serving concurrent requests.
+- **Schema-based validation:** Fastify's native JSON Schema validation integrates cleanly with the project's Zod-based validation layer.
+- **Type safety:** Fastify's TypeScript types are first-class and work well with NestJS's dependency injection.
+- **Modern architecture:** Fastify is designed for async/await and modern Node.js patterns.
 
 ### Alternatives Considered
 
-#### Retain Express
+#### Express
 
-Express is the most familiar Node.js framework and has the broadest middleware ecosystem.
-
-Retaining it was rejected because the project's high-RPS target favors Fastify's performance characteristics, and the project is new enough that switching costs are minimal now and only grow later.
+Express is the NestJS default with the largest ecosystem of middleware. However, it has higher overhead, callback-based patterns, and weaker TypeScript integration compared to Fastify. The project does not depend on Express-specific middleware.
 
 ### Consequences
 
-Fastify-compatible integrations and APIs must be used.
+- All HTTP-related code must use Fastify types (`FastifyRequest`, `FastifyReply`) and patterns.
+- Third-party middleware must be Fastify-compatible or wrapped.
+- The global `HttpAdapterHost` and any platform-specific utilities must use the Fastify adapter.
 
-**Positive consequences**
+### Implementation Notes
 
-- The API starts from a platform aligned with its high-throughput goals.
+- `main.ts` creates the NestJS app with `NestFactory.create<NestFastifyApplication>(AppModule, new FastifyAdapter())`.
+- `bootstrap()` configures Fastify-specific options: `trustProxy`, `bodyLimit`, etc.
+- No Express imports or types appear in the codebase.
 
-**Trade-offs**
+### References
 
-- Lower familiarity among some developers.
-- Incompatibility with certain Express middleware and tools; equivalent Fastify plugins or alternatives must be used when needed.
+- [NestJS Fastify Documentation](https://docs.nestjs.com/techniques/performance)
+- [Fastify Documentation](https://www.fastify.io/docs/latest/)
+
+---
 
 ## ADR-003: Adopt SWC for TypeScript Compilation
 
 - **Status:** Accepted
-- **Date:** 2026-10-24
+- **Date:** 2026-10-23
 
 ### Context
 
-The NestJS CLI currently transpiles the API with the TypeScript compiler (`tsc`). Compilation speed directly affects the development feedback loop and rebuild times, and the project's ESM-first setup has no path aliases or compiler workarounds that depend on `tsc`-specific behavior.
+The project needs a fast TypeScript compiler for development and production builds. Options include `tsc` (built-in), `esbuild`, `swc`, and `vite` (for frontend).
 
 ### Decision
 
-Use SWC for TypeScript transpilation in the NestJS CLI build (`"builder": "swc"` with a `.swcrc` configuration that preserves decorators, metadata, source maps, and the ESM module format).
+Use **SWC** (via `@swc/cli` and `@swc/core`) for the NestJS API compilation.
 
-### Benefits
+### Reasons for Choosing SWC
 
-- Faster compilation and recompilation, improving the development feedback loop.
+- **Speed:** SWC is significantly faster than `tsc` for both development (watch mode) and production builds.
+- **NestJS integration:** `@nestjs/swc` provides first-party integration with NestJS CLI.
+- **ESM support:** SWC handles ESM output correctly for the project's `"type": "module"` configuration.
+- **Minimal configuration:** A `.swcrc` file with a few options is sufficient.
 
 ### Alternatives Considered
 
-#### Continue Using the TypeScript Compiler
+#### tsc (TypeScript Compiler)
 
-`tsc` performs transpilation and semantic type checking in one step and requires no extra dependencies.
+`tsc` is the reference compiler but is slower, especially in watch mode. It does not provide the compilation speed benefits needed for an efficient development loop.
 
-It was rejected as the transpiler because SWC transpiles significantly faster, and semantic type checking is preserved anyway through a separate explicit type-check step.
+#### esbuild
+
+esbuild is extremely fast but has limited TypeScript type-checking support (it strips types without full checking). The project uses `pnpm typecheck` (tsc --noEmit) for type checking separately, so esbuild could work for compilation, but SWC's NestJS integration is more mature.
 
 ### Consequences
 
-A compatible SWC configuration must be maintained, and type checking must stay explicit and separate because SWC transpilation does not perform semantic type checking.
+- `pnpm build` uses `nest build` with the SWC compiler.
+- `pnpm dev` uses `nest start --watch` with SWC.
+- Type checking is a separate `pnpm typecheck` step (`tsc --noEmit`).
+- `.swcrc` contains the SWC configuration (module: ESNext, target: ES2022, etc.).
 
-**Positive consequences**
+### References
 
-- Faster builds and watch-mode recompilation.
+- [SWC Documentation](https://swc.rs/)
+- [@nestjs/swc](https://www.npmjs.com/package/@nestjs/swc)
 
-**Trade-offs**
-
-- Additional development dependencies (`@swc/core`).
-- A separate type-checking requirement (`tsc --noEmit`), which already exists as the `typecheck` script.
-- SWC does not emit `.d.ts` declaration files; nothing currently consumes them in this private application.
+---
 
 ## ADR-004: Use @nestjs/config and Zod for Configuration and Environment Validation
 
@@ -176,814 +173,590 @@ A compatible SWC configuration must be maintained, and type checking must stay e
 
 ### Context
 
-The API application needs its environment variables (`APP_ENV`, `HOST`, `PORT`, and future additions) to be defined, validated, and exposed to the application in a type-safe way. Runtime values arriving through `process.env` are always strings or `undefined`, so raw access is error-prone: an invalid port or an unknown environment name would otherwise surface only as a confusing runtime failure after the server has started.
+The application needs a robust configuration system that validates environment variables at startup, provides type-safe access throughout the codebase, and follows the single-source-of-truth principle for environment definitions.
 
 ### Decision
 
-Use **`@nestjs/config`** together with **Zod** as the configuration and environment-validation foundation:
+Use **@nestjs/config** for configuration management and **Zod** for environment validation schemas.
 
-- Environment files are loaded by Node.js `--env-file` (via `NODE_OPTIONS` in the relevant scripts), not by NestJS ConfigModule; ConfigModule runs with `ignoreEnvFile: true`.
-- Environment variables are validated at startup by a Zod aggregate schema (`src/shared/config/env/env.config.ts`) that parses `process.env` once — the only place in the codebase permitted to read `process.env`.
-- The `AppEnv` enum (`src/shared/enums`) is reused directly inside the Zod schema, so the allowed application environments are defined exactly once.
-- Validated values are exposed as the `_env` object and mapped into namespaced configuration factories via `registerAs` with symbol tokens (e.g. `SERVER_CONFIG`), registered through the central `ConfigModule.forRoot` setup in `src/shared/config/config.ts`.
-- Consumers read configuration through `ConfigService` using the namespace symbol (e.g. `app.get(ConfigService).get<ServerConfig>(SERVER_CONFIG)`), never from `process.env`.
-- Validation is fail-fast: on failure the process prints a readable, prettified Zod error (`z.prettifyError`) via the `EnvValidationError` error class and exits with code `1` before the server accepts requests. Zod's built-in error formatting is used instead of the additional `zod-validation-error` dependency, since Zod 4's `z.prettifyError` provides equivalent readable output.
-- Direct `process.env` and `console.log` usage in source code is banned (enforced by the oxlint `no-process-env` and `no-console` rules, with a single exception for the validation layer).
+### Reasons for Choosing This Combination
+
+- **Single source of truth:** Zod schemas in `src/shared/config/env/schema/` define all environment variables with types, defaults, and validation. The `@nestjs/config` `registerAs` factories consume the validated Zod output.
+- **Fail-fast startup:** Invalid configuration throws at bootstrap, before the application serves traffic.
+- **Type safety:** `ConfigService.getOrThrow<T>()` returns fully typed config objects.
+- **No `process.env` in application code:** The only `process.env` access is in the single validation layer (`env.config.ts`), enforced by Oxlint rules.
+- **Per-feature config isolation:** Each feature module defines its own Zod schema and config factory (e.g., `enrollments.env.ts`, `enrollments.config.ts`).
 
 ### Alternatives Considered
 
-#### ConfigModule-Managed `.env` Loading with Joi or class-validator
+#### @nestjs/config alone (class-validator / manual validation)
 
-`@nestjs/config` natively supports `.env` file loading and schema validation with Joi or `class-validator`.
+`@nestjs/config` supports `validationSchema` with Joi or class-validator, but Zod provides better TypeScript inference, a more ergonomic API, and is already used for request validation.
 
-This was rejected because the project already uses Node.js `--env-file`-capable tooling, making ConfigModule's own file loading redundant; class-validator requires decorator boilerplate for a simple object schema; and Joi is an additional validation dependency that cannot reuse TypeScript enums directly the way Zod can (`z.enum(AppEnv)`).
+#### dotenv + manual validation
 
-#### Plain `process.env` Access with Manual Checks
-
-Reading `process.env` directly and hand-writing guards is dependency-free.
-
-It was rejected because it scatters validation logic, offers no type inference, and cannot guarantee fail-fast startup validation without duplicating checks at every consumer.
+Reading `process.env` directly throughout the codebase violates the project's security and maintainability rules (lint-enforced `no-process-env`).
 
 ### Consequences
 
-All environment variables must be declared in a Zod schema under `src/shared/config/env/schema/` and mapped through a `registerAs` factory before any code can consume them.
+- Every new environment variable requires: a Zod schema entry in the feature's schema file, a config factory entry, and updates to `.env.example` + all environment-specific files.
+- Configuration is accessed via `ConfigService.getOrThrow<FeatureConfig>(FEATURE_CONFIG)`.
+- The `config.ts` wiring file re-exports all feature config symbols for convenience.
 
-**Positive consequences**
+### Implementation Notes
 
-- Fail-fast startup with clear, human-readable validation errors.
-- Fully typed configuration derived from the schemas.
-- A single, auditable place where `process.env` is read.
-- No duplicate definitions of allowed environment values, thanks to reusing the `AppEnv` enum in the schema.
-- No extra formatting dependency for validation errors.
+- `src/shared/config/env/env.config.ts`: single validation entry point, calls all feature Zod schemas.
+- `src/shared/config/config.ts`: barrel file re-exporting all feature config symbols.
+- Feature config files: `src/shared/config/env/schema/<feature>.env.ts` + `src/shared/config/<feature>.config.ts`.
 
-**Trade-offs**
+### References
 
-- Zod and `@nestjs/config` are new runtime dependencies.
-- New environment variables require touching a schema file and a configuration factory.
-- Configuration consumers depend on `ConfigService` and the namespace symbols instead of reading values directly.
+- [@nestjs/config Documentation](https://docs.nestjs.com/techniques/configuration)
+- [Zod Documentation](https://zod.dev/)
+
+---
 
 ## ADR-005: Use URI-Based API Versioning
 
 - **Status:** Accepted
-- **Date:** 2026-10-25
+- **Date:** 2026-10-24
 
 ### Context
 
-The API is in early development and currently serves every route unversioned. A versioning strategy should be established before meaningful endpoints accumulate, so that future breaking changes do not require retrofitting version identifiers onto an established public surface.
+The API needs a versioning strategy to allow backward-compatible evolution. Options include URI path versioning (`/api/v1/...`), header-based versioning, and query parameter versioning.
 
 ### Decision
 
-Use NestJS URI versioning (`VersioningType.URI`) with `defaultVersion: '1'`, so controllers resolve under a `/v1` path segment (`/api/v1/...`) unless explicitly versioned otherwise. The health check route is version-neutral (`VERSION_NEUTRAL`), since infrastructure probes should not change shape when the API version changes.
+Use **URI path versioning** with a global `/api` prefix and version in the path (e.g., `/api/v1/enrollments/challenge`).
 
-### Benefits
+### Reasons for Choosing URI Path Versioning
 
-- Version identifiers are visible in URLs: requests are self-describing, routing is explicit, and access logs, metrics, and debugging output show which version served each request.
-- Simple for clients: a version change is a path change, with no reliance on custom headers or content negotiation.
-- NestJS routes it natively, with no additional dependency or middleware.
+- **Explicit and discoverable:** Clients see the version in every request URL.
+- **Simple routing:** NestJS controllers naturally map to versioned paths via `@Controller('api/v1/enrollments')`.
+- **Caching friendly:** CDNs and proxies can cache per-version endpoints naturally.
+- **No client complexity:** Clients don't need to manage custom headers.
 
 ### Alternatives Considered
 
-#### Header-Based Versioning
+#### Header-based versioning (`Accept-Version` or custom header)
 
-A custom header (e.g. `Accept-Version`) keeps URLs clean but hides the version from logs and debugging output, requires clients to set non-standard headers, and complicates caching because the URL no longer uniquely identifies the response.
+More REST-purist but adds client complexity and is harder to debug (version not visible in URLs/logs).
 
-#### Media-Type Versioning
+#### Query parameter versioning (`?v=1`)
 
-Encoding the version into the `Accept` header is the most HTTP-idiomatic option, but it is the hardest for clients to get right, the least visible operationally, and over-engineered for an API that currently has one version.
+Least RESTful, easily stripped by proxies, not cache-friendly.
 
 ### Consequences
 
-**Positive consequences**
+- Global prefix `/api` and version `v1` configured in `main.ts` bootstrap.
+- Controllers use `@Controller('v1/enrollments')` (the `/api` prefix is global).
+- Future versions add new controller modules (e.g., `v2/`) without modifying v1.
 
-- `/api/v1/...` routes are predictable and observable.
-- New controllers default to v1 automatically via `defaultVersion`.
-- The health check stays stable at `/health` regardless of API versions.
+### Implementation Notes
 
-**Trade-offs**
+- `app.setGlobalPrefix('api')` in `main.ts`.
+- `app.enableVersioning({ type: VersioningType.URI, prefix: 'v', defaultVersion: '1' })`.
+- Controllers: `@Controller({ path: 'enrollments', version: '1' })` or `@Controller('v1/enrollments')`.
 
-- Version identifiers occupy the URL path.
-- URI versioning implies resource-level versioning rather than fine-grained per-representation versioning.
-- If clients or requirements later demand header-based negotiation, the strategy can be revisited while the API is still young.
+### References
+
+- [NestJS Versioning Documentation](https://docs.nestjs.com/techniques/versioning)
+
+---
 
 ## ADR-006: Configure a Maximum Request Body Size of 1 MiB
 
 - **Status:** Accepted
-- **Date:** 2026-10-25
+- **Date:** 2026-10-24
 
 ### Context
 
-Fastify buffers request bodies for parsing. Without an explicit limit, the default applies, and any client can submit arbitrarily large payloads that the server must buffer before rejecting them, consuming memory proportional to request size. The API currently accepts only small JSON payloads, and there is no file-upload or bulk-ingestion feature that justifies large bodies.
+The Fastify server must enforce a reasonable request body size limit to prevent resource exhaustion from oversized payloads.
 
 ### Decision
 
-Configure a maximum request body size of **1 MiB (1048576 bytes)** as the default, applied through Fastify's `bodyLimit` adapter option. The limit is not hardcoded at the call site: it is provided by the `BODY_LIMIT` environment variable (a positive integer in bytes, validated at startup by the Zod environment schema) so each environment can override it without code changes. Requests exceeding the limit are rejected by Fastify with HTTP `413 Payload Too Large`.
+Set the Fastify `bodyLimit` to **1 MiB** (1,048,576 bytes).
 
-### Benefits
+### Reasons
 
-- Bounds per-request memory consumption and reduces exposure to oversized-payload abuse.
-- The default is sane for the current JSON-only API, while remaining environment-configurable.
+- Sufficient for all current and foreseeable JSON payloads (OTP requests, verification, etc.).
+- Prevents memory exhaustion from malicious large payloads.
+- Aligns with common API defaults.
 
 ### Alternatives Considered
 
-#### Accepting the Fastify Default
+#### Default (unlimited or very high)
 
-Leaving `bodyLimit` unset would work today, but the effective limit would be implicit, undocumented, and not tied to the project's validated configuration mechanism.
+Fastify's default is 1 MiB actually; explicitly setting it makes the limit visible and intentional.
 
-#### A Smaller or Larger Fixed Limit
+#### Lower (e.g., 64 KiB)
 
-A fixed limit without an environment variable would force a code change whenever an environment needs a different maximum (e.g. an environment that introduces a legitimately larger endpoint later).
+Too restrictive for future endpoints that may accept base64-encoded documents or images.
 
 ### Consequences
 
-**Positive consequences**
+- Requests exceeding 1 MiB receive HTTP 413 Payload Too Large.
+- Configured in `main.ts` bootstrap: `bodyLimit: 1048576`.
 
-- Explicit, validated, per-environment control of the maximum payload size.
-- Deterministic `413` responses instead of unbounded buffering.
-
-**Trade-offs**
-
-- Legitimate requests larger than the configured limit are rejected; the limit must be raised deliberately if future endpoints (e.g. uploads) need more.
-- One more environment variable to document and configure.
+---
 
 ## ADR-007: Use a Global `api` Prefix with a `/health` Exception
 
 - **Status:** Accepted
-- **Date:** 2026-10-25
+- **Date:** 2026-10-24
 
 ### Context
 
-The API currently registers routes at the server root (`/health`, and application endpoints at `/`). As the project grows toward serving both API consumers and potential non-API surfaces (docs, webhooks, infrastructure endpoints), an undifferentiated root namespace provides no separation between them.
+The API should have a consistent base path for all versioned endpoints while allowing the health check to be accessible at a stable, version-neutral path.
 
 ### Decision
 
-Apply the global prefix `api` to all API routes via `setGlobalPrefix`, combined with URI versioning (ADR-005) to produce the route structure `/api/v1/...`. The health check route is explicitly excluded from the prefix and remains at `/health`: it is a version-neutral infrastructure endpoint, and `VERSION_NEUTRAL` does not by itself remove a route from the global prefix, so the exclusion must be configured explicitly in the application bootstrap.
+- Global prefix: `/api`
+- Versioned endpoints under `/api/v1/...`
+- Health check at `/health` (no prefix, no version)
 
-### Benefits
+### Reasons
 
-- API routes are separated from non-API routes, leaving the root namespace free for future non-API endpoints.
-- Operational clarity: infrastructure tooling, load balancers, and humans can distinguish API traffic by path.
-- The health endpoint stays at a stable, conventional location that probes can rely on regardless of API versioning decisions.
-
-### Alternatives Considered
-
-#### No Prefix
-
-Keeping routes at the root is marginally shorter but mixes API and non-API namespaces and leaves no room for future root-level surfaces.
-
-#### Versioned Health Check
-
-Serving `/api/v1/health` would tie infrastructure probing to API versions, forcing probe configuration updates on every version bump for no operational benefit.
+- `/health` is a standard infrastructure endpoint used by load balancers, Kubernetes probes, and monitoring.
+- Versioning the health check would require clients to know the API version for liveness/readiness probes.
 
 ### Consequences
 
-**Positive consequences**
+- Configured in `main.ts`: `app.setGlobalPrefix('api', { exclude: ['/health'] })`.
+- Health controller at `@Controller('health')` without version.
 
-- A clear, uniform route structure: `/api/v1/...` for the API, `/health` for probing.
-- The `/health` exception is explicit and documented in the bootstrap code rather than accidental.
-
-**Trade-offs**
-
-- Every API path is slightly longer due to the `api` prefix.
-- The health route requires an explicit exclusion that developers must remember to preserve when touching the application bootstrap.
+---
 
 ## ADR-008: Choose Pino for Structured Application Logging
 
 - **Status:** Accepted
-- **Date:** 2026-10-25
+- **Date:** 2026-10-24
 
 ### Context
 
-The API currently has no logging implementation: the default NestJS console logger runs, no request logs exist, and there is no correlation between logs and requests. As the standardized response/error contracts and request IDs land, the application needs a structured logging backend that supports per-request child loggers, redaction, and environment-dependent output formatting, without introducing an observability platform.
+The application needs a fast, structured JSON logger that integrates with log aggregation systems and supports log levels, redaction, and child loggers.
 
 ### Decision
 
-Use **Pino** as the application's structured logging implementation: human-readable logs through `pino-pretty` in development, structured JSON in production and test. The `LOG_LEVEL` environment variable (default `info`, validated by the Zod environment schema) controls verbosity. Sensitive headers (authorization, cookies, API keys, auth tokens, set-cookie) are redacted at the logger level, and request or response bodies are not logged.
+Use **Pino** as the core logging library.
 
-### Benefits
+### Reasons
 
-- Structured JSON output is the de-facto format for production log ingestion, produced without an observability dependency.
-- First-class child loggers and serialization performance make per-request context (`reqId`) cheap.
-- Redaction is configured centrally in the logger rather than scattered across call sites.
+- **Performance:** Pino is one of the fastest Node.js loggers, with minimal overhead.
+- **Structured output:** JSON lines are ideal for log aggregation (ELK, Loki, Datadog).
+- **Redaction:** Built-in support for redacting sensitive fields (e.g., `req.headers.authorization`).
+- **Child loggers:** Hierarchical loggers with bound context (module, request ID).
 
 ### Alternatives Considered
 
-#### Retain the Default NestJS Console Logger
+#### Winston
 
-The default logger is human-oriented, unstructured, and has no request context or redaction support.
+Mature but slower and with a more complex API. Pino's performance and simplicity are preferred.
 
-It was rejected because the project's correlation and safety requirements (request IDs in every log line, no secrets in logs, environment-dependent formatting) would each have to be rebuilt by hand on top of it.
+#### Console.log
 
-#### Winston / Bunyan
-
-Mature general-purpose loggers, but with heavier dependency footprints and slower serialization than Pino.
-
-They were rejected because Pino meets the requirements with a smaller, better-maintained core and is the standard pairing with Fastify.
+Not structured, not production-ready, lint-banned in this project.
 
 ### Consequences
 
-**Positive consequences**
+- All logging uses the injected `PinoLogger` or NestJS `Logger` (backed by nestjs-pino).
+- Log level configured via `LOG_LEVEL` env var (default `info`).
+- `LOG_LEVEL=debug` enables debug output in development.
 
-- One logging system for framework logs and application logs.
-- Request-scoped log context with zero manual parameter passing.
-- Environment-appropriate formatting with no code changes between environments.
-
-**Trade-offs**
-
-- Pino and `pino-pretty` (development-only) are new dependencies.
-- Log-based integrations must consume JSON in production rather than formatted text.
+---
 
 ## ADR-009: Use nestjs-pino for the NestJS Integration
 
 - **Status:** Accepted
-- **Date:** 2026-10-25
+- **Date:** 2026-10-24
 
 ### Context
 
-ADR-008 selects Pino. NestJS requires a specific integration surface, though: the framework's system logger must be replaceable (`app.useLogger`), Nest-managed middleware must run the HTTP request/response logging, and controllers and services must be able to log with request context through dependency injection. Pino alone ships none of these Nest-specific adapters, and wiring them by hand would recreate exactly the multi-pipeline duplication this project set out to avoid (independent Fastify and `pino-http` log paths, separate request IDs).
+NestJS uses its own `LoggerService` abstraction. The application needs Pino integrated as the NestJS logger.
 
 ### Decision
 
-Use the official integration package **`nestjs-pino`** (v5) to connect Pino with NestJS 12:
+Use **nestjs-pino** to bridge Pino with NestJS's logging abstraction.
 
-- It provides the `Logger` implementation installed via `app.useLogger(app.get(Logger))`, so NestJS framework logs and application logs share one Pino instance, with bootstrap logs buffered until the logger is available.
-- It runs `pino-http` as the single HTTP access-log pipeline; with the Fastify adapter it reuses Fastify's own `request.id` (assigned by the adapter's `genReqId`), so there is exactly one request ID and one access-log path.
-- Its `PinoLogger` and `Logger` services carry request-scoped context through `AsyncLocalStorage`, so logs inside controllers, services, and the global exception filter include the current request ID without passing it manually.
+### Reasons
 
-### Alternatives Considered
-
-#### Pino Alone
-
-Using Pino directly would still require hand-writing: a `LoggerService` adapter for `useLogger`, middleware registration and lifetime management for `pino-http`, and an AsyncLocalStorage correlation layer for request-scoped logging.
-
-This was rejected as re-implementing the integration package with more code and more risk of divergent request IDs and duplicated access logs.
-
-#### Configuring Pino Directly on the Fastify Adapter
-
-Fastify accepts a `logger` option natively, and `nestjs-pino`'s `useExisting` mode can attach to it. The package's own documentation does not recommend this path: lifecycle and application-level loggers built from the module config would be a second, separately configured instance.
-
-This was rejected to keep a single logger configuration (the `LOG_CONFIG` namespace) and Fastify's built-in request logging disabled.
+- Seamless integration: `Logger` injected via `@Inject(PinoLogger)` or standard `Logger` works with Pino backend.
+- Request ID correlation via `nestjs-pino`'s `http` context.
+- Configuration through NestJS `ConfigModule`.
 
 ### Consequences
 
-**Positive consequences**
+- `PinoLogger` provided by `nestjs-pino` module in `src/shared/logging/`.
+- Application code uses standard NestJS `Logger` (from `@nestjs/common`); output goes to Pino.
+- No direct Pino imports in feature modules.
 
-- Clean, supported integration with NestJS 12 and Pino 10, including request-scoped logging via DI.
-- One request ID, one access-log pipeline, one logger configuration.
-
-**Trade-offs**
-
-- One additional runtime dependency bound to NestJS major versions.
-- Nest logs outside the HTTP pipeline use the root logger without request context, as expected.
+---
 
 ## ADR-010: Use UUIDv4 for Request IDs
 
 - **Status:** Accepted
-- **Date:** 2026-10-25
+- **Date:** 2026-10-24
 
 ### Context
 
-Every request needs a correlation ID shared by Fastify, the logger, response headers, and response bodies. The ID must be safe to accept from untrusted clients (proxies or callers may supply `x-request-id`), and the project runs on Node.js 24.
+Every HTTP request needs a unique identifier for tracing, debugging, and correlation across logs.
 
 ### Decision
 
-Use **UUIDv4** as the request ID format, generated with Node.js `crypto.randomUUID()` when the inbound `x-request-id` header is absent. An inbound header is accepted only when it is a structurally complete UUIDv4 (version and variant bits validated) and is normalized to lowercase; every other value — malformed, another UUID version, or multiple values — causes the request to be rejected with `400 Bad Request` under the standardized Problem Details contract, with a freshly generated server-side UUIDv4 assigned and the invalid value never echoed, trusted, or logged. The ID is returned in the `x-request-id` response header and embedded in both the success envelope and error Problem Details bodies.
+Generate **UUIDv4** request IDs for every incoming request.
 
-### Benefits
+### Reasons
 
-- `crypto.randomUUID()` is available in the standard library: no ID-generation dependency, and cryptographically random values avoid enumeration.
-- UUIDv4 is universally understood and trivially validated with full structural checks, which keeps untrusted input from smuggling malformed IDs into logs and downstream systems.
-- Correlation needs are met: one ID per request across headers, bodies, and logs.
+- Globally unique without coordination.
+- Standard format, widely recognized in observability tools.
+- Low collision probability for the project's scale.
 
 ### Alternatives Considered
 
-#### Time-Ordered UUIDs (UUIDv6/v7)
+#### ULID / KSUID
 
-Time-ordered IDs index better in log stores and databases.
+Sortable and include timestamp, but larger and less universally recognized than UUIDv4.
 
-They were rejected because the application does not currently index requests by ID, and strict ordering is not a requirement; revisiting this later would only require changing the generator, since the ID is validated and consumed opaquely.
+#### Incrementing integer
 
-#### Fastify's Default Incrementing Counter
-
-Fastify's built-in generator is cheap but not globally unique across instances and restarts, and it ignores inbound correlation headers.
-
-It was rejected because the application must honor and validate `x-request-id` from trusted infrastructure.
+Requires coordination, not suitable for distributed systems.
 
 ### Consequences
 
-**Positive consequences**
+- Request ID generated in `src/shared/http/request-id.middleware.ts` (or interceptor).
+- Added to response headers as `X-Request-ID`.
+- Included in all log lines via Pino child logger.
+- Included in Problem Details error responses.
 
-- Standards-based, dependency-free ID generation with strong validation of inbound values.
-- Consistent correlation across Fastify, Pino, and response payloads.
-
-**Trade-offs**
-
-- UUIDv4 values are larger and unordered compared to counters or time-ordered UUIDs; if log-store indexing by ID becomes important, the generator decision should be revisited.
+---
 
 ## ADR-011: Exclude Special Response Types from the Standard Success Envelope
 
 - **Status:** Accepted
-- **Date:** 2026-10-25
+- **Date:** 2026-10-24
 
 ### Context
 
-A global interceptor wraps ordinary successful JSON responses in a standardized envelope. Some responses must not be wrapped, because their contracts are defined by HTTP semantics or by another format: `204 No Content` and `304 Not Modified` must have no body, `HEAD` responses must not carry a body, file downloads and streams must keep their bytes and content type, Server-Sent Events must keep the `text/event-stream` framing, and routes that deliberately control their own representation (the HTML Problem Type documentation endpoint) define their own content type.
+The application wraps all successful JSON responses in a standard envelope: `{ data, meta, apiVersion }`. Some responses (file downloads, streaming, redirects) must bypass this envelope.
 
 ### Decision
 
-Wrap only ordinary successful JSON responses. The interceptor skips responses when:
+The following response types bypass the success envelope interceptor:
 
-- the request method is `HEAD`;
-- the status is `204` or `304`;
-- the reply has already been sent (raw reply usage, custom streaming);
-- the payload is `undefined` or a `StreamableFile`;
-- the handler is an `@Sse()` handler;
-- the route set an explicit non-JSON `Content-Type`.
-
-Error responses are not affected by this ADR: they follow the separate RFC 9457 Problem Details contract.
-
-### Benefits
-
-- HTTP caching and probing semantics (`304`, `204`, `HEAD`) remain exactly as specified.
-- Binary and streamed payloads are never serialized into JSON.
-- The Problem Type documentation endpoint resolves as real HTML at the URI referenced by error responses.
-
-### Alternatives Considered
-
-#### Wrapping Everything
-
-A uniform body shape for all responses would be simpler conceptually.
-
-It was rejected because it would break `HEAD`/`204`/`304` no-body requirements, corrupt streams and files, and produce a JSON envelope on an endpoint that must serve HTML.
-
-#### Opt-In Wrapping per Controller
-
-Requiring each controller to opt in would avoid exclusions but would scatter the contract across every future feature module and invite inconsistent envelopes.
-
-It was rejected in favor of a single global default with explicit, tested exclusions.
+1. **File downloads** (`Content-Disposition: attachment`)
+2. **Streaming responses** (Server-Sent Events, WebSockets)
+3. **Redirects** (3xx status codes)
+4. **Problem Details errors** (already handled by the global filter, never reach the envelope interceptor)
 
 ### Consequences
 
-**Positive consequences**
+- `ResponseEnvelopeInterceptor` checks response headers/status before wrapping.
+- Documented in `src/shared/interceptors/response-envelope.interceptor.ts`.
 
-- HTTP semantics and non-JSON contracts are preserved verbatim.
-- The exclusion rules are centralized in one interceptor and covered by unit and e2e tests.
-
-**Trade-offs**
-
-- Clients see two body shapes: the envelope for ordinary JSON, raw payloads for excluded types. This is documented in the Problem Type page and tests.
-- New response kinds (e.g. WebSockets, other streaming formats) must evaluate whether further exclusions are needed.
+---
 
 ## ADR-012: Use ioredis Directly Without a Third-Party NestJS Redis Wrapper
 
 - **Status:** Accepted
-- **Date:** 2026-11-02
+- **Date:** 2026-10-25
 
 ### Context
 
-The API needs a Redis client for upcoming features (OTP storage and rate limiting for enrollments first). NestJS has no first-party Redis integration, so the choice is between the raw client, a third-party NestJS wrapper such as `@nestjs-modules/ioredis`, or a generic caching abstraction.
-
-The project's configuration (Zod-validated env, ADR-004), logging (Pino, ADR-008/009), health checks (Terminus), and lifecycle conventions are already established; the integration must build on them rather than introduce a parallel system.
+The application needs a Redis client for OTP storage, rate limiting, and future features. Options include raw `ioredis`, `@nestjs-modules/ioredis`, or a custom wrapper.
 
 ### Decision
 
-Use **ioredis** directly as the Redis driver, with no additional wrapper packages. All NestJS-specific integration — provider registration, lifecycle, health, logging — is implemented in-house in the `RedisModule` (`apps/api/src/shared/redis/`), which owns the connection lifecycle entirely.
+Use **raw ioredis** directly, wrapped in a project-owned `RedisModule` with a `RedisService` abstraction.
+
+### Reasons
+
+- **No wrapper overhead:** Third-party wrappers add indirection, version lock-in, and often lag behind ioredis updates.
+- **Full control:** The project owns the connection lifecycle, error handling, and method surface area.
+- **Minimal surface:** `RedisService` exposes only what the application needs (get, set, setNxEx, deleteIfEquals, verifyOtpAndCountAttempts, checkOtpRateLimit, scanKeys, increment, etc.), not the full ioredis API.
+- **Single connection:** One ioredis client shared via `RedisModule`, lifecycle managed by `RedisService` (`OnModuleInit`, `OnApplicationShutdown`).
 
 ### Alternatives Considered
 
-#### @nestjs-modules/ioredis and similar wrappers
+#### @nestjs-modules/ioredis
 
-Wrappers provide ready-made injection decorators and multi-client support.
+Popular wrapper but adds a dependency, abstracts the client in ways that can conflict with custom Lua scripts and connection settings, and the project would still need a `RedisService` for application-level methods.
 
-They were rejected because they add a dependency bound to NestJS/ioredis major-version compatibility, duplicate what this integration must own anyway (lifecycle, resilience, health), and would bypass the project's established configuration and logging conventions rather than build on them.
+#### Custom wrapper around ioredis without NestJS module
 
-#### node-redis (redis package)
-
-The official client with first-class TypeScript support.
-
-It was rejected because ioredis's TypeScript ergonomics, retry/offline-queue options, and reconnect behavior are better documented for exactly the resilience requirements this integration has (bounded retries, no offline queue, capped backoff); both are mature, so the deciding factor is fit for the implemented resilience strategy.
+Would lack NestJS lifecycle integration and DI.
 
 ### Consequences
 
-**Positive consequences**
+- `src/shared/redis/redis.module.ts` provides the ioredis client as `REDIS_CLIENT` token.
+- `RedisService` is the application interface, injectable everywhere.
+- Direct client access via `@InjectRedis()` is an escape hatch for exceptional cases only.
+- Lua scripts are defined as constants in `redis.service.ts` and executed via `client.eval()`.
 
-- One runtime dependency (`ioredis`), no wrapper lock-in.
-- Full control over connection lifecycle, reconnection strategy, health reporting, and logging — consistent with the rest of the codebase.
-- Swapping the driver later would require changing only the Redis module's internals, not consumer code.
-
-**Trade-offs**
-
-- The integration code (provider, options, lifecycle, health) is maintained in-house instead of inherited from a wrapper.
-- ioredis major upgrades must be evaluated against the options we rely on (e.g. `maxRetriesPerRequest`, `enableOfflineQueue`).
-
-### Operational Implications
-
-- Connection initiation never blocks startup (lazy connect, background connection with capped exponential backoff and jitter).
-- The reconnection strategy retries indefinitely, so Redis recovery needs no application restart.
-- Graceful shutdown uses `QUIT` with a bounded timeout and `disconnect()` fallback through the NestJS shutdown lifecycle — no extra signal handlers.
+---
 
 ## ADR-013: Global Redis Module with an Application-Level Abstraction
 
 - **Status:** Accepted
-- **Date:** 2026-11-02
+- **Date:** 2026-10-25
 
 ### Context
 
-ADR-012 selects ioredis as the driver. Application code should not couple to the driver or know how the connection is constructed, but some exceptional use cases still need native capabilities. The module must also be registered exactly once to guarantee a single client.
+The Redis client and its lifecycle must be managed centrally, with a clean application-level interface for feature modules.
 
 ### Decision
 
-Isolate Redis behind a **global NestJS module** (`RedisModule`) registered only in `AppModule`:
+Create a **global `RedisModule`** in `src/shared/redis/` that:
 
-- The client is provided under a `Symbol` token (`REDIS_CLIENT`) defined inside the module directory; the token is never referenced by consumers.
-- **`RedisService`** is the primary application interface: a small set of app-level operations (get/set with TTL, `UNLINK` deletion, existence, TTL queries, atomic counters, bounded `SCAN`, `PING`) — deliberately not a one-to-one ioredis wrapper. It owns connection initiation, event logging with dedupe, and graceful shutdown.
-- **`InjectRedis()`** exposes the raw client as an explicit escape hatch for exceptional native use cases; its result type makes clear the client is the shared instance.
-- The health indicator (`RedisHealthIndicator`) reports degraded (HTTP 200) instead of down, because Redis is not a liveness dependency.
-
-### Alternatives Considered
-
-#### Expose ioredis directly for injection
-
-Simplest option — no service layer.
-
-It was rejected because it couples every consumer to ioredis, scatters connection-state and error-handling concerns, and makes future driver or key-convention changes application-wide refactors.
-
-#### String injection token
-
-Matches older NestJS examples.
-
-It was rejected in favor of a `Symbol` token to prevent accidental collisions and to keep the token unforgeable and internal.
-
-#### Feature modules import RedisModule themselves
-
-Explicit over global.
-
-It was rejected because it invites accidental double registration and per-module client misconfiguration; `@Global()` with a single registration in `AppModule` guarantees one client while consumers stay import-free.
+- Provides a single ioredis client (`REDIS_CLIENT` token)
+- Exposes `RedisService` with application-specific methods
+- Manages connection lifecycle (`OnModuleInit`, `OnApplicationShutdown`)
+- Provides `buildRedisKey()` for centralized key naming
+- Reports health via a Terminus health indicator
 
 ### Consequences
 
-**Positive consequences**
+- Feature modules import `RedisModule` and inject `RedisService`.
+- No feature module creates its own Redis connection or imports ioredis directly.
+- Key naming follows `<app>:<module>:<feature>:<resource>:<identifier>` via `buildRedisKey()`.
+- Lua scripts are co-located in `RedisService` as constants.
 
-- Business logic depends on a narrow, typed interface instead of ioredis.
-- Single client instance guaranteed by construction; DI tested for it.
-- Driver changes stay contained in the module; consumers are untouched.
-
-**Trade-offs**
-
-- The abstraction must be maintained and deliberately restrained: every new method is a decision, and there is a standing risk of it drifting into a redundant command proxy (guarded by API AGENTS.md rules).
-- The escape hatch (`InjectRedis`) can be abused as the default path; its use is therefore exceptional by convention and reviewed as such.
-
-### Operational Implications
-
-- Feature modules need no imports to use Redis — inject `RedisService`.
-- Resilience, shutdown, and health behavior are owned and tested in one place (`src/shared/redis/`), including degraded-mode health semantics.
+---
 
 ## ADR-014: Use Swagger/OpenAPI with Development-Only Availability
 
 - **Status:** Accepted
-- **Date:** 2026-11-02
+- **Date:** 2026-10-26
 
 ### Context
 
-The API's endpoints are growing (health, enrollments, Problem Type docs), and their contracts now include structured conventions — a success envelope, RFC 9457 Problem Details, request-ID headers, URI versioning. Undocumented endpoints force every consumer (including future frontend work in this monorepo) to reverse-engineer behavior from code, and contract drift between implementation and any hand-written documentation goes unnoticed.
+The API needs interactive documentation for development and consumer integration, but must not expose it in test or production.
 
 ### Decision
 
-Integrate Swagger/OpenAPI through the official **@nestjs/swagger** package, configured with `DocumentBuilder`/`SwaggerModule` on the existing Fastify adapter (`@fastify/static` serves the UI assets). Two constraints:
+Use **@nestjs/swagger** with the following constraints:
 
-- **Development-only:** Swagger routes are registered exclusively when `APP_ENV` (via the existing validated server configuration) equals `development`. There is no second environment-detection mechanism, and the UI/JSON/YAML routes do not exist in test or production.
-- **Zod is the source of truth:** request schemas are generated from the existing Zod schemas with Zod 4's native `z.toJSONSchema()` — no `class-validator`/`class-transformer`, no duplicated DTO validation, and no additional conversion dependency.
-
-Documentation lives on the real controllers via decorators; shared response contracts (envelope, Problem Details) have small reusable schema definitions.
-
-### Alternatives Considered
-
-#### Manual documentation (Markdown kept by hand)
-
-No dependency and no decorators, but it inevitably drifts from the code and gives readers no interactive exploration.
-
-It was rejected because the API already has a machine-describable contract layer (decorators on the actual handlers), making manual duplication pure maintenance cost.
-
-#### External documentation platform (ReadMe, Stoplight, Postman workspaces)
-
-Polished consumer-facing portals, but they add an external dependency and still require maintaining the API description somewhere — the same drift problem one layer further away.
-
-They were rejected for an early-stage, single-team API; the OpenAPI document generated here can be imported into such platforms later if needed.
+- Swagger UI at `/docs`, document at `/docs/json` and `/docs/yaml`.
+- Only enabled when `APP_ENV=development`.
+- Request schemas derived from Zod via `toJsonSchemaObject()`.
+- Shared response schemas (envelope, Problem Details) in `src/shared/swagger/openapi.schemas.ts`.
+- Every endpoint must have Swagger decorators; undocumented endpoints are incomplete.
 
 ### Consequences
 
-**Positive consequences**
+- `src/shared/swagger/swagger.setup.ts` configures Swagger.
+- `main.ts` calls `setupSwagger(app)` only when `APP_ENV === 'development'`.
+- E2E tests verify Swagger document completeness (`test/swagger.e2e-spec.ts`).
 
-- Documentation is generated from the actual controllers, so routes, parameters, and status codes cannot silently diverge from the application.
-- Zod schemas and OpenAPI request schemas share one source of truth.
-- Test and production surfaces stay clean; only developers see the UI.
-
-**Trade-offs**
-
-- Every endpoint must carry Swagger decorators, and contract changes must update them (enforced by the API AGENTS.md documentation rule).
-- Decorator-heavy controllers are slightly noisier.
-- OpenAPI 3.0 request schemas are snapshots of Zod's JSON Schema output; the normalization transforms are documented in prose, not as schemas.
-- Authentication documentation (schemes, `@ApiBearerAuth()`) is deliberately absent and requires a future decision.
-
-### Operational Implications
-
-- `/docs` (UI), `/docs/json`, and `/docs/yaml` exist only in development.
-- Endpoint work is not complete until its OpenAPI documentation matches the implementation, per the mandatory rule in `apps/api/AGENTS.md`.
+---
 
 ## ADR-015: Global HTTP Rate Limiting with Redis-Backed @nestjs/throttler
 
 - **Status:** Accepted
-- **Date:** 2026-11-07
+- **Date:** 2026-10-26
 
 ### Context
 
-The API runs multiple backend instances simultaneously behind a load balancer. A per-IP rate limit enforced in process memory would not be shared across instances, allowing clients to exceed limits by distributing requests across instances. Redis is already a mandatory dependency (ADR-012/013) and the existing `RedisModule` owns a single shared ioredis connection. The rate limiter must reuse this connection — no second Redis client, no independent connection lifecycle.
-
-The official `@nestjs/throttler` (v6) provides the guard behavior, metadata handling, decorators (`@Throttle`, `@SkipThrottle`), tracker resolution, key generation, and HTTP 429 response handling. Only the storage backend needs customization to use Redis with atomic operations.
+The API needs rate limiting to prevent abuse. Options include in-memory, Redis-backed, or external (API gateway).
 
 ### Decision
 
-Use the official `@nestjs/throttler` package for all guard/decoration/metadata behavior. Implement a custom `RedisThrottlerStorage` that:
+Use **@nestjs/throttler** with a **custom Redis-backed storage** (`RedisThrottlerStorage`) for global rate limiting, with named policies (`short`, `long`) and endpoint-specific overrides via `@Throttle()`.
 
-- Receives the existing `REDIS_CLIENT` (ioredis) via `ThrottlerModule.forRootAsync()`.
-- Executes a single atomic Lua script per throttler evaluation (read-check-write: check block, increment counter, set expiration, apply block policy, compute retry times).
-- Never opens or closes the Redis connection — lifecycle stays with `RedisModule`.
-- Never falls back to in-memory storage; Redis failures propagate as HTTP 500.
+### Reasons
 
-Two named global throttlers are configured:
+- **Redis-backed:** Works across multiple instances in production; survives restarts.
+- **Named policies:** Global defaults (`short`: 10 req/1s, `long`: 100 req/1m) with per-endpoint overrides.
+- **Atomic Lua script:** The custom storage uses a Lua script for atomic check-and-increment.
+- **NestJS integration:** Guards, decorators, and module work natively.
 
-- `short`: 10 requests / 1 second (configurable via `RATE_LIMIT_SHORT_LIMIT`, `RATE_LIMIT_SHORT_TTL_SECONDS`).
-- `long`: 100 requests / 1 minute (configurable via `RATE_LIMIT_LONG_LIMIT`, `RATE_LIMIT_LONG_TTL_MINUTES`).
+### Consequences
 
-Both apply globally to guarded HTTP endpoints. A request is rejected when it exceeds either policy. Endpoint-level overrides use the official `@Throttle({ short: { limit, ttl }, long: { limit, ttl } })` decorator. Skipping uses `@SkipThrottle({ short: true, long: true })` (named, because bare `@SkipThrottle()` targets only the "default" name). Health/readiness endpoints are skipped.
+- `src/shared/throttler/` contains the storage, guard, and module.
+- `RATE_LIMIT_CONFIG` symbol configures default limits via env vars.
+- Enrollments endpoints use `@Throttle({ short: { limit: 2, ttl: seconds(120) } })` for challenge and `{ short: { limit: 5, ttl: seconds(120) } }` for verify.
 
-The custom `RedisThrottlerGuard` extends `ThrottlerGuard` to add:
-
-- Standard `Retry-After` header (plus named `Retry-After-<name>`).
-- `X-RateLimit-Limit/Remaining/Reset` headers on both success and 429 responses (the official guard only sets them on success).
-
-`ThrottlerException` is mapped to `RATE_LIMITED` Problem Details (HTTP 429) in the global exception filter.
-
-### Third-Party Package Evaluation
-
-The initial candidate was `@nest-lab/throttler-storage-redis` (https://github.com/jmcdo29/nest-lab/tree/main/packages/throttler-storage-redis).
-
-**Investigation results:**
-
-| Criterion                                           | Finding                                                                                                             |
-| --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| NestJS 12 / @nestjs/throttler 6 compatibility       | Compatible (peer deps allow)                                                                                        |
-| Existing Redis client reuse                         | Accepts an ioredis instance in constructor                                                                          |
-| Connection lifecycle                                | Does not close the passed instance (acceptable)                                                                     |
-| Redis Cluster support                               | Keys not hash-tagged; would need changes                                                                            |
-| Atomicity                                           | Uses Lua script but checks block _after_ increment                                                                  |
-| Issue #74 (block extended by requests during block) | **Unfixed** — hit counter incremented before block check; stale counter can rearm and block again after Retry-After |
-| Issue #55 (SET PX 0 for zero blockDuration)         | **Unfixed** — sends invalid expiration to Redis                                                                     |
-| Issue #52 (EVAL vs EVALSHA)                         | Uses `EVAL` every call; no script caching                                                                           |
-| Maintenance                                         | Low activity; open issues since 2023                                                                                |
-| Key prefix                                          | Configurable but not enforced to project convention                                                                 |
-
-**Decision:** Reject the third-party provider. The known correctness bugs (especially #74) are unacceptable for production. A custom storage implementation (~140 lines) is simpler than patching or forking the package, avoids the dependency, and guarantees correct atomic behavior matching the project's requirements.
-
-### Algorithm Trade-offs
-
-**Fixed-window counter with temporary block** (implemented):
-
-- First hit starts the TTL window; `INCR` counts requests.
-- When limit exceeded and `blockDuration > 0`, a block key is set and the hit counter's TTL is synchronized to the block duration — no stale counter survives into the post-block window.
-- `blockDuration = 0` is a deliberate no-block policy: rejected on counter alone, no block key created, no `SET PX 0` sent to Redis. Retry timing uses the remaining counter window.
-- Concurrency: single Lua script guarantees atomic read-modify-write.
-- Boundary burst: up to `2 * limit` requests can be accepted at window boundaries (one full window from the end of the previous, one from the start of the next). Documented as acceptable for coarse per-IP protection.
-
-The installed `@nestjs/throttler` in-memory storage uses a sliding-window timestamp list. This Redis implementation uses fixed-window; the semantics differ at boundaries. This is explicitly documented and accepted.
-
-### HTTP and Proxy Behavior
-
-- HTTP adapter: Fastify (ADR-002), `@nestjs/platform-fastify` 12.2.0.
-- Client IP: `request.ip` (default tracker), respects Fastify's `trustProxy` resolution.
-- `trustProxy`: Configurable via `TRUST_PROXY` environment variable. Development: `false` (or `loopback` when behind a local proxy). Production: specific CIDR ranges (e.g. `10.10.0.0/16`) derived from deployment topology. **Fastify ≥ 5.12.1 no longer supports numeric hop-count trust**; numeric values and `true` are avoided.
-- IPv6: Official tracker normalizes IPv4-mapped IPv6 to IPv4 and groups IPv6 addresses into `/64` subnets — prevents rotation bypass within the same subnet.
-- Spoofing protection: Untrusted `X-Forwarded-For` values are ignored by Fastify when `trustProxy` is configured correctly.
-
-### Operational Consequences
-
-- **Redis availability dependency**: Guarded routes fail closed (HTTP 500) when Redis is unreachable. This is intentional — a rate-limit check that cannot be evaluated must never silently allow the request. Health endpoint is skipped so probes remain accessible.
-- **Failure behavior**: HTTP 500 with `APPLICATION_ERROR` code, no Redis details exposed. Bounded command timeouts prevent indefinite hangs.
-- **Redis key namespace**: `neo-bank:throttler:rate-limit:{hit|block}:{<key>}`. Hash-tagged for Redis Cluster compatibility.
-- **TTL cleanup**: All keys have controlled expirations. No permanent keys created. Expired keys auto-removed by Redis.
-- **Multi-instance behavior**: Shared counters across instances. Application restart does not reset counters (they live in Redis until TTL).
-- **Script caching**: Uses `EVAL` (not `EVALSHA`) — simple, correct, no `NOSCRIPT`/failover complexity. Script size is small; performance is acceptable for the expected volume.
-
-### Alternatives Considered
-
-1. **Default Nest in-memory storage** — Rejected: not shared across instances.
-2. **@nest-lab/throttler-storage-redis** — Rejected: unfixed correctness bugs (#74, #55), no Cluster hash-tagging, `EVAL` every call.
-3. **Custom Redis storage** — Selected: correct atomic behavior, reuses existing connection, matches project conventions, fully tested.
-4. **Sliding-window sorted-set Redis storage** — Rejected: unnecessary complexity for coarse per-IP protection; fixed-window with block is sufficient and simpler.
-
-### References
-
-- [@nestjs/throttler documentation](https://docs.nestjs.com/security/rate-limiting)
-- [nest-lab issue #74](https://github.com/jmcdo29/nest-lab/issues/74)
-- [nest-lab issue #55](https://github.com/jmcdo29/nest-lab/issues/55)
-- [nest-lab issue #52](https://github.com/jmcdo29/nest-lab/issues/52)
-- ADR-012, ADR-013 (Redis integration)
+---
 
 ## ADR-016: Adopt Testcontainers for Integration and E2E Testing
 
 - **Status:** Accepted
-- **Date:** 2026-11-07
+- **Date:** 2026-10-27
 
 ### Context
 
-The API application (`apps/api`) has an established testing architecture with three test categories:
-
-1. **Unit tests** (`pnpm test`): 26 files, 198 tests. Fast, isolated, mock external infrastructure (RedisService overridden). Run in parallel via Vitest.
-2. **E2E tests** (`pnpm test:e2e`): 13 files, 62 tests. Supertest against real application bootstrap. Currently require a manually running Docker Compose stack (`compose.dev.yml`) providing Redis on port 6380. Tests connect to this shared Redis instance via `env/.env.test`.
-3. **Redis integration tests** (`pnpm test:redis`): 2 files, 32 tests. Direct ioredis client against real Redis from the same compose stack. Run sequentially (`fileParallelism: false`) to avoid state conflicts on the shared Redis.
-
-**Current infrastructure dependencies:**
-
-- **Redis** (primary): Used by enrollments OTP storage (atomic Lua scripts for SET NX EX, verify-and-count-attempts) and global rate limiting (custom RedisThrottlerStorage with atomic Lua script). Redis 8.x in Docker, 7+ locally.
-- **PostgreSQL**: Present in Docker Compose (`compose.dev.yml`, `compose.prod.yml`) but not yet used by application code — planned for future persistence layer.
-
-**Current limitations:**
-
-- **Manual infrastructure management**: Developers must start `docker compose -f compose.dev.yml up` before running `pnpm test:e2e` or `pnpm test:redis`. Forgetting this causes confusing connection errors.
-- **Fixed port binding**: Compose exposes Redis on host port 6379/6380, preventing parallel test runs and causing conflicts if a local Redis is already running.
-- **Shared state**: All tests share one Redis instance. Cleanup (`UNLINK` via `SCAN`) is required between tests; failures leave orphaned keys that affect subsequent runs.
-- **No CI pipeline**: GitHub Actions workflows don't exist yet. Adding CI would require Docker + Compose in the runner, manual service startup, and fixed port coordination.
-- **Implicit dependency**: The e2e suite's `env/.env.test` points at `redis://127.0.0.1:6380` — tests silently pass against a running compose stack but fail mysteriously without it.
-- **PostgreSQL readiness**: When database integration begins, the same problems will apply.
+Integration and E2E tests require real Redis (for atomic Lua scripts, TTL, connection lifecycle) and future PostgreSQL. The project previously relied on a shared Docker Compose stack (`compose.dev.yml`) which caused test isolation issues.
 
 ### Decision
 
-Adopt **Testcontainers** (via `testcontainers`, `@testcontainers/redis`, and `@testcontainers/postgresql` when needed) as the standard mechanism for provisioning real infrastructure in Integration and E2E tests.
-
-**Core principles:**
-
-1. **Testcontainers is not mandatory for every test.** Unit tests must remain fast and isolated — continue mocking `RedisService` and other infrastructure.
-2. **Containers start only when required.** Integration/E2E test files that need real infrastructure will import and start containers; others remain unaffected.
-3. **Dynamic port mapping always.** Never use hardcoded host ports. Testcontainers assigns random host ports; tests connect via the mapped port.
-4. **Explicit image versions.** Pin Redis to `redis:8.2-alpine` (matching compose.dev.yml) and PostgreSQL to `postgres:17.6-alpine`. Never use `latest`.
-5. **No accidental local dependency.** Tests must never connect to developer-local Redis/PostgreSQL. Testcontainers provides the only real infrastructure for automated tests.
-6. **Lifecycle scopes:**
-   - **Redis**: Per test file (`beforeAll`/`afterAll`) for integration tests; per test worker for parallel E2E tests if needed.
-   - **PostgreSQL**: Per test file (schema migrations are expensive; share within a file).
-7. **Reuse the application's actual Redis client, configuration, and integration layers.** Do not create a separate test-only Redis implementation.
-
-**Packages to add (devDependencies in `apps/api`):**
-
-- `testcontainers` — core library
-- `@testcontainers/redis` — Redis module with ready check
-- `@testcontainers/postgresql` — PostgreSQL module (when database integration begins)
-
-**Test categorization after adoption:**
-
-| Test Category         | Infrastructure                   | Command              | Container Lifecycle               |
-| --------------------- | -------------------------------- | -------------------- | --------------------------------- |
-| Unit                  | Mocked (RedisService)            | `pnpm test`          | None                              |
-| Redis Integration     | Real Redis (Testcontainers)      | `pnpm test:redis`    | Per file (`beforeAll`/`afterAll`) |
-| E2E                   | Real Redis (Testcontainers)      | `pnpm test:e2e`      | Per worker or per file            |
-| Future DB Integration | Real PostgreSQL (Testcontainers) | `pnpm test:db` (new) | Per file                          |
-
-**Migration strategy:**
-
-- Phase 1: Add Testcontainers dependencies and create reusable Redis container utility in `apps/api/test/`.
-- Phase 2: Migrate `pnpm test:redis` suite (2 files) to Testcontainers — these are the purest integration tests and benefit most from isolation.
-- Phase 3: Migrate `pnpm test:e2e` suite (13 files) to Testcontainers — run containers per test file or worker.
-- Phase 4: When PostgreSQL is introduced, use `@testcontainers/postgresql` from the start.
-- Phase 5: Remove dependency on `compose.dev.yml` for testing (keep it for local development only). Update `env/.env.test` and `env/.env.redis-test` to not be used by automated tests.
-
-### Alternatives Considered
-
-#### 1. Continue Mocking Infrastructure Dependencies (Unit Tests Only)
-
-**Approach:** Keep all tests mocked; never use real Redis/PostgreSQL in automated tests.
-
-**Advantages:**
-
-- Fastest execution.
-- Zero infrastructure dependencies.
-- Deterministic, no flakiness from container startup.
-
-**Disadvantages:**
-
-- Cannot verify actual Redis behavior: atomic Lua scripts, TTL expiration, connection lifecycle, reconnection, key eviction, rate limiter block logic, concurrent request handling.
-- Cannot verify PostgreSQL behavior: constraints, transactions, migrations, query plans.
-- Mocks diverge from real behavior over time (e.g., mock `setNxEx` returns `true` but real Redis fails under network partition).
-- No confidence in infrastructure integration — the primary failure mode in production.
-
-**Verdict:** Rejected for Integration/E2E tests. Mocks are appropriate for unit tests (already done), but insufficient for validating infrastructure contracts.
-
-#### 2. Locally Installed or Manually Managed Services
-
-**Approach:** Developers install Redis/PostgreSQL locally (via Homebrew, apt, etc.) and run them as services. Tests connect to `localhost:6379`/`5432`.
-
-**Advantages:**
-
-- No Docker required for tests.
-- Persistent state across test runs (can be useful for debugging).
-
-**Disadvantages:**
-
-- Version drift: developer has Redis 7.4, CI has 8.2, production has 8.0.
-- Port conflicts: only one Redis instance on default port.
-- Shared state: tests pollute each other's data; no isolation.
-- Manual setup: every developer and CI runner must install and configure services.
-- No cleanup automation: databases accumulate test data.
-- PostgreSQL requires manual database/user creation and migration runs.
-
-**Verdict:** Rejected. The project already uses Docker for development; relying on local services adds inconsistency.
-
-#### 3. Docker Compose for Test Infrastructure
-
-**Approach:** Use `docker compose -f compose.test.yml up` in CI and locally. Tests connect to fixed service names/ports.
-
-**Advantages:**
-
-- Reuses existing Compose knowledge.
-- Single Redis/PostgreSQL instance shared across all test files (lower resource usage).
-- Familiar to developers already using `compose.dev.yml`.
-
-**Disadvantages:**
-
-- **Fixed ports**: Host port binding prevents parallel test execution (or requires complex port mapping).
-- **Shared mutable state**: All tests hit the same Redis/PostgreSQL; cleanup is manual and error-prone.
-- **Lifecycle coupling**: Compose starts all services even if a test suite only needs Redis.
-- **CI complexity**: Requires Docker + Compose plugin, service health checks, startup ordering.
-- **No per-test isolation**: Cannot run two test files in parallel against different Redis instances.
-- **Orphaned containers**: Failed test runs leave containers running; requires explicit `down` in CI.
-- **Developer friction**: Must remember to run `compose up` before tests, `compose down` after.
-
-**Verdict:** Rejected for automated testing. Compose remains valuable for **local development** (`compose.dev.yml` — hot reloading, persistent volumes, multi-service stack) but is the wrong tool for test isolation.
-
-#### 4. Testcontainers
-
-**Approach:** Programmatic container lifecycle in test code. Each test file/worker starts its own containers with dynamic ports.
-
-**Advantages:**
-
-- **True isolation**: Each test file gets a fresh Redis/PostgreSQL instance. No state leakage.
-- **Dynamic ports**: No conflicts; parallel execution across workers is safe.
-- **Explicit lifecycle**: Containers start in `beforeAll`, stop in `afterAll`. Failures trigger cleanup via Vitest's `afterAll`.
-- **Version pinning**: Image tags in code (`redis:8.2-alpine`) guarantee consistency across local/CI/production.
-- **CI-native**: Works in any environment with Docker (GitHub Actions, GitLab CI, local). No Compose files needed.
-- **Wait strategies**: Built-in readiness checks (TCP, HTTP, log patterns) replace arbitrary sleeps.
-- **Reuses application code**: Tests use the real `RedisService`, `createRedisClient`, and configuration — no test-only abstractions.
-- **Parallelizable**: Vitest workers can run independent test files concurrently, each with its own containers.
-
-**Disadvantages:**
-
-- **Docker requirement**: Docker daemon must be available (already true for this project's development workflow).
-- **Startup latency**: ~1-3s per container per test file. Mitigated by per-file lifecycle (not per-test) and parallel workers.
-- **Resource usage**: Multiple Redis containers simultaneously. Mitigated by Vitest's `poolOptions.threads.maxThreads` and container reuse within a file.
-- **Learning curve**: Team must understand Testcontainers patterns (minimal for this codebase).
-
-**Verdict:** **Selected.** Testcontainers directly addresses the project's pain points (manual setup, shared state, no CI, port conflicts) while aligning with the architecture (real infrastructure, application's actual client, explicit lifecycle).
+Use **Testcontainers** (Node.js) to start isolated Redis/PostgreSQL containers per test file or worker, with dynamic ports.
 
 ### Consequences
 
-**Positive consequences**
+- `apps/api/test/testcontainers.ts` provides `TestRedis` class.
+- `pnpm test:redis` and `pnpm test:e2e` use real containers.
+- Unit tests (`pnpm test`) continue mocking `RedisService` — no Docker required.
+- Image versions pinned in code (`redis:8.2-alpine`).
 
-- **Reproducible integration tests**: Every test run gets a clean Redis/PostgreSQL instance with the exact version used in production.
-- **Real infrastructure behavior**: Atomic Lua scripts, TTL, reconnection, rate limiter block logic, and concurrent requests are exercised against actual Redis.
-- **Better isolation**: No test pollution; parallel execution is safe.
-- **Reduced manual setup**: Developers run `pnpm test:e2e` or `pnpm test:redis` without starting Docker Compose first.
-- **CI-ready**: GitHub Actions can run tests with only `docker: true` — no Compose, no fixed ports, no service management.
-- **Explicit dependencies**: Test files declare their infrastructure needs in code, not in external Compose files.
-- **PostgreSQL ready**: When database integration begins, `@testcontainers/postgresql` provides the same benefits.
+---
 
-**Trade-offs**
+## ADR-017: OTP Verification Attempt Lockout for Enrollment Security
 
-- **Docker availability**: Tests fail fast with a clear error if Docker is not running (acceptable — the project already requires Docker for development).
-- **Additional test execution time**: Container startup adds ~1-3s per test file. Unit tests are unaffected. Total suite time increases but remains acceptable for the confidence gained.
-- **Container lifecycle management**: Must ensure `afterAll` cleanup runs even on test failures. Vitest's `afterAll` handles this; Testcontainers also has a Ryuk sidecar for orphan cleanup.
-- **Resource consumption during parallel execution**: Multiple workers starting containers simultaneously. Configure Vitest `maxThreads` appropriately (default is CPU cores; can be limited).
-- **Image pull latency**: First run pulls images. Subsequent runs use local cache. CI should pre-pull or cache layers.
+- **Status:** Accepted
+- **Date:** 2026-11-08
 
-### Scope and Constraints
+### Context
 
-- **Testcontainers is not mandatory for every test.** Unit tests continue to mock `RedisService` and run in milliseconds.
-- **Containers start only when required.** A test file imports the container utility only if it needs real infrastructure.
-- **Infrastructure image versions are explicit.** `redis:8.2-alpine`, `postgres:17.6-alpine` — matching Compose files.
-- **Tests never depend on developer-local services.** The test container utility provides the only real infrastructure for automated tests.
-- **No silent fallback to mocks.** If a test is written to use Testcontainers, it must use real infrastructure. Failure to start a container is a test error, not a fallback trigger.
-- **Unit tests remain fast.** No Docker in `pnpm test`. The existing mock-based unit tests are preserved.
-- **Local development Compose unchanged.** `compose.dev.yml` continues to serve the multi-service development stack with hot reloading and persistent volumes. Testcontainers is for **automated testing only**.
+The enrollment module implements OTP-based phone verification. The existing implementation:
+
+- Generates a 6-digit OTP (900,000 possibilities) and stores it in Redis with a 120s TTL using `SET NX EX`.
+- Tracks failed verification attempts in a separate Redis key (`attempts:<phone>`) with a 120s TTL (matching the OTP window).
+- Atomically verifies and counts attempts via a Lua script: on success, both keys are deleted; on failure, attempts are incremented and the OTP is invalidated when attempts reach the configured maximum (default 5).
+- Has a per-phone hourly rate limit (5 sends/hour) on the challenge endpoint via a sorted-set Lua script.
+- Has per-IP throttling via `@nestjs/throttler` (challenge: 2/120s, verify: 5/120s).
+
+**Vulnerability discovered:** The attempt limit is bypassable by requesting a new OTP after the previous one is invalidated:
+
+1. Attacker requests OTP → OTP stored, no attempts key yet.
+2. Attacker submits 5 wrong OTPs → attempts=5, OTP key UNLINKed (max reached).
+3. Attacker requests new OTP → SET NX EX succeeds (old OTP key gone), new OTP stored, attempts=5 persists (TTL ~115s).
+4. Attacker submits wrong OTP → attempts=6 ≥ 5 → new OTP immediately UNLINKed (1 guess per new OTP).
+5. Rate limit allows 5 sends/hour → 9 total guesses/hour (5 initial + 4×1).
+6. If the attempts key expires (120s from first failure) before the next OTP request, the counter resets → 5 fresh attempts per OTP → 25 guesses/hour.
+7. **Critical:** The verify script's SUCCESS path does NOT check the attempts counter. A correct guess on a newly-issued OTP after max attempts still succeeds — the lockout only blocks wrong guesses.
+
+Additionally, the 120s cooldown (enforced by `SET NX EX` on the OTP key) is bypassed when the OTP is invalidated by the attempt limit, because the key is deleted.
+
+The rate limit and attempt limit enforce different boundaries: rate limit restricts OTP _issuance_ (5/hour), attempt limit restricts _verification guesses_ per OTP (5). They are not integrated, allowing the bypass.
+
+### Decision
+
+Introduce a **lockout mechanism** that prevents both OTP issuance and verification after the maximum failed attempts is reached, with a configurable lockout window independent of the OTP TTL.
+
+**Changes:**
+
+1. **New Redis key:** `neo-bank:enrollments:challenge:lockout:<phone>` — set atomically when attempts >= maxAttempts, TTL = `lockoutTtlSeconds` (configurable, default 900s = 15 min).
+
+2. **Extended attempts key TTL:** The `attempts` key TTL becomes `lockoutTtlSeconds` (not OTP TTL), so the failure counter persists across OTP regeneration within the lockout window.
+
+3. **Verify Lua script updated:**
+   - First check: if lockout key exists → return 0 (reject) WITHOUT incrementing attempts (prevents lockout extension via verification spam).
+   - On correct OTP: delete OTP key, attempts key, AND lockout key (defense-in-depth; success implies lockout shouldn't exist but clear it anyway).
+   - On failure: increment attempts; if attempts >= maxAttempts → SET lockout key with TTL, UNLINK OTP key.
+
+4. **Send (challenge) Lua script created:** New atomic `ISSUE_OTP_SCRIPT` combining:
+   - Lockout key check → return `3` (locked) if present.
+   - `SET NX EX` for OTP key → return `1` (created) or `0` (active OTP exists).
+   - This replaces the two-call sequence (`checkOtpRateLimit` + `setNxEx`) for the security-critical path. The hourly rate limit remains a separate preceding check (it's a quota, not a security lock).
+
+5. **Configuration:** Add `ENROLLMENTS_LOCKOUT_TTL_SECONDS` env var (default 900 = 15 min) and `ENROLLMENTS_MAX_VERIFY_ATTEMPTS` (existing, default 5).
+
+6. **Error responses:** Both locked send and locked verify return the same generic `OTP_RATE_LIMIT_EXCEEDED` / `OTP_VERIFICATION_FAILED` messages as existing rate-limit/verification failures, so attackers cannot distinguish lockout from other limits.
+
+### Reasons for Selecting This Approach
+
+- **Atomicity:** Lockout is set and checked within the same Lua scripts that modify the OTP/attempts state — no race window.
+- **Independent semantics:** Lockout TTL (security window) is independent of OTP TTL (issuance window). The attempts counter aligns with lockout, not OTP.
+- **Defense-in-depth:** Success path clears lockout; lockout check in verify doesn't increment counter (prevents DoS extension).
+- **Minimal API change:** Reuses existing error codes and generic messages; clients see no new error types.
+- **Rate limit preserved:** The hourly per-phone quota (5/hour) remains as a complementary spam control.
+
+### Alternatives Considered
+
+#### 1. Only extend attempts key TTL (no lockout key)
+
+Extend attempts TTL to e.g. 15 min. After max attempts, the attempts counter is ≥ max, so any new verify immediately fails (attempts ≥ max → UNLINK OTP). This gives 1 guess per new OTP, not 5. But:
+
+- The success path still doesn't check attempts → correct guess after max attempts succeeds.
+- No way to distinguish "locked" from "rate limited" in send path without a lockout key.
+- Less explicit semantics; harder to reason about.
+
+#### 2. Only add lockout check in verify (not in send)
+
+Verify would reject during lockout, but send could still issue new OTPs (wasting rate-limit quota, creating unverifiable OTPs). The race between send's rate-limit check + SET NX EX and verify's lockout set is small but non-zero.
+
+#### 3. Make lockout TTL = OTP TTL (120s)
+
+Defeats the purpose — the lockout would expire with the OTP, allowing immediate re-attempt. The lockout must exceed the OTP window to be effective.
+
+#### 4. IP-based lockout instead of per-phone
+
+The existing per-IP throttler handles IP-level abuse. A per-phone lockout is necessary because the attacker targets a specific victim's phone number, potentially from many IPs (distributed attack).
+
+#### 5. Progressive backoff (increasing lockout duration)
+
+More complex; not justified for the current threat model. A fixed configurable window is simpler and auditable.
+
+### Consequences
+
+**Positive**
+
+- Maximum incorrect OTP attempts is now a hard boundary that cannot be bypassed by requesting new OTPs.
+- Attackers get exactly `maxVerifyAttempts` (default 5) guesses per lockout window (default 15 min), regardless of OTP regeneration.
+- The per-phone rate limit (5/hour) and lockout (5 per 15 min) are complementary: rate limit prevents spam issuance, lockout prevents verification brute force.
+- Atomic Lua scripts ensure no race conditions between concurrent send/verify operations.
+- Generic error responses maintain indistinguishability of failure modes.
+
+**Negative**
+
+- Legitimate user who fails 5 times must wait the lockout window (15 min) before trying again. This is a UX trade-off for security; the window is configurable.
+- A DoS attacker could intentionally trigger lockouts for known phone numbers. However, the lockout is per-phone and requires 5 failed verifications (which the attacker must initiate). The rate limit (5 sends/hour) and per-IP throttle (2/120s) make mass lockout triggering costly.
+- Additional Redis key per phone during lockout (negligible memory).
 
 ### Implementation Notes
 
-1. **Reusable utility**: Create `apps/api/test/testcontainers.ts` with `startRedisContainer()`, `stopRedisContainer()`, and a Vitest global setup/teardown if needed.
-2. **Configuration integration**: Container utility returns connection config (`{ host, port, password }`) that tests pass to `createRedisClient()` or override `REDIS_CONFIG` in the testing module.
-3. **Parallel safety**: Use `fileParallelism: false` for Redis integration tests (they already have this). E2E tests can run in parallel if each worker starts its own Redis.
-4. **Cleanup**: Testcontainers' `container.stop()` in `afterAll`; Ryuk handles orphans if process crashes.
-5. **Environment variables**: Tests no longer read `REDIS_URL` from `env/.env.test` — they get dynamic connection info from the container utility.
+- **New key function** in `enrollments.keys.ts`: `challengeLockoutKey(phoneNumber)`.
+- **New env var** in `enrollments.env.ts`: `ENROLLMENTS_LOCKOUT_TTL_SECONDS` (default 900).
+- **Updated Lua scripts** in `redis.service.ts`:
+  - `VERIFY_OTP_ATTEMPTS_SCRIPT` → add lockout check at start, set lockout on max attempts, clear lockout on success.
+  - New `ISSUE_OTP_SCRIPT` for atomic lockout check + SET NX EX.
+- **Updated `RedisService` methods**: `verifyOtpAndCountAttempts`, new `issueOtp` (or similar), `checkOtpRateLimit` remains for hourly quota.
+- **Updated `EnrollmentsService`**: use new `issueOtp` method (lockout check + SET NX EX), pass lockout TTL to verify.
+- **Configuration**: add lockout TTL to `EnrollmentsConfig`.
+- **Tests**: add redis-spec and e2e tests for lockout behavior (bypass attempts, concurrent send/verify, lockout expiry, success clears lockout).
+
+### Attack Probability Assessment (Quantitative)
+
+**Parameters:**
+
+- OTP space: 900,000 (6 digits, 100000–999999)
+- Max attempts per lockout window: 5
+- Lockout window: 900s (15 min)
+- Rate limit: 5 OTP sends/hour per phone
+- Per-IP verify throttle: 5/120s (not the binding constraint for distributed attacks)
+
+**Single lockout window (15 min):**
+
+- Attacker gets exactly 5 guesses (maxAttempts) before lockout.
+- Probability of success in one window: `P = 1 - (1 - 1/900000)^5 ≈ 5.56e-6` (0.000556%)
+
+**Per hour (4 lockout windows × 5 attempts = 20 guesses max, but rate limit caps at 5 OTPs/hour = 5 windows max if spaced):**
+
+- Effective: 5 guesses per hour (rate limit 5 sends, each send allows up to 5 attempts but lockout stops after first 5).
+- Actually: first OTP gives 5 attempts → lockout. Subsequent sends during lockout are rejected. After lockout expires (15 min), attacker can send 1 OTP (if rate limit allows), get 5 attempts, lockout again. In 60 min: 60/15 = 4 lockout cycles → 4 × 5 = 20 attempts, but rate limit 5/hour caps at 5 OTPs = 5 × 5 = 25 attempts IF lockout expires before rate limit window ends... wait, rate limit is rolling 60 min. With lockout 15 min, the attacker can at most get 5 OTPs/hour. Each OTP before lockout gives 5 attempts? No — after first OTP's 5 attempts, lockout triggers. Next OTP request during lockout is rejected by lockout check. So only 1 OTP per lockout window = 5 attempts per 15 min = 20 attempts/hour max, but rate limit 5/hour means at most 5 OTPs = 25 attempts if lockout didn't block sends. With lockout blocking sends, it's 4 windows × 5 = 20 attempts/hour. But the lockout prevents the send, so rate limit isn't the binding constraint — the lockout is.
+
+**Worst-case per hour (lockout blocks sends, 4 lockout cycles/hour):**
+
+- 4 × 5 = 20 guesses/hour
+- `P = 1 - (1 - 1/900000)^20 ≈ 2.22e-5` (0.00222%)
+
+**Comparison to pre-fix (no lockout, 25 guesses/hour max):**
+
+- Pre-fix: `P = 1 - (1 - 1/900000)^25 ≈ 2.78e-5` (0.00278%)
+- Fix reduces hourly success probability by ~20% and more importantly makes the bound **predictable and non-bypassable** (exactly maxAttempts per lockout window, not per OTP).
+
+**Assumptions:**
+
+- OTP is uniformly random (cryptographically secure `randomInt`).
+- Attacker cannot observe OTP values (no SMS delivery yet).
+- Attacker cannot bypass rate limits (5 sends/hour per phone, 2/120s per IP).
+- Lockout TTL is exactly enforced (Redis TTL accuracy ±1s).
+- Distributed attack from many IPs: per-IP throttle not binding; per-phone rate limit and lockout are the only constraints.
 
 ### References
 
-- [Testcontainers Node.js Documentation](https://node.testcontainers.org/)
-- [@testcontainers/redis](https://www.npmjs.com/package/@testcontainers/redis)
-- [@testcontainers/postgresql](https://www.npmjs.com/package/@testcontainers/postgresql)
-- ADR-012, ADR-013 (Redis integration)
-- ADR-015 (Rate limiting with Redis)
-- `apps/api/AGENTS.md` (Redis rules, testing expectations)
+- OWASP Authentication Cheat Sheet: Brute Force Protection
+- NIST SP 800-63B: Authentication and Lifecycle Management
+- ADR-013 (Redis module), ADR-015 (Rate limiting), ADR-016 (Testcontainers)
+- `prompts/_023-production-ready-otp-enrollment-flow.md`, `prompts/_025-otp-slow-harassment-prevention.md`
+
+---

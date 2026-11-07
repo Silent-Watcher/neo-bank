@@ -39,3 +39,17 @@ export function challengeRateLimitKey(phoneNumber: string): string {
     identifier: phoneNumber,
   });
 }
+
+/**
+ * Redis key for verification lockout: `neo-bank:enrollments:challenge:lockout:<phone>`
+ * Set when max verification attempts are exceeded. TTL = lockout window (configurable, default 900s).
+ * While present, both OTP issuance and verification are rejected for this phone number.
+ */
+export function challengeLockoutKey(phoneNumber: string): string {
+  return buildRedisKey({
+    module: 'enrollments',
+    feature: 'challenge',
+    resource: 'lockout',
+    identifier: phoneNumber,
+  });
+}

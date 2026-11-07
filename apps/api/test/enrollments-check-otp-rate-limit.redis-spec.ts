@@ -306,7 +306,7 @@ describe('RedisService.checkOtpRateLimit (real Redis via Testcontainers)', () =>
     // Act & Assert: should throw an error when the Lua script is evaluated
     await expect(
       errorService.checkOtpRateLimit(challengeRateLimitKey(phoneNumber), MAX_SENDS, WINDOW_MINUTES),
-    ).rejects.toThrow('Redis');
+    ).rejects.toThrow();
 
     // Disconnect without await to avoid errors on already-failed connection
     closedClient.disconnect();

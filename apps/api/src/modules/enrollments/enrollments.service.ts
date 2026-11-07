@@ -6,9 +6,11 @@ import { AppHttpException } from '#errors/app-http.exception.js';
 import { ErrorCode } from '#errors/error.code.js';
 import { RedisService } from '#src/shared/redis/redis.service.js';
 import { ENROLLMENTS_CONFIG } from '#config/enrollments.config.js';
+import type { EnrollmentsConfig } from '#config/enrollments.config.js';
 
 import {
   challengeAttemptsKey,
+  challengeLockoutKey,
   challengeOtpKey,
   challengeRateLimitKey,
 } from './enrollments.keys.js';
@@ -57,11 +59,27 @@ export class EnrollmentsService {
       );
     }
 
+    // Atomically check the lockout and store the OTP: an OTP can never be
+    // issued while a verification lockout is active for this phone number.
     const otp = randomInt(OTP_MIN, OTP_MAX + 1).toString();
-    const key = challengeOtpKey(phoneNumber);
-    const created = await this.redisService.setNxEx(key, otp, CHALLENGE_OTP_TTL_SECONDS);
+    const issueResult = await this.redisService.issueOtp(
+      challengeOtpKey(phoneNumber),
+      challengeLockoutKey(phoneNumber),
+      otp,
+      CHALLENGE_OTP_TTL_SECONDS,
+    );
 
-    if (!created) {
+    if (issueResult === 'locked') {
+      // Indistinguishable from the hourly quota to clients: same error code and
+      // generic detail, so the lockout state is not disclosed.
+      throw new AppHttpException(
+        ErrorCode.OtpRateLimitExceeded,
+        OTP_RATE_LIMIT_DETAIL,
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+
+    if (issueResult === 'exists') {
       throw new AppHttpException(
         ErrorCode.OtpVerificationFailed,
         VERIFICATION_FAILED_DETAIL,
@@ -74,18 +92,16 @@ export class EnrollmentsService {
   }
 
   async verifyChallenge(phone: string, otp: string): Promise<{ phoneNumber: string }> {
-    const maxAttempts = this.configService.getOrThrow<{ maxVerifyAttempts: number }>(
-      ENROLLMENTS_CONFIG,
-    ).maxVerifyAttempts;
-    const otpKey = challengeOtpKey(phone);
-    const attemptsKey = challengeAttemptsKey(phone);
+    const { maxVerifyAttempts, lockoutTtlSeconds } =
+      this.configService.getOrThrow<EnrollmentsConfig>(ENROLLMENTS_CONFIG);
 
     const verified = await this.redisService.verifyOtpAndCountAttempts(
-      otpKey,
-      attemptsKey,
+      challengeOtpKey(phone),
+      challengeAttemptsKey(phone),
+      challengeLockoutKey(phone),
       otp,
-      maxAttempts,
-      CHALLENGE_OTP_TTL_SECONDS,
+      maxVerifyAttempts,
+      lockoutTtlSeconds,
     );
 
     if (!verified) {

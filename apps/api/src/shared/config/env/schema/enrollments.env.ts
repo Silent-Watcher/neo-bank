@@ -16,9 +16,16 @@ function positiveSafeInteger(field: string) {
 export const enrollmentsEnvSchema = z.object({
   // Maximum failed OTP verification attempts allowed during a single 120-second
   // validity window. When exceeded, the active OTP is invalidated and the
-  // client must wait for it to expire before requesting a new one.
+  // client must wait for the lockout window to expire before requesting a new one.
   ENROLLMENTS_MAX_VERIFY_ATTEMPTS: positiveSafeInteger('ENROLLMENTS_MAX_VERIFY_ATTEMPTS').default(
     5,
+  ),
+
+  // Lockout window in seconds after max verification attempts are exceeded.
+  // During this window, both OTP issuance and verification are rejected for the phone number.
+  // Independent of the 120-second OTP TTL. Default: 900s (15 minutes).
+  ENROLLMENTS_LOCKOUT_TTL_SECONDS: positiveSafeInteger('ENROLLMENTS_LOCKOUT_TTL_SECONDS').default(
+    900,
   ),
 });
 

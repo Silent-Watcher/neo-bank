@@ -95,14 +95,21 @@ describe('EnrollmentsController (e2e)', () => {
 
   it('validates the phone number, stores a six-digit OTP in Redis, and returns only the phone number', async () => {
     // Arrange
-    const setNxEx = vi
-      .fn<(key: string, value: string, ttlSeconds: number) => Promise<boolean>>()
-      .mockResolvedValue(true);
+    const issueOtp = vi
+      .fn<
+        (
+          otpKey: string,
+          lockoutKey: string,
+          otp: string,
+          ttlSeconds: number,
+        ) => Promise<'issued' | 'exists' | 'locked'>
+      >()
+      .mockResolvedValue('issued');
     const checkOtpRateLimit = vi
       .fn<(rateLimitKey: string, maxSends: number, windowMinutes: number) => Promise<boolean>>()
       .mockResolvedValue(true);
     const { app, close } = await createTestAppWithMockRedis();
-    overrideRedisService(app, { setNxEx, checkOtpRateLimit });
+    overrideRedisService(app, { issueOtp, checkOtpRateLimit });
 
     // Act
     const response = await request(app.getHttpServer())
@@ -118,9 +125,10 @@ describe('EnrollmentsController (e2e)', () => {
       5,
       60,
     );
-    expect(setNxEx).toHaveBeenCalledTimes(1);
-    const [key, otp, ttl] = setNxEx.mock.calls[0];
-    expect(key).toBe('neo-bank:enrollments:challenge:otp:09123456789');
+    expect(issueOtp).toHaveBeenCalledTimes(1);
+    const [otpKey, lockoutKey, otp, ttl] = issueOtp.mock.calls[0];
+    expect(otpKey).toBe('neo-bank:enrollments:challenge:otp:09123456789');
+    expect(lockoutKey).toBe('neo-bank:enrollments:challenge:lockout:09123456789');
     expect(otp).toMatch(/^[1-9]\d{5}$/);
     expect(ttl).toBe(120);
     await close();
@@ -128,14 +136,21 @@ describe('EnrollmentsController (e2e)', () => {
 
   it('stores the OTP under the normalized phone number for a +98 country code', async () => {
     // Arrange
-    const setNxEx = vi
-      .fn<(key: string, value: string, ttlSeconds: number) => Promise<boolean>>()
-      .mockResolvedValue(true);
+    const issueOtp = vi
+      .fn<
+        (
+          otpKey: string,
+          lockoutKey: string,
+          otp: string,
+          ttlSeconds: number,
+        ) => Promise<'issued' | 'exists' | 'locked'>
+      >()
+      .mockResolvedValue('issued');
     const checkOtpRateLimit = vi
       .fn<(rateLimitKey: string, maxSends: number, windowMinutes: number) => Promise<boolean>>()
       .mockResolvedValue(true);
     const { app, close } = await createTestAppWithMockRedis();
-    overrideRedisService(app, { setNxEx, checkOtpRateLimit });
+    overrideRedisService(app, { issueOtp, checkOtpRateLimit });
 
     // Act
     const response = await request(app.getHttpServer())
@@ -150,7 +165,8 @@ describe('EnrollmentsController (e2e)', () => {
       5,
       60,
     );
-    expect(setNxEx.mock.calls[0][0]).toBe('neo-bank:enrollments:challenge:otp:09123456789');
+    expect(issueOtp.mock.calls[0][0]).toBe('neo-bank:enrollments:challenge:otp:09123456789');
+    expect(issueOtp.mock.calls[0][1]).toBe('neo-bank:enrollments:challenge:lockout:09123456789');
     await close();
   });
 
@@ -159,7 +175,7 @@ describe('EnrollmentsController (e2e)', () => {
     // rate limiter does not interfere (TRUST_PROXY=true in test env).
     const { app, close } = await createTestAppWithMockRedis();
     overrideRedisService(app, {
-      setNxEx: vi.fn().mockResolvedValue(true),
+      issueOtp: vi.fn().mockResolvedValue('issued'),
       checkOtpRateLimit: vi.fn().mockResolvedValue(true),
     });
     const invalidPhoneNumbers = ['02112345678', '0912 345 678', '0912345678', ''];
@@ -183,7 +199,7 @@ describe('EnrollmentsController (e2e)', () => {
     // Arrange
     const { app, close } = await createTestAppWithMockRedis();
     overrideRedisService(app, {
-      setNxEx: vi.fn().mockRejectedValue(new Error('connection lost')),
+      issueOtp: vi.fn().mockRejectedValue(new Error('connection lost')),
       checkOtpRateLimit: vi.fn().mockResolvedValue(true),
     });
 
@@ -201,14 +217,12 @@ describe('EnrollmentsController (e2e)', () => {
 
   it('serves a generic Problem Details response when the hourly OTP rate limit is exceeded', async () => {
     // Arrange
-    const setNxEx = vi
-      .fn<(key: string, value: string, ttlSeconds: number) => Promise<boolean>>()
-      .mockResolvedValue(true);
+    const issueOtp = vi.fn().mockResolvedValue('issued' as 'issued' | 'exists' | 'locked');
     const checkOtpRateLimit = vi
       .fn<(rateLimitKey: string, maxSends: number, windowMinutes: number) => Promise<boolean>>()
       .mockResolvedValue(false);
     const { app, close } = await createTestAppWithMockRedis();
-    overrideRedisService(app, { setNxEx, checkOtpRateLimit });
+    overrideRedisService(app, { issueOtp, checkOtpRateLimit });
 
     // Act
     const response = await request(app.getHttpServer())
@@ -220,7 +234,31 @@ describe('EnrollmentsController (e2e)', () => {
     expect(response.headers['content-type']).toContain('application/problem+json');
     expect(response.body.code).toBe('OTP_RATE_LIMIT_EXCEEDED');
     expect(response.body.detail).not.toMatch(/5|60|minute|hour|limit/i);
-    expect(setNxEx).not.toHaveBeenCalled();
+    expect(issueOtp).not.toHaveBeenCalled();
+    await close();
+  });
+
+  it('serves the identical generic rate-limit response when a verification lockout is active (indistinguishable from the hourly quota)', async () => {
+    // Arrange — the lockout result maps to the same client-facing error as the
+    // hourly quota, so attackers cannot distinguish lockout from quota.
+    const issueOtp = vi.fn().mockResolvedValue('locked' as const);
+    const checkOtpRateLimit = vi
+      .fn<(rateLimitKey: string, maxSends: number, windowMinutes: number) => Promise<boolean>>()
+      .mockResolvedValue(true);
+    const { app, close } = await createTestAppWithMockRedis();
+    overrideRedisService(app, { issueOtp, checkOtpRateLimit });
+
+    // Act
+    const response = await request(app.getHttpServer())
+      .post('/api/v1/enrollments/challenge')
+      .send({ phoneNumber: '09123456789' });
+
+    // Assert — same status, code, and detail shape as the hourly quota response.
+    expect(response.status).toBe(400);
+    expect(response.headers['content-type']).toContain('application/problem+json');
+    expect(response.body.code).toBe('OTP_RATE_LIMIT_EXCEEDED');
+    expect(response.body.detail).not.toMatch(/lock|lockout|attempt/i);
+    expect(issueOtp).toHaveBeenCalledTimes(1);
     await close();
   });
 
@@ -228,7 +266,7 @@ describe('EnrollmentsController (e2e)', () => {
     // Arrange
     const { app, close } = await createTestAppWithMockRedis();
     overrideRedisService(app, {
-      setNxEx: vi.fn().mockResolvedValue(true),
+      issueOtp: vi.fn().mockResolvedValue('issued'),
       checkOtpRateLimit: vi.fn().mockRejectedValue(new Error('connection lost')),
     });
 
@@ -274,9 +312,10 @@ describe('EnrollmentsController (e2e)', () => {
       expect(verifyOtpAndCountAttempts).toHaveBeenCalledWith(
         'neo-bank:enrollments:challenge:otp:09123456789',
         'neo-bank:enrollments:challenge:attempts:09123456789',
+        'neo-bank:enrollments:challenge:lockout:09123456789',
         '048391',
         5,
-        120,
+        900,
       );
       await close();
     });
@@ -296,9 +335,10 @@ describe('EnrollmentsController (e2e)', () => {
       expect(verifyOtpAndCountAttempts).toHaveBeenCalledWith(
         'neo-bank:enrollments:challenge:otp:09123456789',
         'neo-bank:enrollments:challenge:attempts:09123456789',
+        'neo-bank:enrollments:challenge:lockout:09123456789',
         '000001',
         5,
-        120,
+        900,
       );
       await close();
     });

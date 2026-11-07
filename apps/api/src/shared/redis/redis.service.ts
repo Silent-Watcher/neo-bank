@@ -24,22 +24,53 @@ end
 return 0
 `;
 
-// Atomic verify-and-count-attempts: compares OTP, consumes on match, or
-// increments attempt counter and invalidates OTP when max attempts reached.
-// KEYS[1] = OTP key, KEYS[2] = attempts key
-// ARGV[1] = submitted OTP, ARGV[2] = max attempts, ARGV[3] = TTL seconds
-// Returns: 1 = verified and consumed, 0 = failed (incremented attempts or OTP invalidated)
+// Atomic issue-OTP: checks lockout, then atomically stores the OTP with SET NX EX.
+// KEYS[1] = OTP key, KEYS[2] = lockout key
+// ARGV[1] = OTP value, ARGV[2] = OTP TTL seconds
+// Returns: 1 = issued (stored), 0 = active OTP already exists, 3 = lockout active
+const ISSUE_OTP_SCRIPT = `
+local otpKey = KEYS[1]
+local lockoutKey = KEYS[2]
+local otpValue = ARGV[1]
+local ttlSeconds = tonumber(ARGV[2])
+
+-- Lockout active: reject issuance without touching any state
+if redis.call('EXISTS', lockoutKey) == 1 then
+  return 3
+end
+
+-- Atomic SET NX EX: only succeeds if no active OTP exists
+local ok = redis.call('SET', otpKey, otpValue, 'EX', ttlSeconds, 'NX')
+if ok then
+  return 1
+end
+return 0
+`;
+
+// Atomic verify-and-count-attempts with lockout enforcement: rejects when a
+// lockout is active, consumes on match, or increments the attempt counter and
+// sets the lockout when max attempts is reached.
+// KEYS[1] = OTP key, KEYS[2] = attempts key, KEYS[3] = lockout key
+// ARGV[1] = submitted OTP, ARGV[2] = max attempts, ARGV[3] = lockout TTL seconds
+// Returns: 1 = verified and consumed, 0 = failed (locked, missing/incorrect OTP, or lockout set)
 const VERIFY_OTP_ATTEMPTS_SCRIPT = `
 local otpKey = KEYS[1]
 local attemptsKey = KEYS[2]
+local lockoutKey = KEYS[3]
 local submittedOtp = ARGV[1]
 local maxAttempts = tonumber(ARGV[2])
-local ttlSeconds = tonumber(ARGV[3])
+local lockoutTtlSeconds = tonumber(ARGV[3])
+
+-- Lockout active: reject without incrementing attempts (prevents lockout extension via spam)
+if redis.call('EXISTS', lockoutKey) == 1 then
+  return 0
+end
 
 local storedOtp = redis.call('GET', otpKey)
 if storedOtp == submittedOtp then
   redis.call('UNLINK', otpKey)
   redis.call('UNLINK', attemptsKey)
+  redis.call('UNLINK', lockoutKey)
   return 1
 end
 
@@ -47,11 +78,12 @@ end
 local attempts = redis.call('INCR', attemptsKey)
 local attemptsTtl = redis.call('TTL', attemptsKey)
 if attemptsTtl <= 0 then
-  redis.call('EXPIRE', attemptsKey, ttlSeconds)
+  redis.call('EXPIRE', attemptsKey, lockoutTtlSeconds)
 end
 
--- If max attempts reached, invalidate the OTP so no further attempts can succeed
+-- If max attempts reached, set the lockout and invalidate the OTP
 if attempts >= maxAttempts then
+  redis.call('SET', lockoutKey, '1', 'EX', lockoutTtlSeconds)
   redis.call('UNLINK', otpKey)
 end
 
@@ -104,6 +136,14 @@ export interface ScanKeysOptions {
   /** SCAN COUNT hint per iteration. */
   readonly count?: number;
 }
+
+/**
+ * Result of an atomic OTP issuance attempt.
+ * - `issued`: OTP was stored (no active OTP, no lockout).
+ * - `exists`: an active OTP already exists for this identity.
+ * - `locked`: a verification lockout is active for this identity.
+ */
+export type IssueOtpResult = 'issued' | 'exists' | 'locked';
 
 /**
  * Application-level interface for Redis operations. Owns the connection
@@ -228,29 +268,67 @@ export class RedisService implements OnModuleInit, OnApplicationShutdown {
   }
 
   /**
+   * Atomically checks the lockout and stores the OTP with `SET NX EX`, as a
+   * single Lua execution. Returns `'locked'` when a lockout key is present
+   * (no state is modified), `'exists'` when an active OTP already exists, or
+   * `'issued'` when the OTP was stored with the given TTL.
+   *
+   * Combining the lockout check and the NX store in one script closes the race
+   * where a concurrent verification sets the lockout between a separate check
+   * and the store: an OTP can never be created while a lockout is active.
+   */
+  async issueOtp(
+    otpKey: string,
+    lockoutKey: string,
+    otp: string,
+    ttlSeconds: number,
+  ): Promise<IssueOtpResult> {
+    const result: unknown = await this.client.eval(
+      ISSUE_OTP_SCRIPT,
+      2,
+      otpKey,
+      lockoutKey,
+      otp,
+      ttlSeconds,
+    );
+    if (result === 3 || result === '3') {
+      return 'locked';
+    }
+    if (result === 1 || result === '1') {
+      return 'issued';
+    }
+    return 'exists';
+  }
+
+  /**
    * Atomically verifies an OTP and tracks failed attempts, as a single Lua
-   * execution. On a correct OTP the OTP key and attempts key are both removed
-   * and `true` is returned. On a missing/incorrect OTP the attempts counter is
-   * incremented (with the OTP's TTL applied on first failure); when the counter
-   * reaches `maxAttempts` the OTP is invalidated so no further attempts can
-   * succeed. Returns `false` for every failure — callers cannot distinguish
-   * missing, expired, incorrect, or invalidated OTPs.
+   * execution. When a lockout key is present the verification is rejected
+   * immediately without touching the counters (so verification spam cannot
+   * extend the lockout). On a correct OTP the OTP, attempts, and lockout keys
+   * are all removed and `true` is returned. On a missing/incorrect OTP the
+   * attempts counter is incremented (with the lockout TTL applied on first
+   * failure); when the counter reaches `maxAttempts` the lockout key is set
+   * with `lockoutTtlSeconds` and the OTP is invalidated so no further attempts
+   * can succeed. Returns `false` for every failure — callers cannot
+   * distinguish locked, missing, expired, incorrect, or invalidated OTPs.
    */
   async verifyOtpAndCountAttempts(
     otpKey: string,
     attemptsKey: string,
+    lockoutKey: string,
     submittedOtp: string,
     maxAttempts: number,
-    ttlSeconds: number,
+    lockoutTtlSeconds: number,
   ): Promise<boolean> {
     const result: unknown = await this.client.eval(
       VERIFY_OTP_ATTEMPTS_SCRIPT,
-      2,
+      3,
       otpKey,
       attemptsKey,
+      lockoutKey,
       submittedOtp,
       maxAttempts,
-      ttlSeconds,
+      lockoutTtlSeconds,
     );
     return result === 1 || result === '1';
   }

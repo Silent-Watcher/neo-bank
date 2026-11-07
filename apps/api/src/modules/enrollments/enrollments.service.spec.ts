@@ -19,6 +19,7 @@ vi.mock('#config/env/env.config.js', () => ({
     REDIS_MAX_RETRIES_PER_REQUEST: 3,
     REDIS_SHUTDOWN_TIMEOUT_MS: 2000,
     ENROLLMENTS_MAX_VERIFY_ATTEMPTS: 5,
+    ENROLLMENTS_LOCKOUT_TTL_SECONDS: 900,
   },
 }));
 
@@ -29,21 +30,31 @@ const { randomIntMock } = vi.hoisted(() => ({
 vi.mock('node:crypto', () => ({ randomInt: randomIntMock }));
 
 import { RedisService } from '#src/shared/redis/redis.service.js';
+import type { IssueOtpResult } from '#src/shared/redis/redis.service.js';
 import { AppHttpException } from '#errors/app-http.exception.js';
 import { ErrorCode } from '#errors/error.code.js';
 import { CHALLENGE_OTP_TTL_SECONDS, EnrollmentsService } from './enrollments.service.js';
 
 describe('EnrollmentsService', () => {
   const redisService = {
-    setNxEx: vi.fn<(key: string, value: string, ttlSeconds: number) => Promise<boolean>>(),
+    issueOtp:
+      vi.fn<
+        (
+          otpKey: string,
+          lockoutKey: string,
+          otp: string,
+          ttlSeconds: number,
+        ) => Promise<IssueOtpResult>
+      >(),
     verifyOtpAndCountAttempts:
       vi.fn<
         (
           otpKey: string,
           attemptsKey: string,
+          lockoutKey: string,
           otp: string,
           maxAttempts: number,
-          ttlSeconds: number,
+          lockoutTtlSeconds: number,
         ) => Promise<boolean>
       >(),
     checkOtpRateLimit:
@@ -56,13 +67,13 @@ describe('EnrollmentsService', () => {
 
   beforeEach(async () => {
     randomIntMock.mockReset();
-    redisService.setNxEx.mockReset();
-    redisService.setNxEx.mockResolvedValue(true);
+    redisService.issueOtp.mockReset();
+    redisService.issueOtp.mockResolvedValue('issued');
     redisService.checkOtpRateLimit.mockReset();
     redisService.checkOtpRateLimit.mockResolvedValue(true);
     redisService.verifyOtpAndCountAttempts.mockReset();
     redisService.verifyOtpAndCountAttempts.mockResolvedValue(false);
-    configService.getOrThrow.mockReturnValue({ maxVerifyAttempts: 5 });
+    configService.getOrThrow.mockReturnValue({ maxVerifyAttempts: 5, lockoutTtlSeconds: 900 });
 
     const module = await Test.createTestingModule({
       providers: [
@@ -75,7 +86,7 @@ describe('EnrollmentsService', () => {
     service = module.get(EnrollmentsService);
   });
 
-  it('stores the generated OTP in Redis under the naming-convention key with an exact 120-second TTL using SET NX EX', async () => {
+  it('stores the generated OTP in Redis under the naming-convention key with an exact 120-second TTL via the atomic issue script', async () => {
     // Arrange
     randomIntMock.mockReturnValue(483_921);
 
@@ -83,9 +94,10 @@ describe('EnrollmentsService', () => {
     await service.requestChallenge('09123456789');
 
     // Assert
-    expect(redisService.setNxEx).toHaveBeenCalledTimes(1);
-    const [key, otp, ttl] = redisService.setNxEx.mock.calls[0];
-    expect(key).toBe('neo-bank:enrollments:challenge:otp:09123456789');
+    expect(redisService.issueOtp).toHaveBeenCalledTimes(1);
+    const [otpKey, lockoutKey, otp, ttl] = redisService.issueOtp.mock.calls[0];
+    expect(otpKey).toBe('neo-bank:enrollments:challenge:otp:09123456789');
+    expect(lockoutKey).toBe('neo-bank:enrollments:challenge:lockout:09123456789');
     expect(otp).toBe('483921');
     expect(ttl).toBe(CHALLENGE_OTP_TTL_SECONDS);
   });
@@ -106,11 +118,11 @@ describe('EnrollmentsService', () => {
     // Arrange & Act
     randomIntMock.mockReturnValue(100_000);
     await service.requestChallenge('09123456789');
-    const lowerOtp = redisService.setNxEx.mock.calls[0][1];
+    const lowerOtp = redisService.issueOtp.mock.calls[0][2];
 
     randomIntMock.mockReturnValue(999_999);
     await service.requestChallenge('09123456789');
-    const upperOtp = redisService.setNxEx.mock.calls[1][1];
+    const upperOtp = redisService.issueOtp.mock.calls[1][2];
 
     // Assert
     expect(lowerOtp).toBe('100000');
@@ -129,10 +141,10 @@ describe('EnrollmentsService', () => {
     expect(randomIntMock).toHaveBeenCalledWith(100_000, 1_000_000);
   });
 
-  it('rejects issuance when an active OTP already exists (SET NX EX fails)', async () => {
+  it('rejects issuance when an active OTP already exists', async () => {
     // Arrange
     randomIntMock.mockReturnValue(483_921);
-    redisService.setNxEx.mockResolvedValue(false);
+    redisService.issueOtp.mockResolvedValue('exists');
 
     // Act & Assert
     await expect(service.requestChallenge('09123456789')).rejects.toThrow(AppHttpException);
@@ -141,10 +153,23 @@ describe('EnrollmentsService', () => {
     });
   });
 
+  it('rejects issuance with the generic rate-limit error when a verification lockout is active (indistinguishable from the hourly quota)', async () => {
+    // Arrange
+    randomIntMock.mockReturnValue(483_921);
+    redisService.issueOtp.mockResolvedValue('locked');
+
+    // Act & Assert
+    const promise = service.requestChallenge('09123456789');
+    await expect(promise).rejects.toThrow(AppHttpException);
+    await expect(promise).rejects.toMatchObject({
+      code: ErrorCode.OtpRateLimitExceeded,
+    });
+  });
+
   it('propagates Redis storage failures to the caller', async () => {
     // Arrange
     randomIntMock.mockReturnValue(483_921);
-    redisService.setNxEx.mockRejectedValue(new Error('connection lost'));
+    redisService.issueOtp.mockRejectedValue(new Error('connection lost'));
 
     // Act & Assert
     await expect(service.requestChallenge('09123456789')).rejects.toThrow('connection lost');
@@ -179,9 +204,9 @@ describe('EnrollmentsService', () => {
     await expect(promise).rejects.toMatchObject({
       code: ErrorCode.OtpRateLimitExceeded,
     });
-    // The rate limit check should be called, but setNxEx should not be called
+    // The rate limit check should be called, but issueOtp should not be called
     expect(redisService.checkOtpRateLimit).toHaveBeenCalledTimes(1);
-    expect(redisService.setNxEx).not.toHaveBeenCalled();
+    expect(redisService.issueOtp).not.toHaveBeenCalled();
   });
 
   it('propagates Redis rate limit check failures to the caller', async () => {
@@ -194,7 +219,7 @@ describe('EnrollmentsService', () => {
   });
 
   describe('verifyChallenge', () => {
-    it('verifies correct OTP and cleans up both OTP and attempts keys', async () => {
+    it('verifies correct OTP passing otp, attempts, and lockout keys with the configured max attempts and lockout TTL', async () => {
       // Arrange
       redisService.verifyOtpAndCountAttempts.mockResolvedValue(true);
 
@@ -205,16 +230,17 @@ describe('EnrollmentsService', () => {
       expect(redisService.verifyOtpAndCountAttempts).toHaveBeenCalledWith(
         'neo-bank:enrollments:challenge:otp:09123456789',
         'neo-bank:enrollments:challenge:attempts:09123456789',
+        'neo-bank:enrollments:challenge:lockout:09123456789',
         '048391',
         5,
-        CHALLENGE_OTP_TTL_SECONDS,
+        900,
       );
       expect(result).toEqual({ phoneNumber: '09123456789' });
       expect(Object.keys(result).length).toBe(1);
     });
 
     it('rejects every failure condition with the same generic error', async () => {
-      // Arrange — false covers missing, expired, incorrect, or exhausted attempts alike.
+      // Arrange — false covers locked, missing, expired, incorrect, or exhausted attempts alike.
       redisService.verifyOtpAndCountAttempts.mockResolvedValue(false);
 
       // Act & Assert — one error code for all of them.
@@ -237,9 +263,9 @@ describe('EnrollmentsService', () => {
       );
     });
 
-    it('uses the configured max verification attempts from environment', async () => {
+    it('uses the configured max verification attempts and lockout TTL from environment', async () => {
       // Arrange
-      configService.getOrThrow.mockReturnValue({ maxVerifyAttempts: 3 });
+      configService.getOrThrow.mockReturnValue({ maxVerifyAttempts: 3, lockoutTtlSeconds: 300 });
       redisService.verifyOtpAndCountAttempts.mockResolvedValue(true);
 
       // Act
@@ -250,9 +276,10 @@ describe('EnrollmentsService', () => {
       expect(redisService.verifyOtpAndCountAttempts).toHaveBeenCalledWith(
         'neo-bank:enrollments:challenge:otp:09123456789',
         'neo-bank:enrollments:challenge:attempts:09123456789',
+        'neo-bank:enrollments:challenge:lockout:09123456789',
         '048391',
         3,
-        CHALLENGE_OTP_TTL_SECONDS,
+        300,
       );
     });
   });

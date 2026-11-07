@@ -86,6 +86,7 @@ cp env/.env.example env/.env.development
 | `RATE_LIMIT_LONG_LIMIT`            | Long-window max requests                  | `100`                                             |
 | `RATE_LIMIT_LONG_TTL_MINUTES`      | Long-window TTL in minutes                | `1`                                               |
 | `ENROLLMENTS_MAX_VERIFY_ATTEMPTS`  | Max failed OTP verify attempts per window | `5`                                               |
+| `ENROLLMENTS_LOCKOUT_TTL_SECONDS`  | Lockout window after max attempts (s)     | `900` (15 min)                                    |
 
 Startup fails fast with a readable Zod error if validation fails.
 
