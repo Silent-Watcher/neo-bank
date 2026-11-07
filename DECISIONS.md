@@ -206,7 +206,7 @@ It was rejected because it scatters validation logic, offers no type inference, 
 
 ### Consequences
 
-All environment variables must be declared in a Zod schema under `src/shared/config/env/schema/` and mapped through a namespaced configuration factory before any code can consume them.
+All environment variables must be declared in a Zod schema under `src/shared/config/env/schema/` and mapped through a `registerAs` factory before any code can consume them.
 
 **Positive consequences**
 
@@ -540,22 +540,13 @@ It was rejected in favor of a single global default with explicit, tested exclus
 
 ### Context
 
-The API needs a Redis client for upcoming features (OTP storage and rate
-limiting for enrollments first). NestJS has no first-party Redis integration,
-so the choice is between the raw client, a third-party NestJS wrapper such as
-`@nestjs-modules/ioredis`, or a generic caching abstraction.
+The API needs a Redis client for upcoming features (OTP storage and rate limiting for enrollments first). NestJS has no first-party Redis integration, so the choice is between the raw client, a third-party NestJS wrapper such as `@nestjs-modules/ioredis`, or a generic caching abstraction.
 
-The project's configuration (Zod-validated env, ADR-004), logging (Pino,
-ADR-008/009), health checks (Terminus), and lifecycle conventions are already
-established; the integration must build on them rather than introduce a
-parallel system.
+The project's configuration (Zod-validated env, ADR-004), logging (Pino, ADR-008/009), health checks (Terminus), and lifecycle conventions are already established; the integration must build on them rather than introduce a parallel system.
 
 ### Decision
 
-Use **ioredis** directly as the Redis driver, with no additional wrapper
-packages. All NestJS-specific integration — provider registration, lifecycle,
-health, logging — is implemented in-house in the `RedisModule`
-(`apps/api/src/shared/redis/`), which owns the connection lifecycle entirely.
+Use **ioredis** directly as the Redis driver, with no additional wrapper packages. All NestJS-specific integration — provider registration, lifecycle, health, logging — is implemented in-house in the `RedisModule` (`apps/api/src/shared/redis/`), which owns the connection lifecycle entirely.
 
 ### Alternatives Considered
 
@@ -563,46 +554,32 @@ health, logging — is implemented in-house in the `RedisModule`
 
 Wrappers provide ready-made injection decorators and multi-client support.
 
-They were rejected because they add a dependency bound to NestJS/ioredis
-major-version compatibility, duplicate what this integration must own anyway
-(lifecycle, resilience, health), and would bypass the project's established
-configuration and logging conventions rather than build on them.
+They were rejected because they add a dependency bound to NestJS/ioredis major-version compatibility, duplicate what this integration must own anyway (lifecycle, resilience, health), and would bypass the project's established configuration and logging conventions rather than build on them.
 
 #### node-redis (redis package)
 
 The official client with first-class TypeScript support.
 
-It was rejected because ioredis's TypeScript ergonomics, retry/offline-queue
-options, and reconnect behavior are better documented for exactly the
-resilience requirements this integration has (bounded retries, no offline
-queue, capped backoff); both are mature, so the deciding factor is fit for
-the implemented resilience strategy.
+It was rejected because ioredis's TypeScript ergonomics, retry/offline-queue options, and reconnect behavior are better documented for exactly the resilience requirements this integration has (bounded retries, no offline queue, capped backoff); both are mature, so the deciding factor is fit for the implemented resilience strategy.
 
 ### Consequences
 
 **Positive consequences**
 
 - One runtime dependency (`ioredis`), no wrapper lock-in.
-- Full control over connection lifecycle, reconnection strategy, health
-  reporting, and logging — consistent with the rest of the codebase.
-- Swapping the driver later would require changing only the Redis module's
-  internals, not consumer code.
+- Full control over connection lifecycle, reconnection strategy, health reporting, and logging — consistent with the rest of the codebase.
+- Swapping the driver later would require changing only the Redis module's internals, not consumer code.
 
 **Trade-offs**
 
-- The integration code (provider, options, lifecycle, health) is maintained
-  in-house instead of inherited from a wrapper.
-- ioredis major upgrades must be evaluated against the options we rely on
-  (e.g. `maxRetriesPerRequest`, `enableOfflineQueue`).
+- The integration code (provider, options, lifecycle, health) is maintained in-house instead of inherited from a wrapper.
+- ioredis major upgrades must be evaluated against the options we rely on (e.g. `maxRetriesPerRequest`, `enableOfflineQueue`).
 
 ### Operational Implications
 
-- Connection initiation never blocks startup (lazy connect, background
-  connection with capped exponential backoff and jitter).
-- The reconnection strategy retries indefinitely, so Redis recovery needs no
-  application restart.
-- Graceful shutdown uses `QUIT` with a bounded timeout and `disconnect()`
-  fallback through the NestJS shutdown lifecycle — no extra signal handlers.
+- Connection initiation never blocks startup (lazy connect, background connection with capped exponential backoff and jitter).
+- The reconnection strategy retries indefinitely, so Redis recovery needs no application restart.
+- Graceful shutdown uses `QUIT` with a bounded timeout and `disconnect()` fallback through the NestJS shutdown lifecycle — no extra signal handlers.
 
 ## ADR-013: Global Redis Module with an Application-Level Abstraction
 
@@ -611,28 +588,16 @@ the implemented resilience strategy.
 
 ### Context
 
-ADR-012 selects ioredis as the driver. Application code should not couple to
-the driver or know how the connection is constructed, but some exceptional
-use cases still need native capabilities. The module must also be registered
-exactly once to guarantee a single client.
+ADR-012 selects ioredis as the driver. Application code should not couple to the driver or know how the connection is constructed, but some exceptional use cases still need native capabilities. The module must also be registered exactly once to guarantee a single client.
 
 ### Decision
 
-Isolate Redis behind a **global NestJS module** (`RedisModule`) registered
-only in `AppModule`:
+Isolate Redis behind a **global NestJS module** (`RedisModule`) registered only in `AppModule`:
 
-- The client is provided under a `Symbol` token (`REDIS_CLIENT`) defined
-  inside the module directory; the token is never referenced by consumers.
-- **`RedisService`** is the primary application interface: a small set of
-  app-level operations (get/set with TTL, `UNLINK` deletion, existence, TTL
-  queries, atomic counters, bounded `SCAN`, `PING`) — deliberately not a
-  one-to-one ioredis wrapper. It owns connection initiation, event logging
-  with dedupe, and graceful shutdown.
-- **`InjectRedis()`** exposes the raw client as an explicit escape hatch for
-  exceptional native use cases; its result type makes clear the client is
-  the shared instance.
-- The health indicator (`RedisHealthIndicator`) reports degraded (HTTP 200)
-  instead of down, because Redis is not a liveness dependency.
+- The client is provided under a `Symbol` token (`REDIS_CLIENT`) defined inside the module directory; the token is never referenced by consumers.
+- **`RedisService`** is the primary application interface: a small set of app-level operations (get/set with TTL, `UNLINK` deletion, existence, TTL queries, atomic counters, bounded `SCAN`, `PING`) — deliberately not a one-to-one ioredis wrapper. It owns connection initiation, event logging with dedupe, and graceful shutdown.
+- **`InjectRedis()`** exposes the raw client as an explicit escape hatch for exceptional native use cases; its result type makes clear the client is the shared instance.
+- The health indicator (`RedisHealthIndicator`) reports degraded (HTTP 200) instead of down, because Redis is not a liveness dependency.
 
 ### Alternatives Considered
 
@@ -640,24 +605,19 @@ only in `AppModule`:
 
 Simplest option — no service layer.
 
-It was rejected because it couples every consumer to ioredis, scatters
-connection-state and error-handling concerns, and makes future driver or
-key-convention changes application-wide refactors.
+It was rejected because it couples every consumer to ioredis, scatters connection-state and error-handling concerns, and makes future driver or key-convention changes application-wide refactors.
 
 #### String injection token
 
 Matches older NestJS examples.
 
-It was rejected in favor of a `Symbol` token to prevent accidental
-collisions and to keep the token unforgeable and internal.
+It was rejected in favor of a `Symbol` token to prevent accidental collisions and to keep the token unforgeable and internal.
 
 #### Feature modules import RedisModule themselves
 
 Explicit over global.
 
-It was rejected because it invites accidental double registration and
-per-module client misconfiguration; `@Global()` with a single registration
-in `AppModule` guarantees one client while consumers stay import-free.
+It was rejected because it invites accidental double registration and per-module client misconfiguration; `@Global()` with a single registration in `AppModule` guarantees one client while consumers stay import-free.
 
 ### Consequences
 
@@ -669,17 +629,13 @@ in `AppModule` guarantees one client while consumers stay import-free.
 
 **Trade-offs**
 
-- The abstraction must be maintained and deliberately restrained: every new
-  method is a decision, and there is a standing risk of it drifting into a
-  redundant command proxy (guarded by API AGENTS.md rules).
-- The escape hatch (`InjectRedis`) can be abused as the default path; its
-  use is therefore exceptional by convention and reviewed as such.
+- The abstraction must be maintained and deliberately restrained: every new method is a decision, and there is a standing risk of it drifting into a redundant command proxy (guarded by API AGENTS.md rules).
+- The escape hatch (`InjectRedis`) can be abused as the default path; its use is therefore exceptional by convention and reviewed as such.
 
 ### Operational Implications
 
 - Feature modules need no imports to use Redis — inject `RedisService`.
-- Resilience, shutdown, and health behavior are owned and tested in one
-  place (`src/shared/redis/`), including degraded-mode health semantics.
+- Resilience, shutdown, and health behavior are owned and tested in one place (`src/shared/redis/`), including degraded-mode health semantics.
 
 ## ADR-014: Use Swagger/OpenAPI with Development-Only Availability
 
@@ -688,75 +644,50 @@ in `AppModule` guarantees one client while consumers stay import-free.
 
 ### Context
 
-The API's endpoints are growing (health, enrollments, Problem Type docs), and
-their contracts now include structured conventions — a success envelope,
-RFC 9457 Problem Details, request-ID headers, URI versioning. Undocumented
-endpoints force every consumer (including future frontend work in this
-monorepo) to reverse-engineer behavior from code, and contract drift between
-implementation and any hand-written documentation goes unnoticed.
+The API's endpoints are growing (health, enrollments, Problem Type docs), and their contracts now include structured conventions — a success envelope, RFC 9457 Problem Details, request-ID headers, URI versioning. Undocumented endpoints force every consumer (including future frontend work in this monorepo) to reverse-engineer behavior from code, and contract drift between implementation and any hand-written documentation goes unnoticed.
 
 ### Decision
 
-Integrate Swagger/OpenAPI through the official **@nestjs/swagger** package,
-configured with `DocumentBuilder`/`SwaggerModule` on the existing Fastify
-adapter (`@fastify/static` serves the UI assets). Two constraints:
+Integrate Swagger/OpenAPI through the official **@nestjs/swagger** package, configured with `DocumentBuilder`/`SwaggerModule` on the existing Fastify adapter (`@fastify/static` serves the UI assets). Two constraints:
 
-- **Development-only:** Swagger routes are registered exclusively when
-  `APP_ENV` (via the existing validated server configuration) equals
-  `development`. There is no second environment-detection mechanism, and the
-  UI/JSON/YAML routes do not exist in test or production.
-- **Zod is the source of truth:** request schemas are generated from the
-  existing Zod schemas with Zod 4's native `z.toJSONSchema()` — no
-  `class-validator`/`class-transformer`, no duplicated DTO validation, and no
-  additional conversion dependency.
+- **Development-only:** Swagger routes are registered exclusively when `APP_ENV` (via the existing validated server configuration) equals `development`. There is no second environment-detection mechanism, and the UI/JSON/YAML routes do not exist in test or production.
+- **Zod is the source of truth:** request schemas are generated from the existing Zod schemas with Zod 4's native `z.toJSONSchema()` — no `class-validator`/`class-transformer`, no duplicated DTO validation, and no additional conversion dependency.
 
-Documentation lives on the real controllers via decorators; shared response
-contracts (envelope, Problem Details) have small reusable schema definitions.
+Documentation lives on the real controllers via decorators; shared response contracts (envelope, Problem Details) have small reusable schema definitions.
 
 ### Alternatives Considered
 
 #### Manual documentation (Markdown kept by hand)
 
-No dependency and no decorators, but it inevitably drifts from the code and
-gives readers no interactive exploration.
+No dependency and no decorators, but it inevitably drifts from the code and gives readers no interactive exploration.
 
-It was rejected because the API already has a machine-describable contract
-layer (decorators on the actual handlers), making manual duplication pure
-maintenance cost.
+It was rejected because the API already has a machine-describable contract layer (decorators on the actual handlers), making manual duplication pure maintenance cost.
 
 #### External documentation platform (ReadMe, Stoplight, Postman workspaces)
 
-Polished consumer-facing portals, but they add an external dependency and
-still require maintaining the API description somewhere — the same drift
-problem one layer further away.
+Polished consumer-facing portals, but they add an external dependency and still require maintaining the API description somewhere — the same drift problem one layer further away.
 
-They were rejected for an early-stage, single-team API; the OpenAPI document
-generated here can be imported into such platforms later if needed.
+They were rejected for an early-stage, single-team API; the OpenAPI document generated here can be imported into such platforms later if needed.
 
 ### Consequences
 
 **Positive consequences**
 
-- Documentation is generated from the actual controllers, so routes,
-  parameters, and status codes cannot silently diverge from the application.
+- Documentation is generated from the actual controllers, so routes, parameters, and status codes cannot silently diverge from the application.
 - Zod schemas and OpenAPI request schemas share one source of truth.
 - Test and production surfaces stay clean; only developers see the UI.
 
 **Trade-offs**
 
-- Every endpoint must carry Swagger decorators, and contract changes must
-  update them (enforced by the API AGENTS.md documentation rule).
+- Every endpoint must carry Swagger decorators, and contract changes must update them (enforced by the API AGENTS.md documentation rule).
 - Decorator-heavy controllers are slightly noisier.
-- OpenAPI 3.0 request schemas are snapshots of Zod's JSON Schema output; the
-  normalization transforms are documented in prose, not as schemas.
-- Authentication documentation (schemes, `@ApiBearerAuth()`) is deliberately
-  absent and requires a future decision.
+- OpenAPI 3.0 request schemas are snapshots of Zod's JSON Schema output; the normalization transforms are documented in prose, not as schemas.
+- Authentication documentation (schemes, `@ApiBearerAuth()`) is deliberately absent and requires a future decision.
 
 ### Operational Implications
 
 - `/docs` (UI), `/docs/json`, and `/docs/yaml` exist only in development.
-- Endpoint work is not complete until its OpenAPI documentation matches the
-  implementation, per the mandatory rule in `apps/api/AGENTS.md`.
+- Endpoint work is not complete until its OpenAPI documentation matches the implementation, per the mandatory rule in `apps/api/AGENTS.md`.
 
 ## ADR-015: Global HTTP Rate Limiting with Redis-Backed @nestjs/throttler
 
@@ -856,3 +787,203 @@ The installed `@nestjs/throttler` in-memory storage uses a sliding-window timest
 - [nest-lab issue #55](https://github.com/jmcdo29/nest-lab/issues/55)
 - [nest-lab issue #52](https://github.com/jmcdo29/nest-lab/issues/52)
 - ADR-012, ADR-013 (Redis integration)
+
+## ADR-016: Adopt Testcontainers for Integration and E2E Testing
+
+- **Status:** Accepted
+- **Date:** 2026-11-07
+
+### Context
+
+The API application (`apps/api`) has an established testing architecture with three test categories:
+
+1. **Unit tests** (`pnpm test`): 26 files, 198 tests. Fast, isolated, mock external infrastructure (RedisService overridden). Run in parallel via Vitest.
+2. **E2E tests** (`pnpm test:e2e`): 13 files, 62 tests. Supertest against real application bootstrap. Currently require a manually running Docker Compose stack (`compose.dev.yml`) providing Redis on port 6380. Tests connect to this shared Redis instance via `env/.env.test`.
+3. **Redis integration tests** (`pnpm test:redis`): 2 files, 32 tests. Direct ioredis client against real Redis from the same compose stack. Run sequentially (`fileParallelism: false`) to avoid state conflicts on the shared Redis.
+
+**Current infrastructure dependencies:**
+
+- **Redis** (primary): Used by enrollments OTP storage (atomic Lua scripts for SET NX EX, verify-and-count-attempts) and global rate limiting (custom RedisThrottlerStorage with atomic Lua script). Redis 8.x in Docker, 7+ locally.
+- **PostgreSQL**: Present in Docker Compose (`compose.dev.yml`, `compose.prod.yml`) but not yet used by application code — planned for future persistence layer.
+
+**Current limitations:**
+
+- **Manual infrastructure management**: Developers must start `docker compose -f compose.dev.yml up` before running `pnpm test:e2e` or `pnpm test:redis`. Forgetting this causes confusing connection errors.
+- **Fixed port binding**: Compose exposes Redis on host port 6379/6380, preventing parallel test runs and causing conflicts if a local Redis is already running.
+- **Shared state**: All tests share one Redis instance. Cleanup (`UNLINK` via `SCAN`) is required between tests; failures leave orphaned keys that affect subsequent runs.
+- **No CI pipeline**: GitHub Actions workflows don't exist yet. Adding CI would require Docker + Compose in the runner, manual service startup, and fixed port coordination.
+- **Implicit dependency**: The e2e suite's `env/.env.test` points at `redis://127.0.0.1:6380` — tests silently pass against a running compose stack but fail mysteriously without it.
+- **PostgreSQL readiness**: When database integration begins, the same problems will apply.
+
+### Decision
+
+Adopt **Testcontainers** (via `testcontainers`, `@testcontainers/redis`, and `@testcontainers/postgresql` when needed) as the standard mechanism for provisioning real infrastructure in Integration and E2E tests.
+
+**Core principles:**
+
+1. **Testcontainers is not mandatory for every test.** Unit tests must remain fast and isolated — continue mocking `RedisService` and other infrastructure.
+2. **Containers start only when required.** Integration/E2E test files that need real infrastructure will import and start containers; others remain unaffected.
+3. **Dynamic port mapping always.** Never use hardcoded host ports. Testcontainers assigns random host ports; tests connect via the mapped port.
+4. **Explicit image versions.** Pin Redis to `redis:8.2-alpine` (matching compose.dev.yml) and PostgreSQL to `postgres:17.6-alpine`. Never use `latest`.
+5. **No accidental local dependency.** Tests must never connect to developer-local Redis/PostgreSQL. Testcontainers provides the only real infrastructure for automated tests.
+6. **Lifecycle scopes:**
+   - **Redis**: Per test file (`beforeAll`/`afterAll`) for integration tests; per test worker for parallel E2E tests if needed.
+   - **PostgreSQL**: Per test file (schema migrations are expensive; share within a file).
+7. **Reuse the application's actual Redis client, configuration, and integration layers.** Do not create a separate test-only Redis implementation.
+
+**Packages to add (devDependencies in `apps/api`):**
+
+- `testcontainers` — core library
+- `@testcontainers/redis` — Redis module with ready check
+- `@testcontainers/postgresql` — PostgreSQL module (when database integration begins)
+
+**Test categorization after adoption:**
+
+| Test Category         | Infrastructure                   | Command              | Container Lifecycle               |
+| --------------------- | -------------------------------- | -------------------- | --------------------------------- |
+| Unit                  | Mocked (RedisService)            | `pnpm test`          | None                              |
+| Redis Integration     | Real Redis (Testcontainers)      | `pnpm test:redis`    | Per file (`beforeAll`/`afterAll`) |
+| E2E                   | Real Redis (Testcontainers)      | `pnpm test:e2e`      | Per worker or per file            |
+| Future DB Integration | Real PostgreSQL (Testcontainers) | `pnpm test:db` (new) | Per file                          |
+
+**Migration strategy:**
+
+- Phase 1: Add Testcontainers dependencies and create reusable Redis container utility in `apps/api/test/`.
+- Phase 2: Migrate `pnpm test:redis` suite (2 files) to Testcontainers — these are the purest integration tests and benefit most from isolation.
+- Phase 3: Migrate `pnpm test:e2e` suite (13 files) to Testcontainers — run containers per test file or worker.
+- Phase 4: When PostgreSQL is introduced, use `@testcontainers/postgresql` from the start.
+- Phase 5: Remove dependency on `compose.dev.yml` for testing (keep it for local development only). Update `env/.env.test` and `env/.env.redis-test` to not be used by automated tests.
+
+### Alternatives Considered
+
+#### 1. Continue Mocking Infrastructure Dependencies (Unit Tests Only)
+
+**Approach:** Keep all tests mocked; never use real Redis/PostgreSQL in automated tests.
+
+**Advantages:**
+
+- Fastest execution.
+- Zero infrastructure dependencies.
+- Deterministic, no flakiness from container startup.
+
+**Disadvantages:**
+
+- Cannot verify actual Redis behavior: atomic Lua scripts, TTL expiration, connection lifecycle, reconnection, key eviction, rate limiter block logic, concurrent request handling.
+- Cannot verify PostgreSQL behavior: constraints, transactions, migrations, query plans.
+- Mocks diverge from real behavior over time (e.g., mock `setNxEx` returns `true` but real Redis fails under network partition).
+- No confidence in infrastructure integration — the primary failure mode in production.
+
+**Verdict:** Rejected for Integration/E2E tests. Mocks are appropriate for unit tests (already done), but insufficient for validating infrastructure contracts.
+
+#### 2. Locally Installed or Manually Managed Services
+
+**Approach:** Developers install Redis/PostgreSQL locally (via Homebrew, apt, etc.) and run them as services. Tests connect to `localhost:6379`/`5432`.
+
+**Advantages:**
+
+- No Docker required for tests.
+- Persistent state across test runs (can be useful for debugging).
+
+**Disadvantages:**
+
+- Version drift: developer has Redis 7.4, CI has 8.2, production has 8.0.
+- Port conflicts: only one Redis instance on default port.
+- Shared state: tests pollute each other's data; no isolation.
+- Manual setup: every developer and CI runner must install and configure services.
+- No cleanup automation: databases accumulate test data.
+- PostgreSQL requires manual database/user creation and migration runs.
+
+**Verdict:** Rejected. The project already uses Docker for development; relying on local services adds inconsistency.
+
+#### 3. Docker Compose for Test Infrastructure
+
+**Approach:** Use `docker compose -f compose.test.yml up` in CI and locally. Tests connect to fixed service names/ports.
+
+**Advantages:**
+
+- Reuses existing Compose knowledge.
+- Single Redis/PostgreSQL instance shared across all test files (lower resource usage).
+- Familiar to developers already using `compose.dev.yml`.
+
+**Disadvantages:**
+
+- **Fixed ports**: Host port binding prevents parallel test execution (or requires complex port mapping).
+- **Shared mutable state**: All tests hit the same Redis/PostgreSQL; cleanup is manual and error-prone.
+- **Lifecycle coupling**: Compose starts all services even if a test suite only needs Redis.
+- **CI complexity**: Requires Docker + Compose plugin, service health checks, startup ordering.
+- **No per-test isolation**: Cannot run two test files in parallel against different Redis instances.
+- **Orphaned containers**: Failed test runs leave containers running; requires explicit `down` in CI.
+- **Developer friction**: Must remember to run `compose up` before tests, `compose down` after.
+
+**Verdict:** Rejected for automated testing. Compose remains valuable for **local development** (`compose.dev.yml` — hot reloading, persistent volumes, multi-service stack) but is the wrong tool for test isolation.
+
+#### 4. Testcontainers
+
+**Approach:** Programmatic container lifecycle in test code. Each test file/worker starts its own containers with dynamic ports.
+
+**Advantages:**
+
+- **True isolation**: Each test file gets a fresh Redis/PostgreSQL instance. No state leakage.
+- **Dynamic ports**: No conflicts; parallel execution across workers is safe.
+- **Explicit lifecycle**: Containers start in `beforeAll`, stop in `afterAll`. Failures trigger cleanup via Vitest's `afterAll`.
+- **Version pinning**: Image tags in code (`redis:8.2-alpine`) guarantee consistency across local/CI/production.
+- **CI-native**: Works in any environment with Docker (GitHub Actions, GitLab CI, local). No Compose files needed.
+- **Wait strategies**: Built-in readiness checks (TCP, HTTP, log patterns) replace arbitrary sleeps.
+- **Reuses application code**: Tests use the real `RedisService`, `createRedisClient`, and configuration — no test-only abstractions.
+- **Parallelizable**: Vitest workers can run independent test files concurrently, each with its own containers.
+
+**Disadvantages:**
+
+- **Docker requirement**: Docker daemon must be available (already true for this project's development workflow).
+- **Startup latency**: ~1-3s per container per test file. Mitigated by per-file lifecycle (not per-test) and parallel workers.
+- **Resource usage**: Multiple Redis containers simultaneously. Mitigated by Vitest's `poolOptions.threads.maxThreads` and container reuse within a file.
+- **Learning curve**: Team must understand Testcontainers patterns (minimal for this codebase).
+
+**Verdict:** **Selected.** Testcontainers directly addresses the project's pain points (manual setup, shared state, no CI, port conflicts) while aligning with the architecture (real infrastructure, application's actual client, explicit lifecycle).
+
+### Consequences
+
+**Positive consequences**
+
+- **Reproducible integration tests**: Every test run gets a clean Redis/PostgreSQL instance with the exact version used in production.
+- **Real infrastructure behavior**: Atomic Lua scripts, TTL, reconnection, rate limiter block logic, and concurrent requests are exercised against actual Redis.
+- **Better isolation**: No test pollution; parallel execution is safe.
+- **Reduced manual setup**: Developers run `pnpm test:e2e` or `pnpm test:redis` without starting Docker Compose first.
+- **CI-ready**: GitHub Actions can run tests with only `docker: true` — no Compose, no fixed ports, no service management.
+- **Explicit dependencies**: Test files declare their infrastructure needs in code, not in external Compose files.
+- **PostgreSQL ready**: When database integration begins, `@testcontainers/postgresql` provides the same benefits.
+
+**Trade-offs**
+
+- **Docker availability**: Tests fail fast with a clear error if Docker is not running (acceptable — the project already requires Docker for development).
+- **Additional test execution time**: Container startup adds ~1-3s per test file. Unit tests are unaffected. Total suite time increases but remains acceptable for the confidence gained.
+- **Container lifecycle management**: Must ensure `afterAll` cleanup runs even on test failures. Vitest's `afterAll` handles this; Testcontainers also has a Ryuk sidecar for orphan cleanup.
+- **Resource consumption during parallel execution**: Multiple workers starting containers simultaneously. Configure Vitest `maxThreads` appropriately (default is CPU cores; can be limited).
+- **Image pull latency**: First run pulls images. Subsequent runs use local cache. CI should pre-pull or cache layers.
+
+### Scope and Constraints
+
+- **Testcontainers is not mandatory for every test.** Unit tests continue to mock `RedisService` and run in milliseconds.
+- **Containers start only when required.** A test file imports the container utility only if it needs real infrastructure.
+- **Infrastructure image versions are explicit.** `redis:8.2-alpine`, `postgres:17.6-alpine` — matching Compose files.
+- **Tests never depend on developer-local services.** The test container utility provides the only real infrastructure for automated tests.
+- **No silent fallback to mocks.** If a test is written to use Testcontainers, it must use real infrastructure. Failure to start a container is a test error, not a fallback trigger.
+- **Unit tests remain fast.** No Docker in `pnpm test`. The existing mock-based unit tests are preserved.
+- **Local development Compose unchanged.** `compose.dev.yml` continues to serve the multi-service development stack with hot reloading and persistent volumes. Testcontainers is for **automated testing only**.
+
+### Implementation Notes
+
+1. **Reusable utility**: Create `apps/api/test/testcontainers.ts` with `startRedisContainer()`, `stopRedisContainer()`, and a Vitest global setup/teardown if needed.
+2. **Configuration integration**: Container utility returns connection config (`{ host, port, password }`) that tests pass to `createRedisClient()` or override `REDIS_CONFIG` in the testing module.
+3. **Parallel safety**: Use `fileParallelism: false` for Redis integration tests (they already have this). E2E tests can run in parallel if each worker starts its own Redis.
+4. **Cleanup**: Testcontainers' `container.stop()` in `afterAll`; Ryuk handles orphans if process crashes.
+5. **Environment variables**: Tests no longer read `REDIS_URL` from `env/.env.test` — they get dynamic connection info from the container utility.
+
+### References
+
+- [Testcontainers Node.js Documentation](https://node.testcontainers.org/)
+- [@testcontainers/redis](https://www.npmjs.com/package/@testcontainers/redis)
+- [@testcontainers/postgresql](https://www.npmjs.com/package/@testcontainers/postgresql)
+- ADR-012, ADR-013 (Redis integration)
+- ADR-015 (Rate limiting with Redis)
+- `apps/api/AGENTS.md` (Redis rules, testing expectations)

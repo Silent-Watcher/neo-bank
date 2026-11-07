@@ -4,6 +4,13 @@ Docker support for the monorepo: development environments with hot reloading
 and production images for all three applications, plus PostgreSQL and Redis
 as infrastructure services.
 
+**Note on automated testing (ADR-016):** Integration and e2e tests use
+Testcontainers (`apps/api/test/testcontainers.ts`) to start isolated
+`redis:8.2-alpine` (and future `postgres:17.6-alpine`) containers per test
+file with dynamic ports — no manual `docker compose up` required. The
+development Compose stack (`compose.dev.yml`) remains for local development
+(hot reloading, persistent volumes, multi-service stack).
+
 ## Files
 
 | File                                   | Purpose                                                                                    |

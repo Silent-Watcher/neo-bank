@@ -3,15 +3,17 @@ import { minutes, seconds, SkipThrottle, Throttle } from '@nestjs/throttler';
 import request from 'supertest';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 
+import { TestRedis } from './testcontainers.js';
 import type { RedisClient } from '#src/shared/redis/inject-redis.decorator.js';
 import { REDIS_CLIENT } from '#src/shared/redis/redis.constants.js';
+import { REDIS_CONFIG } from '#config/redis.config.js';
+import type { RedisConfig } from '#config/redis.config.js';
 import { createRedisClient } from '#src/shared/redis/redis.provider.js';
 import { createTestApp } from './create-test-app.js';
-import { _env } from '#src/shared/config/env/env.config.js';
 
-// Rate-limit HTTP e2e tests against the real Redis (pnpm test:redis).
-// Policies come from env/.env.redis-test: short 3 requests / 2 s,
-// long 1000 requests / 1 min, TRUST_PROXY=true (Fastify honors XFF).
+// Rate-limit HTTP e2e tests against real Redis via Testcontainers.
+// Policies: short 3 requests / 2 s, long 1000 requests / 1 min, TRUST_PROXY=true.
+// Each test file gets its own isolated Redis instance with dynamic port mapping.
 
 // Throwaway controllers exercising the official decorator APIs. One dedicated
 // route per scenario so tests never share quota state with each other.
@@ -103,7 +105,31 @@ class SkippedController {
 
 const API = '/api/v1/throttle-test';
 
+let testRedis: TestRedis;
 let inspectClient: RedisClient;
+let testRedisConfig: RedisConfig;
+
+function createAppWithTestRedis(
+  controllers?: any[],
+  options?: {
+    adapterTrustProxy?: boolean;
+  },
+): Promise<Awaited<ReturnType<typeof createTestApp>>> {
+  // Create a fresh Redis client for this app instance using the test Redis config
+  // This ensures the throttler uses the test Redis instance, not the original one
+  const testRedisClient = createRedisClient(testRedisConfig);
+
+  return createTestApp(undefined, {
+    controllers,
+    adapterTrustProxy: options?.adapterTrustProxy,
+    configureModule: (builder) =>
+      builder
+        .overrideProvider(REDIS_CONFIG)
+        .useValue(testRedisConfig)
+        .overrideProvider(REDIS_CLIENT)
+        .useValue(testRedisClient),
+  });
+}
 
 async function scanThrottleKeys(): Promise<string[]> {
   const keys: string[] = [];
@@ -130,17 +156,9 @@ async function cleanupKeys(): Promise<void> {
 }
 
 beforeAll(async () => {
-  inspectClient = createRedisClient({
-    url: _env.REDIS_URL,
-    username: _env.REDIS_USERNAME,
-    password: _env.REDIS_PASSWORD,
-    db: 0,
-    tls: false,
-    connectTimeoutMs: 2000,
-    commandTimeoutMs: 2000,
-    maxRetriesPerRequest: 1,
-    shutdownTimeoutMs: 1000,
-  });
+  testRedis = new TestRedis();
+  testRedisConfig = await testRedis.start();
+  inspectClient = createRedisClient(testRedisConfig);
   await inspectClient.connect();
   await cleanupKeys();
 });
@@ -149,13 +167,14 @@ afterEach(cleanupKeys);
 
 afterAll(async () => {
   await inspectClient.quit();
+  await testRedis.stop();
 });
 
-describe('Global rate limiting (e2e, real Redis)', () => {
+describe('Global rate limiting (e2e, real Redis via Testcontainers)', () => {
   describe('response headers', () => {
     it('sets named X-RateLimit headers for both policies on success', async () => {
       // Arrange
-      const app = await createTestApp(undefined, { controllers: [ThrottleTestController] });
+      const app = await createAppWithTestRedis([ThrottleTestController]);
 
       // Act
       const first = await request(app.getHttpServer()).get(`${API}/headers`);
@@ -177,7 +196,7 @@ describe('Global rate limiting (e2e, real Redis)', () => {
   describe('HTTP 429 contract', () => {
     it('returns RATE_LIMITED Problem Details with Retry-After and named headers', async () => {
       // Arrange
-      const app = await createTestApp(undefined, { controllers: [ThrottleTestController] });
+      const app = await createAppWithTestRedis([ThrottleTestController]);
       const server = app.getHttpServer();
 
       // Act
@@ -212,7 +231,7 @@ describe('Global rate limiting (e2e, real Redis)', () => {
 
     it('keeps rejecting requests during the block without extending it', async () => {
       // Arrange
-      const app = await createTestApp(undefined, { controllers: [ThrottleTestController] });
+      const app = await createAppWithTestRedis([ThrottleTestController]);
       const server = app.getHttpServer();
 
       // Act
@@ -236,7 +255,7 @@ describe('Global rate limiting (e2e, real Redis)', () => {
   describe('decorators', () => {
     it('supports method-level overrides of a single named policy', async () => {
       // Arrange
-      const app = await createTestApp(undefined, { controllers: [ThrottleTestController] });
+      const app = await createAppWithTestRedis([ThrottleTestController]);
       const server = app.getHttpServer();
 
       // Act
@@ -253,7 +272,7 @@ describe('Global rate limiting (e2e, real Redis)', () => {
 
     it('enforces the long policy independently when short is skipped', async () => {
       // Arrange
-      const app = await createTestApp(undefined, { controllers: [ThrottleTestController] });
+      const app = await createAppWithTestRedis([ThrottleTestController]);
       const server = app.getHttpServer();
 
       // Act
@@ -276,9 +295,7 @@ describe('Global rate limiting (e2e, real Redis)', () => {
 
     it('skips both named policies on annotated endpoints and controllers', async () => {
       // Arrange
-      const app = await createTestApp(undefined, {
-        controllers: [ThrottleTestController, SkippedController],
-      });
+      const app = await createAppWithTestRedis([ThrottleTestController, SkippedController]);
       const server = app.getHttpServer();
 
       // Act
@@ -298,7 +315,7 @@ describe('Global rate limiting (e2e, real Redis)', () => {
 
     it('re-enables throttling on a method inside a skipped controller', async () => {
       // Arrange
-      const app = await createTestApp(undefined, { controllers: [SkippedController] });
+      const app = await createAppWithTestRedis([SkippedController]);
       const server = app.getHttpServer();
 
       // Act
@@ -315,7 +332,7 @@ describe('Global rate limiting (e2e, real Redis)', () => {
 
     it('keeps named policies active under a bare @SkipThrottle()', async () => {
       // Arrange
-      const app = await createTestApp(undefined, { controllers: [ThrottleTestController] });
+      const app = await createAppWithTestRedis([ThrottleTestController]);
       const server = app.getHttpServer();
 
       // Act
@@ -332,7 +349,7 @@ describe('Global rate limiting (e2e, real Redis)', () => {
 
     it('keeps the health endpoint accessible after the client is blocked', async () => {
       // Arrange
-      const app = await createTestApp(undefined, { controllers: [ThrottleTestController] });
+      const app = await createAppWithTestRedis([ThrottleTestController]);
       const server = app.getHttpServer();
 
       // Act
@@ -351,7 +368,7 @@ describe('Global rate limiting (e2e, real Redis)', () => {
   describe('endpoint isolation', () => {
     it('gives different handlers independent quotas', async () => {
       // Arrange
-      const app = await createTestApp(undefined, { controllers: [ThrottleTestController] });
+      const app = await createAppWithTestRedis([ThrottleTestController]);
       const server = app.getHttpServer();
 
       // Act: exhaust isolation-a (short limit 3).
@@ -372,7 +389,7 @@ describe('Global rate limiting (e2e, real Redis)', () => {
   describe('client identity (Fastify request.ip)', () => {
     it('uses the resolved proxy IP so different clients get separate quotas', async () => {
       // Arrange: TRUST_PROXY=true, so Fastify resolves request.ip from XFF.
-      const app = await createTestApp(undefined, { controllers: [ThrottleTestController] });
+      const app = await createAppWithTestRedis([ThrottleTestController]);
       const server = app.getHttpServer();
 
       // Act: exhaust the quota for one forwarded client.
@@ -395,7 +412,7 @@ describe('Global rate limiting (e2e, real Redis)', () => {
 
     it('groups IPv6 addresses into /64 subnets', async () => {
       // Arrange
-      const app = await createTestApp(undefined, { controllers: [ThrottleTestController] });
+      const app = await createAppWithTestRedis([ThrottleTestController]);
       const server = app.getHttpServer();
 
       // Act: exhaust via one address, then probe from the same subnet and a
@@ -419,7 +436,7 @@ describe('Global rate limiting (e2e, real Redis)', () => {
 
     it('normalizes IPv4-mapped IPv6 addresses to IPv4', async () => {
       // Arrange
-      const app = await createTestApp(undefined, { controllers: [ThrottleTestController] });
+      const app = await createAppWithTestRedis([ThrottleTestController]);
       const server = app.getHttpServer();
 
       // Act
@@ -439,8 +456,7 @@ describe('Global rate limiting (e2e, real Redis)', () => {
 
     it('ignores spoofed forwarding headers when no proxy is trusted', async () => {
       // Arrange: adapter with trustProxy=false — the validated default.
-      const app = await createTestApp(undefined, {
-        controllers: [ThrottleTestController],
+      const app = await createAppWithTestRedis([ThrottleTestController], {
         adapterTrustProxy: false,
       });
       const server = app.getHttpServer();
@@ -464,14 +480,16 @@ describe('Global rate limiting (e2e, real Redis)', () => {
   describe('Redis integration', () => {
     it('stores counters under the application throttle namespace', async () => {
       // Arrange
-      const app = await createTestApp(undefined, { controllers: [ThrottleTestController] });
+      const app = await createAppWithTestRedis([ThrottleTestController]);
+      const server = app.getHttpServer();
 
-      // Act
-      await request(app.getHttpServer()).get(`${API}/headers`);
-      await request(app.getHttpServer()).get(`${API}/default`);
-      await request(app.getHttpServer()).get(`${API}/default`);
-      await request(app.getHttpServer()).get(`${API}/default`);
-      await request(app.getHttpServer()).get(`${API}/default`);
+      // Act - use /override endpoint which has its own limit (1) to avoid
+      // interference from other tests sharing the global short quota.
+      const first = await request(server).get(`${API}/override`);
+      const second = await request(server).get(`${API}/override`);
+      expect(first.status).toBe(200);
+      expect(second.status).toBe(429); // 2nd request exceeds limit of 1
+
       const keys = await scanThrottleKeys();
 
       // Assert: hit and block keys are distinguishable, namespaced, and no
@@ -486,8 +504,8 @@ describe('Global rate limiting (e2e, real Redis)', () => {
     it('shares counters across two application instances and survives a restart', async () => {
       // Arrange: two full application instances on one Redis backend. The
       // global short policy is 3 requests / 2 s for the same tracker.
-      const appA = await createTestApp();
-      const appB = await createTestApp();
+      const appA = await createAppWithTestRedis();
+      const appB = await createAppWithTestRedis();
 
       // Act: 3 requests total split across instances reach the limit.
       await request(appA.getHttpServer()).get('/api/v1');
@@ -499,7 +517,7 @@ describe('Global rate limiting (e2e, real Redis)', () => {
 
       // Both instances are gone; the counter lives in Redis, so a fresh
       // instance is still blocked until the window ends.
-      const appC = await createTestApp();
+      const appC = await createAppWithTestRedis();
       const blockedAfterRestart = await request(appC.getHttpServer()).get('/api/v1');
       await appC.close();
 

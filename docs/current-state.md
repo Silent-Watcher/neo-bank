@@ -81,8 +81,11 @@ auth, no deployment setup.
   by the global rate limiter with endpoint-specific limits aligned to the OTP
   window: challenge 2 req/120s, verify 5 req/120s. No registration or
   authentication steps yet.
-- Tests: Vitest unit (26 files / 196 tests), e2e (13 files / 62 tests),
-  Redis integration (2 files / 32 tests via `pnpm test:redis`).
+- Tests: Vitest unit (26 files / 198 tests), e2e (13 files / 62 tests),
+  Redis integration (2 files / 32 tests via `pnpm test:redis`). All integration
+  and e2e tests use Testcontainers (`apps/api/test/testcontainers.ts`) to
+  start isolated `redis:8.2-alpine` containers per test file with dynamic
+  ports — no manual Docker Compose required.
 
 **Partial**
 
@@ -121,12 +124,15 @@ None. The workspace contains only `apps/*`; no `packages/` directory exists.
 **Implemented:** Redis client integration in the API (global `RedisModule`,
 ioredis 6, degraded-mode health, standardized key naming); the enrollments
 challenge feature stores its OTP in Redis; global rate limiting uses the same
-connection via atomic Lua scripts. Docker infrastructure
-(`docs/docker.md`): dev and prod Compose stacks with PostgreSQL and Redis,
-per-app dev/prod images (`turbo prune`, non-root, hot reloading in dev;
-Redis intentionally has no persistence volume). Beyond that,
-only the build/test toolchain itself: Turborepo local caching (`.turbo/`),
-Husky hooks, commitlint, lint-staged.
+connection via atomic Lua scripts. Testcontainers (ADR-016) provides isolated
+`redis:8.2-alpine` containers for integration and e2e tests — each test file
+starts its own container with dynamic ports in `beforeAll`/`afterAll`, enabling
+parallel execution and true isolation without manual Docker Compose. Docker
+infrastructure (`docs/docker.md`): dev and prod Compose stacks with PostgreSQL
+and Redis, per-app dev/prod images (`turbo prune`, non-root, hot reloading in
+dev; Redis intentionally has no persistence volume). Beyond that, only the
+build/test toolchain itself: Turborepo local caching (`.turbo/`), Husky hooks,
+commitlint, lint-staged.
 
 **Planned / Not started:** database, SMS provider, remote Turborepo cache,
 CI pipeline, deployment targets.
@@ -166,6 +172,6 @@ Per-app commands are listed in each `apps/<app>/ONBOARDING.md`.
 
 All ADRs live in [DECISIONS.md](../DECISIONS.md). Status as of this snapshot:
 
-- **Accepted:** ADR-001 (Turborepo), ADR-002 (Fastify), ADR-003 (SWC), ADR-004 (@nestjs/config + Zod), ADR-005 (URI versioning), ADR-006 (1 MiB body limit), ADR-007 (`api` prefix), ADR-008/009 (Pino / nestjs-pino), ADR-010 (UUIDv4 request IDs), ADR-011 (envelope exclusions), ADR-012 (ioredis without a wrapper), ADR-013 (Redis module architecture), ADR-014 (Swagger/OpenAPI, development-only), ADR-015 (Global HTTP rate limiting with Redis-backed @nestjs/throttler).
+- **Accepted:** ADR-001 (Turborepo), ADR-002 (Fastify), ADR-003 (SWC), ADR-004 (@nestjs/config + Zod), ADR-005 (URI versioning), ADR-006 (1 MiB body limit), ADR-007 (`api` prefix), ADR-008/009 (Pino / nestjs-pino), ADR-010 (UUIDv4 request IDs), ADR-011 (envelope exclusions), ADR-012 (ioredis without a wrapper), ADR-013 (Redis module architecture), ADR-014 (Swagger/OpenAPI, development-only), ADR-015 (Global HTTP rate limiting with Redis-backed @nestjs/throttler), ADR-016 (Testcontainers for integration and e2e testing).
 
 All architectural decisions are accepted and implemented. Do not build on rejected alternatives (e.g. do not introduce header versioning or a second logger).

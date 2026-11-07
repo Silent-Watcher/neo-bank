@@ -1,17 +1,19 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 
-import { _env } from '#src/shared/config/env/env.config.js';
+import { TestRedis } from './testcontainers.js';
 import type { RedisClient } from '#src/shared/redis/inject-redis.decorator.js';
 import { createRedisClient } from '#src/shared/redis/redis.provider.js';
 import { throttleBlockKey, throttleHitKey } from '#src/shared/throttler/throttler.keys.js';
 import { RedisThrottlerStorage } from '#src/shared/throttler/redis-throttler.storage.js';
 
 // Real-Redis integration tests for the rate-limit storage (pnpm test:redis).
+// Uses Testcontainers for isolated, reproducible Redis instances.
 // Mocks cannot prove atomicity, expiration, or block behavior.
 
 const SHORT_TTL_MS = 400;
 const BLOCK_MS = 800;
 
+let testRedis: TestRedis;
 let client: RedisClient;
 let storage: RedisThrottlerStorage;
 
@@ -44,17 +46,9 @@ async function scanThrottleKeys(): Promise<string[]> {
 }
 
 beforeAll(async () => {
-  client = createRedisClient({
-    url: _env.REDIS_URL,
-    username: _env.REDIS_USERNAME,
-    password: _env.REDIS_PASSWORD,
-    db: 0,
-    tls: false,
-    connectTimeoutMs: 2000,
-    commandTimeoutMs: 2000,
-    maxRetriesPerRequest: 1,
-    shutdownTimeoutMs: 1000,
-  });
+  testRedis = new TestRedis();
+  const config = await testRedis.start();
+  client = createRedisClient(config);
   await client.connect();
   storage = new RedisThrottlerStorage(client);
   await cleanupKeys();
@@ -64,9 +58,10 @@ afterEach(cleanupKeys);
 
 afterAll(async () => {
   await client.quit();
+  await testRedis.stop();
 });
 
-describe('RedisThrottlerStorage (real Redis)', () => {
+describe('RedisThrottlerStorage (real Redis via Testcontainers)', () => {
   describe('counter window', () => {
     it('counts the first request and initializes the counter expiration', async () => {
       // Arrange

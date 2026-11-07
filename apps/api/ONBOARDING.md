@@ -38,6 +38,7 @@ feature coverage is minimal.
 | ioredis 6                                | Redis client behind the shared `RedisService` ([ADR-012](../../DECISIONS.md)/[013](../../DECISIONS.md)) |
 | @nestjs/swagger + @fastify/static        | OpenAPI docs; Swagger UI at `/docs`, **development only** ([ADR-014](../../DECISIONS.md))               |
 | Vitest + supertest                       | Unit and e2e testing                                                                                    |
+| Testcontainers                           | Real Redis/PostgreSQL in integration & e2e tests (ADR-016); see `test/testcontainers.ts`                |
 | Oxlint / Oxfmt                           | Linting and formatting (no ESLint/Prettier)                                                             |
 
 ## 3. Prerequisites
@@ -99,9 +100,9 @@ Verify with `curl http://localhost:3001/health`.
 **Run tests:**
 
 ```sh
-pnpm test         # unit tests (Vitest)
-pnpm test:e2e     # e2e suite (uses env/.env.test automatically)
-pnpm test:redis   # Redis integration tests (uses env/.env.redis-test; requires running Redis)
+pnpm test         # unit tests (Vitest) — mocks infrastructure, no Docker
+pnpm test:e2e     # e2e tests (Testcontainers starts real Redis per test file)
+pnpm test:redis   # Redis integration tests (Testcontainers starts real Redis per test file)
 ```
 
 **Build:**
@@ -174,6 +175,14 @@ assert the envelope and Problem Details contracts. New top-level `#` import
 aliases must also be added to `test/subpath-import-aliases.ts` or tests
 will not resolve them.
 
+**Real infrastructure in tests (ADR-016):** Integration and e2e tests that
+need Redis use Testcontainers (`test/testcontainers.ts`) — each test file
+starts its own `redis:8.2-alpine` container with a dynamic port in
+`beforeAll` and stops it in `afterAll`. No manual Docker Compose needed;
+unit tests keep mocking infrastructure. Override both `REDIS_CONFIG` **and**
+`REDIS_CLIENT` in the testing module so the throttler and all consumers share
+the container's connection.
+
 **API documentation is mandatory:** every endpoint implemented or changed
 must get its Swagger/OpenAPI documentation in the same task — see the
 "API Documentation Rule" in [AGENTS.md](./AGENTS.md). In development, the
@@ -213,9 +222,9 @@ tooling (lint, format, Turbo tasks) comes from the root; see
 pnpm dev                       # dev server with watch + env/.env.development
 pnpm build                     # production build (SWC → dist/)
 pnpm start                     # run the built app
-pnpm test                      # unit tests
-pnpm test:e2e                  # e2e tests (env/.env.test)
-pnpm test:redis                # Redis integration tests (env/.env.redis-test)
+pnpm test                      # unit tests (mocks infrastructure, no Docker)
+pnpm test:e2e                  # e2e tests (Testcontainers starts real Redis)
+pnpm test:redis                # Redis integration tests (Testcontainers starts real Redis)
 pnpm lint                      # Oxlint
 pnpm format                    # Oxfmt (write)
 pnpm format:check              # Oxfmt (check only)

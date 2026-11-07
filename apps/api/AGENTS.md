@@ -127,8 +127,12 @@ Constraints:
   do not add transactions, Lua scripts, or locks without a concrete
   requirement, and never treat pipelining as atomicity.
 - Unit tests must not require a running Redis server: use `lazyConnect`
-  client instances and provider overrides; e2e tests exercise the degraded
-  (unreachable) path against an unroutable URL from `env/.env.test`.
+  client instances and provider overrides. Integration/e2e tests that need
+  real Redis use Testcontainers (ADR-016, `test/testcontainers.ts`): each
+  test file starts its own `redis:8.2-alpine` container with a dynamic port.
+  Override both `REDIS_CONFIG` **and** `REDIS_CLIENT` in the testing module so
+  the throttler and all consumers share the container's connection. Tests
+  that exercise the fail-closed path inject an unroutable client directly.
 
 ## Directory Structure
 
@@ -148,8 +152,9 @@ src/
     enums/ errors/ filters/ http/ interceptors/ logging/ pipes/
 test/
   create-test-app.ts       # e2e app factory mirroring main.ts bootstrap
+  testcontainers.ts        # Testcontainers helpers: TestRedis (start/stop/getConfig)
   *.e2e-spec.ts            # supertest-based e2e suites
-  *.redis-spec.ts          # real-Redis integration tests (pnpm test:redis)
+  *.redis-spec.ts          # real-Redis integration tests via Testcontainers (pnpm test:redis)
   subpath-import-aliases.ts # Vitest resolution of # aliases (keep in sync)
 env/                       # .env.development / .env.test / .env.example /
                            # .env.redis-test (gitignored except example)
@@ -187,8 +192,11 @@ env/                       # .env.development / .env.test / .env.example /
   `test/create-test-app.ts` for endpoint contracts (envelope, Problem
   Details, routing). Both layers are a project requirement for features
   (root rule).
-- e2e specs need `env/.env.test` and run with `--env-file` (wired into the
-  `test:e2e` script).
+- Unit tests mock infrastructure (RedisService); integration/e2e tests that
+  need real Redis use Testcontainers (ADR-016) — `test/testcontainers.ts`
+  provides `TestRedis` class; override both `REDIS_CONFIG` and `REDIS_CLIENT`
+  in the testing module. Tests exercising fail-closed behavior inject an
+  unroutable client.
 - Do not start dev servers to verify intermediate steps; run the checks when
   the feature is complete (root rule).
 
@@ -200,9 +208,9 @@ pnpm build        # nest build (SWC)
 pnpm lint         # oxlint
 pnpm format       # oxfmt --write .
 pnpm typecheck    # tsc --noEmit
-pnpm test         # Vitest unit tests
-pnpm test:e2e     # supertest e2e suite
-pnpm test:redis   # real-Redis rate-limit integration suite (env/.env.redis-test)
+pnpm test         # Vitest unit tests (mocks, no Docker)
+pnpm test:e2e     # supertest e2e suite (Testcontainers Redis per file)
+pnpm test:redis   # real-Redis integration suite via Testcontainers
 ```
 
 ## Constraints
