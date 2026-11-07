@@ -166,7 +166,9 @@ beforeAll(async () => {
 afterEach(cleanupKeys);
 
 afterAll(async () => {
-  await inspectClient.quit();
+  if (inspectClient) {
+    await inspectClient.quit();
+  }
   await testRedis.stop();
 });
 
