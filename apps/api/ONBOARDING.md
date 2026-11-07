@@ -220,5 +220,28 @@ pnpm typecheck                 # tsc --noEmit
 pnpm clean                     # remove dist/
 ```
 
+### Docker Compose Commands
+
+Run from the `apps/api` directory (uses `--project-directory ..` to target repo-root Compose files).
+
+**Development (hot reloading, all services with bind mounts):**
+
+```sh
+pnpm docker:dev                # start dev stack (neo-bank-dev project)
+pnpm docker:dev:down           # stop dev stack
+```
+
+**Production (hardened images, internal network, no exposed infrastructure ports):**
+
+```sh
+pnpm docker:prod               # start prod stack (neo-bank-prod project) in background
+pnpm docker:prod:down          # stop prod stack
+```
+
+**Prerequisites:**
+
+- Copy `.env.docker.example` to `.env.docker` at repo root and set `POSTGRES_PASSWORD` and `REDIS_PASSWORD`
+- For production, create `apps/api/env/.env.production` from `apps/api/env/.env.example`
+
 From the repo root, `pnpm test` runs unit + e2e for all workspaces through
 Turborepo, and `pnpm cm` creates a Conventional Commit.

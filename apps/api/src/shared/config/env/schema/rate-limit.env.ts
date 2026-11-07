@@ -1,17 +1,10 @@
 import { z } from 'zod';
 
+import { positiveSafeInteger } from './validation-helpers.js';
+
 // Rate-limit counters must stay positive so the Redis storage never receives
 // a zero or negative duration as an expiration argument, and bounded by the
 // JavaScript safe integer range so millisecond conversions cannot overflow.
-function positiveSafeInteger(field: string) {
-  return z.coerce
-    .number({ error: `${field} must be a valid number.` })
-    .int(`${field} must be an integer.`)
-    .positive(`${field} must be positive.`)
-    .refine((value) => Number.isSafeInteger(value), {
-      message: `${field} must be within the safe integer range.`,
-    });
-}
 
 export const rateLimitEnvSchema = z.object({
   RATE_LIMIT_SHORT_LIMIT: positiveSafeInteger('RATE_LIMIT_SHORT_LIMIT').default(10),
