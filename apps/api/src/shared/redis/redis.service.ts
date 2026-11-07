@@ -58,6 +58,42 @@ end
 return 0
 `;
 
+// Atomic OTP send rate limit check and increment for rolling 60-minute window.
+// KEYS[1] = rate limit key (sorted set)
+// ARGV[1] = current timestamp in milliseconds
+// ARGV[2] = window size in milliseconds (3600000 = 60 minutes)
+// ARGV[3] = max allowed sends in window (5)
+// ARGV[4] = key TTL in seconds (3600 = 60 minutes)
+// Returns: 1 = allowed (incremented), 0 = rate limit exceeded
+const CHECK_OTP_RATE_LIMIT_SCRIPT = `
+local rateLimitKey = KEYS[1]
+local now = tonumber(ARGV[1])
+local windowMs = tonumber(ARGV[2])
+local maxSends = tonumber(ARGV[3])
+local keyTtlSeconds = tonumber(ARGV[4])
+
+local windowStart = now - windowMs
+
+-- Remove expired entries (older than window)
+redis.call('ZREMRANGEBYSCORE', rateLimitKey, '-inf', windowStart)
+
+-- Count current entries in window
+local currentCount = redis.call('ZCARD', rateLimitKey)
+
+if currentCount >= maxSends then
+  return 0
+end
+
+-- Add new entry with current timestamp as score, unique member
+local member = now .. ':' .. math.random(1000000)
+redis.call('ZADD', rateLimitKey, now, member)
+
+-- Set/refresh TTL on the key
+redis.call('EXPIRE', rateLimitKey, keyTtlSeconds)
+
+return 1
+`;
+
 export interface SetOptions {
   readonly ttlSeconds?: number;
 }
@@ -215,6 +251,36 @@ export class RedisService implements OnModuleInit, OnApplicationShutdown {
       submittedOtp,
       maxAttempts,
       ttlSeconds,
+    );
+    return result === 1 || result === '1';
+  }
+
+  /**
+   * Atomically checks and increments the per-phone OTP send rate limit for a
+   * rolling 60-minute window, as a single Lua execution.
+   * Returns `true` if the send is allowed (under the limit), `false` if the
+   * rate limit is exceeded.
+   *
+   * Uses a sorted set with timestamps as scores to track sends within the
+   * window. Expired entries are removed before counting.
+   */
+  async checkOtpRateLimit(
+    rateLimitKey: string,
+    maxSends: number = 5,
+    windowMinutes: number = 60,
+  ): Promise<boolean> {
+    const now = Date.now();
+    const windowMs = windowMinutes * 60 * 1000;
+    const keyTtlSeconds = windowMinutes * 60;
+
+    const result: unknown = await this.client.eval(
+      CHECK_OTP_RATE_LIMIT_SCRIPT,
+      1,
+      rateLimitKey,
+      now,
+      windowMs,
+      maxSends,
+      keyTtlSeconds,
     );
     return result === 1 || result === '1';
   }

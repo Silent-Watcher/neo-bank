@@ -98,8 +98,11 @@ describe('EnrollmentsController (e2e)', () => {
     const setNxEx = vi
       .fn<(key: string, value: string, ttlSeconds: number) => Promise<boolean>>()
       .mockResolvedValue(true);
+    const checkOtpRateLimit = vi
+      .fn<(rateLimitKey: string, maxSends: number, windowMinutes: number) => Promise<boolean>>()
+      .mockResolvedValue(true);
     const { app, close } = await createTestAppWithMockRedis();
-    overrideRedisService(app, { setNxEx });
+    overrideRedisService(app, { setNxEx, checkOtpRateLimit });
 
     // Act
     const response = await request(app.getHttpServer())
@@ -109,6 +112,12 @@ describe('EnrollmentsController (e2e)', () => {
     // Assert
     expect(response.status).toBe(201);
     expect(response.body.data).toEqual({ phoneNumber: '09123456789' });
+    expect(checkOtpRateLimit).toHaveBeenCalledTimes(1);
+    expect(checkOtpRateLimit).toHaveBeenCalledWith(
+      'neo-bank:enrollments:challenge:rate-limit:09123456789',
+      5,
+      60,
+    );
     expect(setNxEx).toHaveBeenCalledTimes(1);
     const [key, otp, ttl] = setNxEx.mock.calls[0];
     expect(key).toBe('neo-bank:enrollments:challenge:otp:09123456789');
@@ -122,8 +131,11 @@ describe('EnrollmentsController (e2e)', () => {
     const setNxEx = vi
       .fn<(key: string, value: string, ttlSeconds: number) => Promise<boolean>>()
       .mockResolvedValue(true);
+    const checkOtpRateLimit = vi
+      .fn<(rateLimitKey: string, maxSends: number, windowMinutes: number) => Promise<boolean>>()
+      .mockResolvedValue(true);
     const { app, close } = await createTestAppWithMockRedis();
-    overrideRedisService(app, { setNxEx });
+    overrideRedisService(app, { setNxEx, checkOtpRateLimit });
 
     // Act
     const response = await request(app.getHttpServer())
@@ -133,6 +145,11 @@ describe('EnrollmentsController (e2e)', () => {
     // Assert
     expect(response.status).toBe(201);
     expect(response.body.data).toEqual({ phoneNumber: '09123456789' });
+    expect(checkOtpRateLimit).toHaveBeenCalledWith(
+      'neo-bank:enrollments:challenge:rate-limit:09123456789',
+      5,
+      60,
+    );
     expect(setNxEx.mock.calls[0][0]).toBe('neo-bank:enrollments:challenge:otp:09123456789');
     await close();
   });
@@ -141,7 +158,10 @@ describe('EnrollmentsController (e2e)', () => {
     // Arrange — each request uses a distinct X-Forwarded-For so the per-IP
     // rate limiter does not interfere (TRUST_PROXY=true in test env).
     const { app, close } = await createTestAppWithMockRedis();
-    overrideRedisService(app, { setNxEx: vi.fn().mockResolvedValue(true) });
+    overrideRedisService(app, {
+      setNxEx: vi.fn().mockResolvedValue(true),
+      checkOtpRateLimit: vi.fn().mockResolvedValue(true),
+    });
     const invalidPhoneNumbers = ['02112345678', '0912 345 678', '0912345678', ''];
 
     // Act + Assert
@@ -162,7 +182,10 @@ describe('EnrollmentsController (e2e)', () => {
   it('serves an application-error Problem Details response when OTP storage fails', async () => {
     // Arrange
     const { app, close } = await createTestAppWithMockRedis();
-    overrideRedisService(app, { setNxEx: vi.fn().mockRejectedValue(new Error('connection lost')) });
+    overrideRedisService(app, {
+      setNxEx: vi.fn().mockRejectedValue(new Error('connection lost')),
+      checkOtpRateLimit: vi.fn().mockResolvedValue(true),
+    });
 
     // Act
     const response = await request(app.getHttpServer())
@@ -173,6 +196,53 @@ describe('EnrollmentsController (e2e)', () => {
     expect(response.status).toBe(500);
     expect(response.headers['content-type']).toContain('application/problem+json');
     expect(response.body.requestId).toBeTypeOf('string');
+    await close();
+  });
+
+  it('serves a generic Problem Details response when the hourly OTP rate limit is exceeded', async () => {
+    // Arrange
+    const setNxEx = vi
+      .fn<(key: string, value: string, ttlSeconds: number) => Promise<boolean>>()
+      .mockResolvedValue(true);
+    const checkOtpRateLimit = vi
+      .fn<(rateLimitKey: string, maxSends: number, windowMinutes: number) => Promise<boolean>>()
+      .mockResolvedValue(false);
+    const { app, close } = await createTestAppWithMockRedis();
+    overrideRedisService(app, { setNxEx, checkOtpRateLimit });
+
+    // Act
+    const response = await request(app.getHttpServer())
+      .post('/api/v1/enrollments/challenge')
+      .send({ phoneNumber: '09123456789' });
+
+    // Assert — generic 400 without internal rate-limit details; OTP is never stored.
+    expect(response.status).toBe(400);
+    expect(response.headers['content-type']).toContain('application/problem+json');
+    expect(response.body.code).toBe('OTP_RATE_LIMIT_EXCEEDED');
+    expect(response.body.detail).not.toMatch(/5|60|minute|hour|limit/i);
+    expect(setNxEx).not.toHaveBeenCalled();
+    await close();
+  });
+
+  it('serves a generic 500 when the rate limit check fails (Redis error)', async () => {
+    // Arrange
+    const { app, close } = await createTestAppWithMockRedis();
+    overrideRedisService(app, {
+      setNxEx: vi.fn().mockResolvedValue(true),
+      checkOtpRateLimit: vi.fn().mockRejectedValue(new Error('connection lost')),
+    });
+
+    // Act
+    const response = await request(app.getHttpServer())
+      .post('/api/v1/enrollments/challenge')
+      .send({ phoneNumber: '09123456789' });
+
+    // Assert — infrastructure failure surfaces as generic 500, no Redis details.
+    expect(response.status).toBe(500);
+    expect(response.body.code).toBe('APPLICATION_ERROR');
+    expect(response.body.detail).toBe('An unexpected error occurred.');
+    expect(JSON.stringify(response.body)).not.toContain('connection lost');
+    expect(JSON.stringify(response.body)).not.toContain('Redis');
     await close();
   });
 

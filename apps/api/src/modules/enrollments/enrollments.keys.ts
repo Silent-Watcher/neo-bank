@@ -25,3 +25,17 @@ export function challengeAttemptsKey(phoneNumber: string): string {
     identifier: phoneNumber,
   });
 }
+
+/**
+ * Redis key for per-phone OTP send rate limiting: `neo-bank:enrollments:challenge:rate-limit:<phone>`
+ * Sorted set with timestamps as scores to track OTP sends within a rolling 60-minute window.
+ * TTL is 3600 seconds (60 minutes) so the key expires when no requests are made.
+ */
+export function challengeRateLimitKey(phoneNumber: string): string {
+  return buildRedisKey({
+    module: 'enrollments',
+    feature: 'challenge',
+    resource: 'rate-limit',
+    identifier: phoneNumber,
+  });
+}

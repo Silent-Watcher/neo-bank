@@ -46,6 +46,8 @@ describe('EnrollmentsService', () => {
           ttlSeconds: number,
         ) => Promise<boolean>
       >(),
+    checkOtpRateLimit:
+      vi.fn<(rateLimitKey: string, maxSends: number, windowMinutes: number) => Promise<boolean>>(),
   };
   const configService = {
     getOrThrow: vi.fn(),
@@ -56,6 +58,8 @@ describe('EnrollmentsService', () => {
     randomIntMock.mockReset();
     redisService.setNxEx.mockReset();
     redisService.setNxEx.mockResolvedValue(true);
+    redisService.checkOtpRateLimit.mockReset();
+    redisService.checkOtpRateLimit.mockResolvedValue(true);
     redisService.verifyOtpAndCountAttempts.mockReset();
     redisService.verifyOtpAndCountAttempts.mockResolvedValue(false);
     configService.getOrThrow.mockReturnValue({ maxVerifyAttempts: 5 });
@@ -141,6 +145,49 @@ describe('EnrollmentsService', () => {
     // Arrange
     randomIntMock.mockReturnValue(483_921);
     redisService.setNxEx.mockRejectedValue(new Error('connection lost'));
+
+    // Act & Assert
+    await expect(service.requestChallenge('09123456789')).rejects.toThrow('connection lost');
+  });
+
+  it('checks the per-phone hourly rate limit before attempting to store the OTP', async () => {
+    // Arrange
+    randomIntMock.mockReturnValue(483_921);
+
+    // Act
+    await service.requestChallenge('09123456789');
+
+    // Assert
+    expect(redisService.checkOtpRateLimit).toHaveBeenCalledTimes(1);
+    const [rateLimitKey, maxSends, windowMinutes] = redisService.checkOtpRateLimit.mock.calls[0];
+    expect(rateLimitKey).toBe('neo-bank:enrollments:challenge:rate-limit:09123456789');
+    expect(maxSends).toBe(5);
+    expect(windowMinutes).toBe(60);
+  });
+
+  it('rejects the request when the hourly rate limit is exceeded', async () => {
+    // Arrange
+    randomIntMock.mockReturnValue(483_921);
+    redisService.checkOtpRateLimit.mockReset();
+    redisService.checkOtpRateLimit.mockResolvedValue(false);
+
+    // Act
+    const promise = service.requestChallenge('09123456789');
+
+    // Assert
+    await expect(promise).rejects.toThrow(AppHttpException);
+    await expect(promise).rejects.toMatchObject({
+      code: ErrorCode.OtpRateLimitExceeded,
+    });
+    // The rate limit check should be called, but setNxEx should not be called
+    expect(redisService.checkOtpRateLimit).toHaveBeenCalledTimes(1);
+    expect(redisService.setNxEx).not.toHaveBeenCalled();
+  });
+
+  it('propagates Redis rate limit check failures to the caller', async () => {
+    // Arrange
+    randomIntMock.mockReturnValue(483_921);
+    redisService.checkOtpRateLimit.mockRejectedValue(new Error('connection lost'));
 
     // Act & Assert
     await expect(service.requestChallenge('09123456789')).rejects.toThrow('connection lost');

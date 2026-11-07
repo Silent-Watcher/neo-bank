@@ -61,6 +61,12 @@ export class EnrollmentsController {
     schema: problemDetailsSchema,
   })
   @ApiResponse({
+    status: HttpStatus.BAD_REQUEST,
+    description:
+      'Too many OTP requests for this phone number within the last 60 minutes (limit: 5). Served as RFC 9457 Problem Details with a generic message — the exact limit is not exposed to clients.',
+    schema: problemDetailsSchema,
+  })
+  @ApiResponse({
     status: HttpStatus.INTERNAL_SERVER_ERROR,
     description:
       'The OTP could not be stored in Redis; served as RFC 9457 Problem Details with the application error code.',

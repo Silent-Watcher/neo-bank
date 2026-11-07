@@ -5,6 +5,7 @@ export enum ErrorCode {
   BadRequest = 'BAD_REQUEST',
   InvalidRequestId = 'INVALID_REQUEST_ID',
   NotFound = 'NOT_FOUND',
+  OtpRateLimitExceeded = 'OTP_RATE_LIMIT_EXCEEDED',
   OtpVerificationFailed = 'OTP_VERIFICATION_FAILED',
   RateLimited = 'RATE_LIMITED',
 }
@@ -28,6 +29,7 @@ export const APPLICATION_ERROR_PROBLEM_TYPE = '/problems/application-error';
 const ERROR_CODE_PROBLEM_TYPES: ReadonlyMap<ErrorCode, string> = new Map([
   [ErrorCode.ApplicationError, APPLICATION_ERROR_PROBLEM_TYPE],
   [ErrorCode.InvalidRequestId, APPLICATION_ERROR_PROBLEM_TYPE],
+  [ErrorCode.OtpRateLimitExceeded, APPLICATION_ERROR_PROBLEM_TYPE],
   [ErrorCode.OtpVerificationFailed, APPLICATION_ERROR_PROBLEM_TYPE],
   [ErrorCode.RateLimited, APPLICATION_ERROR_PROBLEM_TYPE],
 ]);
@@ -41,6 +43,7 @@ export function problemTypeForErrorCode(code: ErrorCode): string | undefined {
 const ERROR_CODE_TITLES: ReadonlyMap<ErrorCode, string> = new Map([
   [ErrorCode.ApplicationError, 'Application Error'],
   [ErrorCode.InvalidRequestId, 'Invalid Request Id'],
+  [ErrorCode.OtpRateLimitExceeded, 'Too Many Requests'],
   [ErrorCode.OtpVerificationFailed, 'Verification Failed'],
   [ErrorCode.RateLimited, 'Too Many Requests'],
 ]);
