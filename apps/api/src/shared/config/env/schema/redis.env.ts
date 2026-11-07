@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+import { positiveSafeInteger } from './validation-helpers.js';
+
 // Normalizes whitespace-padded values: trims surrounding whitespace so
 // padded credentials or URLs still validate. Follows the
 // normalize-then-validate pattern of CORS_ORIGIN.
@@ -37,28 +39,12 @@ export const redisEnvSchema = z.object({
     .enum(['true', 'false'], { error: 'REDIS_TLS must be exactly "true" or "false".' })
     .default('false')
     .transform((value) => value === 'true'),
-  REDIS_CONNECT_TIMEOUT_MS: z.coerce
-    .number({ error: 'REDIS_CONNECT_TIMEOUT_MS must be a valid number.' })
-    .int('REDIS_CONNECT_TIMEOUT_MS must be an integer.')
-    .positive('REDIS_CONNECT_TIMEOUT_MS must be positive.')
-    .default(10000),
-  REDIS_COMMAND_TIMEOUT_MS: z.coerce
-    .number({ error: 'REDIS_COMMAND_TIMEOUT_MS must be a valid number.' })
-    .int('REDIS_COMMAND_TIMEOUT_MS must be an integer.')
-    .positive('REDIS_COMMAND_TIMEOUT_MS must be positive.')
-    .default(5000),
+  REDIS_CONNECT_TIMEOUT_MS: positiveSafeInteger('REDIS_CONNECT_TIMEOUT_MS').default(10000),
+  REDIS_COMMAND_TIMEOUT_MS: positiveSafeInteger('REDIS_COMMAND_TIMEOUT_MS').default(5000),
   // Finite per-request retry budget so commands fail predictably while Redis
   // is unreachable instead of waiting through the (large) ioredis default.
-  REDIS_MAX_RETRIES_PER_REQUEST: z.coerce
-    .number({ error: 'REDIS_MAX_RETRIES_PER_REQUEST must be a valid number.' })
-    .int('REDIS_MAX_RETRIES_PER_REQUEST must be an integer.')
-    .min(1, 'REDIS_MAX_RETRIES_PER_REQUEST must be at least 1.')
-    .default(3),
-  REDIS_SHUTDOWN_TIMEOUT_MS: z.coerce
-    .number({ error: 'REDIS_SHUTDOWN_TIMEOUT_MS must be a valid number.' })
-    .int('REDIS_SHUTDOWN_TIMEOUT_MS must be an integer.')
-    .positive('REDIS_SHUTDOWN_TIMEOUT_MS must be positive.')
-    .default(2000),
+  REDIS_MAX_RETRIES_PER_REQUEST: positiveSafeInteger('REDIS_MAX_RETRIES_PER_REQUEST').default(3),
+  REDIS_SHUTDOWN_TIMEOUT_MS: positiveSafeInteger('REDIS_SHUTDOWN_TIMEOUT_MS').default(2000),
 });
 
 export type RedisEnv = z.infer<typeof redisEnvSchema>;

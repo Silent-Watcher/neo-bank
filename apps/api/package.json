@@ -49,6 +49,10 @@
     "test:watch": "vitest",
     "test:e2e": "node --env-file=env/.env.test node_modules/vitest/vitest.mjs run --config test/vitest-e2e.config.ts",
     "test:redis": "node --env-file=env/.env.redis-test node_modules/vitest/vitest.mjs run --config test/vitest-redis.config.ts",
+    "docker:dev": "docker compose --project-directory .. --env-file ../.env.docker -f ../compose.dev.yml up --build -d",
+    "docker:dev:down": "docker compose --project-directory .. --env-file ../.env.docker -f ../compose.dev.yml down",
+    "docker:prod": "docker compose --project-directory .. --env-file ../.env.docker -f ../compose.prod.yml up --build -d",
+    "docker:prod:down": "docker compose --project-directory .. --env-file ../.env.docker -f ../compose.prod.yml down",
     "clean": "rm -rf dist"
   },
   "dependencies": {

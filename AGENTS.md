@@ -53,6 +53,50 @@ silently wrong.
 When a change matches no trigger, no documentation update is required — but
 if you are unsure whether a change is "material", update rather than skip.
 
+### Environment File Synchronization
+
+**`.env.example` is the canonical reference for environment variable definitions and their documentation.**
+
+Whenever an Agent creates, removes, renames, or modifies an environment variable in `.env.example`, it must inspect and synchronize all relevant environment files across the Monorepo.
+
+This includes all applicable development, production, testing, and application-specific environment files.
+
+#### Synchronization Rules
+
+1. Keep the set of environment variable names consistent across the relevant environment files.
+2. When a new variable is added to `.env.example`, add it to every applicable environment file.
+3. When a variable is renamed, update every relevant reference and environment file.
+4. When a variable is removed from `.env.example`, inspect its usages across the repository before removing it from other environment files.
+5. When a variable's purpose or configuration requirements change, update its documentation consistently.
+6. Never update `.env.example` without checking the remaining environment files.
+7. Never assume that updating only one environment file is sufficient.
+
+#### Comments and Documentation
+
+Every environment variable must have a meaningful comment explaining its purpose.
+
+Comments should clarify, where applicable:
+
+- What the variable controls.
+- Whether it is required or optional.
+- Its expected format or accepted values.
+- Any relevant defaults or environment-specific considerations.
+
+Avoid vague comments that merely repeat the variable name.
+
+#### Security and Environment-Specific Values
+
+- Never copy actual credentials, tokens, passwords, API keys, or production secrets into `.env.example`.
+- Never overwrite valid environment-specific credentials just to make environment files identical.
+- Preserve existing environment-specific values.
+- Use safe placeholders or appropriate defaults when adding new variables.
+- Do not expose secret values in logs, documentation, or Agent reports.
+- Before deleting an existing environment variable, check its usage in the codebase and configuration.
+
+**Important distinction:** Keep environment variable definitions and documentation synchronized, but preserve legitimate differences in environment-specific values.
+
+After every environment-related change, verify the consistency of all relevant files.
+
 ## General Rules
 
 - Inspect existing code, configuration, Git status, and relevant documentation before making changes.
@@ -65,6 +109,38 @@ if you are unsure whether a change is "material", update rather than skip.
 - Never read `process.env` or use `console.log` in application source code.
 - The only permitted `process.env` access is the single environment validation call in the environment validation layer (`apps/api/src/shared/config/env/env.config.ts`).
 - Read validated configuration through configuration factories and `ConfigService`, and use the Pino-backed NestJS `Logger` (provided by `nestjs-pino`, see `apps/api/src/shared/logging/`) for runtime logging; never use `console.log`.
+
+### Engineering Principles: YAGNI, DRY, KISS
+
+The following principles are permanent engineering rules that must guide all future implementation work, refactoring, and code review.
+
+#### YAGNI — You Aren't Gonna Need It
+
+- Implement only functionality that is currently required.
+- Do not introduce speculative features, unnecessary extension points, or future-proof abstractions without a concrete requirement.
+- Avoid adding dependencies when the existing stack can reasonably solve the problem.
+- Do not build generalized solutions for hypothetical use cases.
+- Prefer the smallest implementation that correctly satisfies the requirement.
+
+#### DRY — Don't Repeat Yourself
+
+- Avoid duplicating business logic, validation rules, configuration definitions, and reusable utilities.
+- Before introducing a new implementation, check whether equivalent functionality already exists.
+- Extract genuinely shared behavior into an appropriate reusable location.
+- Keep a single source of truth for shared configuration and logic.
+- Do not apply DRY mechanically: two similar pieces of code should not be forcibly unified when they represent different responsibilities or are likely to evolve independently.
+
+#### KISS — Keep It Simple, Stupid
+
+- Prefer straightforward and readable implementations.
+- Avoid unnecessary indirection, abstraction, inheritance, and design patterns.
+- Use the simplest solution that satisfies functional, security, and maintainability requirements.
+- Keep functions and modules focused on their actual responsibilities.
+- Avoid overengineering and excessive defensive programming when the underlying contract already guarantees the expected behavior.
+
+These principles must be applied together rather than independently.
+
+For example, do not introduce an overly generic abstraction just to satisfy DRY, and do not sacrifice correctness or security in the name of KISS.
 
 ### Happy Path First
 
@@ -586,3 +662,7 @@ Before introducing any new dependency, package, helper, utility, or external too
 Do not skip this process for convenience. Follow the full procedure defined in the linked skill.
 
 Ponytail's simplicity principles MUST NOT override the skill's requirements for security, compatibility, testing, documentation, or explicit user approval.
+
+## Semantic Versioning
+
+Follow Semantic Versioning 2.0.0 (`MAJOR.MINOR.PATCH`) for all versioned workspaces. The [`semantic-versioning` skill](.claude/skills/semantic-versioning/SKILL.md) provides actionable instructions for classifying changes, updating versions, creating Git tags, and reporting version decisions. Apply it whenever a bug fix or feature implementation is complete.

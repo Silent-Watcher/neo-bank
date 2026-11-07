@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import { AppEnv } from '#enums/app-env.enum.js';
+import { positiveSafeInteger } from './validation-helpers.js';
 
 function isOrigin(value: string): boolean {
   try {
@@ -56,16 +57,7 @@ export const serverEnvSchema = z.object({
     .transform((value) => value === 'true'),
   // Request body size in bytes. Constrains payload size to bound memory
   // consumption per request and limit the impact of oversized-payload abuse.
-  BODY_LIMIT: z
-    .string()
-    .refine((value) => /^\d+$/.test(value), {
-      message: 'BODY_LIMIT must be a positive integer in bytes.',
-    })
-    .transform(Number)
-    .refine((value) => Number.isSafeInteger(value) && value > 0, {
-      message: 'BODY_LIMIT must be a positive integer within the safe integer range.',
-    })
-    .default(1048576),
+  BODY_LIMIT: positiveSafeInteger('BODY_LIMIT').default(1048576),
 });
 
 export type ServerEnv = z.infer<typeof serverEnvSchema>;
