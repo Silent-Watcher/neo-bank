@@ -12,3 +12,16 @@ export function challengeOtpKey(phoneNumber: string): string {
     identifier: phoneNumber,
   });
 }
+
+/**
+ * Redis key for failed verification attempts: `neo-bank:enrollments:challenge:attempts:<phone>`
+ * Shares the same 120-second TTL as the OTP so it expires with the issuance window.
+ */
+export function challengeAttemptsKey(phoneNumber: string): string {
+  return buildRedisKey({
+    module: 'enrollments',
+    feature: 'challenge',
+    resource: 'attempts',
+    identifier: phoneNumber,
+  });
+}

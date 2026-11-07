@@ -24,6 +24,40 @@ end
 return 0
 `;
 
+// Atomic verify-and-count-attempts: compares OTP, consumes on match, or
+// increments attempt counter and invalidates OTP when max attempts reached.
+// KEYS[1] = OTP key, KEYS[2] = attempts key
+// ARGV[1] = submitted OTP, ARGV[2] = max attempts, ARGV[3] = TTL seconds
+// Returns: 1 = verified and consumed, 0 = failed (incremented attempts or OTP invalidated)
+const VERIFY_OTP_ATTEMPTS_SCRIPT = `
+local otpKey = KEYS[1]
+local attemptsKey = KEYS[2]
+local submittedOtp = ARGV[1]
+local maxAttempts = tonumber(ARGV[2])
+local ttlSeconds = tonumber(ARGV[3])
+
+local storedOtp = redis.call('GET', otpKey)
+if storedOtp == submittedOtp then
+  redis.call('UNLINK', otpKey)
+  redis.call('UNLINK', attemptsKey)
+  return 1
+end
+
+-- OTP missing, expired, or incorrect: increment attempts
+local attempts = redis.call('INCR', attemptsKey)
+local attemptsTtl = redis.call('TTL', attemptsKey)
+if attemptsTtl <= 0 then
+  redis.call('EXPIRE', attemptsKey, ttlSeconds)
+end
+
+-- If max attempts reached, invalidate the OTP so no further attempts can succeed
+if attempts >= maxAttempts then
+  redis.call('UNLINK', otpKey)
+end
+
+return 0
+`;
+
 export interface SetOptions {
   readonly ttlSeconds?: number;
 }
@@ -77,6 +111,19 @@ export class RedisService implements OnModuleInit, OnApplicationShutdown {
       return;
     }
     await this.client.set(key, value);
+  }
+
+  /**
+   * Atomically stores `value` at `key` with a TTL only if the key does not
+   * already exist (Redis `SET NX EX`). Returns `true` if the key was set,
+   * `false` if the key already existed (and its TTL was left untouched).
+   *
+   * This prevents race conditions where concurrent requests could overwrite
+   * an existing OTP or extend its expiration.
+   */
+  async setNxEx(key: string, value: string, ttlSeconds: number): Promise<boolean> {
+    const result = await this.client.set(key, value, 'EX', ttlSeconds, 'NX');
+    return result === 'OK';
   }
 
   /**
@@ -141,6 +188,34 @@ export class RedisService implements OnModuleInit, OnApplicationShutdown {
     const result: unknown = await this.client.eval(DELETE_IF_EQUALS_SCRIPT, 1, key, value);
     // Redis answers Lua integer returns with a number; stringNumbers clients
     // would see '1', so both are accepted without asserting the reply type.
+    return result === 1 || result === '1';
+  }
+
+  /**
+   * Atomically verifies an OTP and tracks failed attempts, as a single Lua
+   * execution. On a correct OTP the OTP key and attempts key are both removed
+   * and `true` is returned. On a missing/incorrect OTP the attempts counter is
+   * incremented (with the OTP's TTL applied on first failure); when the counter
+   * reaches `maxAttempts` the OTP is invalidated so no further attempts can
+   * succeed. Returns `false` for every failure — callers cannot distinguish
+   * missing, expired, incorrect, or invalidated OTPs.
+   */
+  async verifyOtpAndCountAttempts(
+    otpKey: string,
+    attemptsKey: string,
+    submittedOtp: string,
+    maxAttempts: number,
+    ttlSeconds: number,
+  ): Promise<boolean> {
+    const result: unknown = await this.client.eval(
+      VERIFY_OTP_ATTEMPTS_SCRIPT,
+      2,
+      otpKey,
+      attemptsKey,
+      submittedOtp,
+      maxAttempts,
+      ttlSeconds,
+    );
     return result === 1 || result === '1';
   }
 

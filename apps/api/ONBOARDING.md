@@ -9,11 +9,13 @@ This application is the backend of Neo Bank, a banking product in early
 development. It is a REST API built with NestJS 12 running on Fastify
 instead of Express. It currently serves health checks, a Problem Type
 documentation page, and the first feature (enrollment challenge: it
-validates a phone number, stores a six-digit OTP in Redis for 120 seconds,
-and a verify endpoint consumes the stored code atomically; verification
-failures are deliberately generic). Delivery via SMS and the registration
-steps after verification are not implemented yet. It has no database; Redis
-is its only external store.
+validates a phone number, stores a six-digit OTP in Redis for 120 seconds
+using atomic `SET NX EX`, and a verify endpoint consumes the stored code
+atomically with attempt counting via a single Lua script; verification
+failures are deliberately generic and indistinguishable; both endpoints
+have rate limits aligned with the OTP window). Delivery via SMS and the
+registration steps after verification are not implemented yet. It has no
+database; Redis is its only external store.
 
 Within the monorepo it is the `apps/api` workspace; the web and admin
 frontends do not call it yet. Architectural context:
@@ -82,6 +84,7 @@ cp env/.env.example env/.env.development
 | `RATE_LIMIT_SHORT_TTL_SECONDS`     | Short-window TTL in seconds               | `1`                                               |
 | `RATE_LIMIT_LONG_LIMIT`            | Long-window max requests                  | `100`                                             |
 | `RATE_LIMIT_LONG_TTL_MINUTES`      | Long-window TTL in minutes                | `1`                                               |
+| `ENROLLMENTS_MAX_VERIFY_ATTEMPTS`  | Max failed OTP verify attempts per window | `5`                                               |
 
 Startup fails fast with a readable Zod error if validation fails.
 

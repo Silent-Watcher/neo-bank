@@ -27,7 +27,8 @@ auth, no deployment setup.
   `REDIS_TLS`, `REDIS_CONNECT_TIMEOUT_MS`, `REDIS_COMMAND_TIMEOUT_MS`,
   `REDIS_MAX_RETRIES_PER_REQUEST`, `REDIS_SHUTDOWN_TIMEOUT_MS`,
   `RATE_LIMIT_SHORT_LIMIT`, `RATE_LIMIT_SHORT_TTL_SECONDS`,
-  `RATE_LIMIT_LONG_LIMIT`, `RATE_LIMIT_LONG_TTL_MINUTES`.
+  `RATE_LIMIT_LONG_LIMIT`, `RATE_LIMIT_LONG_TTL_MINUTES`,
+  `ENROLLMENTS_MAX_VERIFY_ATTEMPTS`.
 - Redis integration (ADR-012/013): global `RedisModule` in
   `src/shared/redis/` with a single lazy ioredis 6 client (symbol token,
   `@InjectRedis()` escape hatch), `RedisService` application abstraction
@@ -64,15 +65,21 @@ auth, no deployment setup.
   validates an Iranian mobile number (with normalization for
   `+98`/`0098`/`98`/missing zero/whitespace), generates a cryptographically
   random 6-digit OTP (100000–999999), and stores it in Redis under
-  `neo-bank:enrollments:challenge:otp:<phone>` with an exact 120-second TTL.
-  The response contains only the phone number; the OTP value is never
-  returned and no SMS is sent.
+  `neo-bank:enrollments:challenge:otp:<phone>` with an exact 120-second TTL
+  using atomic `SET NX EX` (prevents race conditions where concurrent requests
+  could overwrite an existing OTP or extend its TTL). The response contains
+  only the phone number; the OTP value is never returned and no SMS is sent.
 - Feature module `enrollments`: `POST /api/v1/enrollments/verify` —
   validates the phone and a six-character numeric OTP (string, leading zeros
   preserved) with Zod before any Redis access, then atomically verifies and
-  consumes the stored code via a single Lua script (read-compare-UNLINK).
-  Missing, expired, and incorrect OTPs all return the identical generic
-  `OTP_VERIFICATION_FAILED` Problem Details response. No registration or
+  consumes the stored code via a single Lua script (read-compare-UNLINK with
+  attempt counting). Missing, expired, incorrect, and exhausted-attempt OTPs
+  all return the identical generic `OTP_VERIFICATION_FAILED` Problem Details
+  response. Failed attempts are counted up to a configurable maximum
+  (`ENROLLMENTS_MAX_VERIFY_ATTEMPTS`, default 5); when reached, the OTP is
+  invalidated so no further attempts can succeed. Both endpoints are protected
+  by the global rate limiter with endpoint-specific limits aligned to the OTP
+  window: challenge 2 req/120s, verify 5 req/120s. No registration or
   authentication steps yet.
 - Tests: Vitest unit (26 files / 196 tests), e2e (13 files / 62 tests),
   Redis integration (2 files / 32 tests via `pnpm test:redis`).

@@ -1,4 +1,5 @@
 import { Body, Controller, HttpStatus, Post } from '@nestjs/common';
+import { seconds, Throttle } from '@nestjs/throttler';
 import {
   ApiBadRequestResponse,
   ApiBody,
@@ -31,6 +32,9 @@ export class EnrollmentsController {
   constructor(private readonly enrollmentsService: EnrollmentsService) {}
 
   @Post('challenge')
+  // Tighter per-IP issuance limit: 2 requests per 120 seconds (aligned with
+  // the OTP validity window). The global short/long policies still apply.
+  @Throttle({ short: { limit: 2, ttl: seconds(120) } })
   @ApiOperation({
     summary: 'Request an enrollment challenge',
     description:
@@ -69,6 +73,9 @@ export class EnrollmentsController {
   }
 
   @Post('verify')
+  // Tighter per-IP verification limit: 5 requests per 120 seconds (aligned
+  // with the max verification attempts and OTP validity window).
+  @Throttle({ short: { limit: 5, ttl: seconds(120) } })
   @ApiOperation({
     summary: 'Verify an enrollment challenge',
     description:
