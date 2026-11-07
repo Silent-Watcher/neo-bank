@@ -4,15 +4,20 @@ import { describe, expect, it } from 'vitest';
 import { RedisService } from '#src/shared/redis/redis.service.js';
 import { createTestApp } from './create-test-app.js';
 
-// env/.env.test points Redis at an unreachable local address, so the default
-// application state exercises the real degraded path: the client is created
-// and connecting in the background, but every PING fails fast (no offline
-// queue) while the application stays up. The healthy state is simulated by
-// overriding RedisService, keeping the suite independent of a running Redis.
+// env/.env.test points Redis at the real compose dev server (global rate
+// limiting makes Redis a hard dependency for guarded routes), so the degraded
+// path is produced by overriding RedisService with a failing ping: the health
+// indicator sees the same rejection shape a real outage produces. The healthy
+// state is simulated the same way, keeping the suite deterministic.
 describe('Health with Redis (e2e)', () => {
   it('starts the application and reports degraded Redis health with HTTP 200', async () => {
-    // Arrange — no Redis server is running at the configured address.
-    const app = await createTestApp();
+    // Arrange — the ping fails exactly as it does while Redis is unreachable.
+    const app = await createTestApp(undefined, {
+      configureModule: (builder) =>
+        builder.overrideProvider(RedisService).useValue({
+          ping: () => Promise.reject(new Error('Redis unavailable')),
+        }),
+    });
 
     // Act
     const response = await request(app.getHttpServer()).get('/health');

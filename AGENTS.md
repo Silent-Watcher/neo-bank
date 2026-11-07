@@ -66,6 +66,53 @@ if you are unsure whether a change is "material", update rather than skip.
 - The only permitted `process.env` access is the single environment validation call in the environment validation layer (`apps/api/src/shared/config/env/env.config.ts`).
 - Read validated configuration through configuration factories and `ConfigService`, and use the Pino-backed NestJS `Logger` (provided by `nestjs-pino`, see `apps/api/src/shared/logging/`) for runtime logging; never use `console.log`.
 
+### Happy Path First
+
+The primary objective when implementing any function or method is to reach its successful execution path as directly and clearly as possible.
+
+Every method should make its successful execution flow easy to identify. The happy path should normally be the main, linear body of the function, rather than code buried inside multiple nested conditional blocks.
+
+### Guard Clauses as Default Conditional Control Flow
+
+Every conditional structure introduced inside a function or method must be evaluated with the following question:
+
+**Does this condition protect the happy path by handling an edge case or an exceptional state?**
+
+Prefer guard clauses that terminate the current execution path early. Appropriate guards include:
+
+- Invalid input
+- Missing or unavailable resources
+- Unauthorized or forbidden operations
+- Invalid application state
+- Missing records
+- Duplicate operations
+- Resource or dependency failures
+- Boundary conditions
+- Unexpected values
+- Invalid state transitions
+
+The preferred structure is:
+
+1. Validate preconditions.
+2. Handle invalid or exceptional conditions immediately.
+3. Exit early using an appropriate return or throw.
+4. Continue with the successful execution path.
+5. Keep the remaining code linear and readable.
+
+Avoid:
+
+- Deeply nested `if` statements.
+- Wrapping the happy path inside `else` blocks.
+- Unnecessary `else` and `else if` branches after a guard has already terminated execution.
+- Large conditional blocks that mix validation, error handling, and successful execution.
+- Multiple levels of nesting that make the successful execution path difficult to follow.
+
+For legitimate cases such as explicit state machines, exhaustive discriminated-union handling, transaction boundaries, or genuinely distinct business flows, use the clearest appropriate control-flow structure. Do not introduce artificial guard clauses that make the code harder to understand.
+
+When multiple successful business paths exist, prefer extracting them into focused functions or using an appropriate dispatch/strategy structure rather than building deeply nested conditionals.
+
+**The default expectation is fail-fast validation followed by a straightforward happy path.**
+
 ## Imports and Type Safety
 
 - **Import aliases:** Use the Node.js native `#...` subpath aliases for cross-directory imports instead of parent-relative imports. If a required alias does not exist, define it consistently for Node.js runtime, TypeScript, and tests before using it.
@@ -195,8 +242,305 @@ Treat this convention as the default project architecture. Inspect existing file
 
 - Whenever an addition or change is significant enough to be worth an architecture decision record, propose one proactively instead of waiting to be asked.
 - Before adding the record to `DECISIONS.md`, present the proposal to the user and ask whether it should be added; only write it after explicit approval.
-- Create approved decision records with **Pending** status.
-- Present the pending decision to the user and wait for explicit acceptance before continuing development that depends on it.
+- Create approved decision records with **Accepted** status (the proposal remains outside the repository until explicitly approved).
+- Do not create a `Pending` ADR file as a substitute for approval.
+- The accepted ADR must be the first repository write associated with that feature.
+
+### ADR-First Development Workflow
+
+The ADR must be proposed, reviewed, and accepted before implementation begins. This applies to new features, architectural changes, significant technical decisions, infrastructure changes, data-model decisions, and changes that materially affect system behavior.
+
+A narrowly scoped bug fix or a trivial maintenance change that does not introduce a new technical decision does not automatically require an ADR.
+
+#### Phase One: Investigate and Propose
+
+Before writing implementation code:
+
+1. Understand the requested capability.
+2. Read the relevant project documentation and agent instructions.
+3. Inspect the existing architecture and related implementation.
+4. Review existing accepted ADRs and decisions.
+5. Identify technical constraints and dependencies.
+6. Identify possible edge cases and architectural consequences.
+7. Evaluate reasonable alternatives.
+8. Prepare a complete ADR proposal.
+
+The proposal must follow the repository's established ADR format (see `DECISIONS.md`). At a minimum, cover:
+
+- Title
+- Context and problem statement
+- Proposed decision
+- Decision drivers
+- Alternatives considered
+- Reasons for selecting the proposed approach
+- Trade-offs
+- Positive consequences
+- Negative consequences
+- Security implications
+- Performance implications
+- Operational implications
+- Testing and migration implications, when applicable
+
+Do not invent project requirements or technical constraints.
+
+#### Phase Two: ADR Proposal Must Be Presented to the User First
+
+Present the complete ADR proposal for user review.
+
+At this stage:
+
+- Do not create the ADR file inside the repository.
+- Do not create a `Pending` ADR file as a substitute for approval.
+- Do not implement the feature.
+- Do not modify the implementation to match the proposed decision.
+- Do not treat your own recommendation as user approval.
+
+The proposal must remain outside the repository until explicitly approved.
+
+If the user requests modifications, revise the proposal and present it again.
+
+If the user rejects it, do not proceed with implementation.
+
+**No implicit approval is allowed.**
+
+#### Phase Three: Accepted ADR Must Be the First Project Change
+
+Only after explicit approval:
+
+1. Take the approved ADR content.
+2. Set its status to `Accepted`, following the repository's exact status conventions.
+3. Create the ADR file in the correct location (`DECISIONS.md`).
+4. Preserve the approved decision and rationale.
+5. Verify that the file accurately reflects what was approved.
+
+**The accepted ADR must be the first repository write associated with that feature.**
+
+Do not create implementation files, change application logic, introduce dependencies, or make other feature-related modifications before the accepted ADR exists in the repository.
+
+Do not start implementing while the ADR is still proposed, pending, or waiting for approval.
+
+#### Phase Four: Implementation
+
+After the accepted ADR has been written:
+
+- Implement the capability according to the approved ADR.
+- Follow the repository's engineering harness.
+- Apply all happy-path and guard-clause rules.
+- Use the atomic implementation workflow.
+- Invoke the independent context-blind judge after each atomic unit.
+- Apply valid review findings.
+- Run the relevant tests and quality checks.
+- Update documentation when implementation changes documented behavior.
+
+If implementation reveals that the accepted ADR is incomplete, incorrect, or no longer appropriate:
+
+1. Stop work on the affected implementation.
+2. Explain the newly discovered issue.
+3. Propose an ADR amendment or a new ADR.
+4. Obtain explicit approval.
+5. Record the newly accepted decision before continuing with the affected implementation.
+
+Never silently implement a materially different decision from the accepted ADR.
+
+### Atomic Implementation Units
+
+Implement the smallest practical, independently reviewable unit of code. The atomic unit may be:
+
+- A function
+- A method
+- A class
+- A module
+- Another small, independently reviewable implementation unit
+
+Choose the smallest meaningful unit that can be reviewed independently. For example, if a feature consists of several independent functions, do not wait until the entire feature is complete before reviewing them.
+
+The expected cycle is:
+
+1. Implement one atomic unit.
+2. Perform the minimum local checks necessary to ensure the code is reviewable.
+3. Send that unit to the independent AI judge.
+4. Receive the judge's report.
+5. Analyze the findings.
+6. Improve the implementation.
+7. Re-run the judgement when changes affect the reviewed code.
+8. Continue with the next atomic unit.
+
+Keep this feedback loop throughout implementation.
+
+### Mandatory Context-Blind AI Code Judgement
+
+After implementing each atomic unit, you MUST invoke a separate AI reviewer acting as a strict, context-blind code judge.
+
+Do not postpone this review until the entire feature, module, or application has been implemented.
+
+#### Judge Isolation Requirements
+
+The reviewer must operate independently and without the implementation context.
+
+**Do not give the judge the feature description, task prompt, ADR, business requirements, architectural rationale, previous discussion, or your implementation decisions.**
+
+The purpose is to prevent the reviewer from becoming biased by your intentions or from defending your implementation simply because it knows why you wrote it that way.
+
+The judge must inspect the code as an independent critic.
+
+Provide only:
+
+- The exact code being reviewed.
+- The minimum directly referenced declarations, types, interfaces, or contracts required to understand and inspect that code.
+- The minimum technical information required to interpret its imports and dependencies.
+
+Do not provide broader repository documentation or the reason the code was written.
+
+Do not allow the judge to browse the full repository or retrieve the original feature context.
+
+If the judge requires additional information, provide only the smallest technical dependency necessary. Never disclose the feature requirements to resolve its uncertainty.
+
+The judge must not implement changes itself. Its responsibility is to inspect, criticize, and report.
+
+**Important:** A code judge that receives the complete task description, ADR, business requirements, or implementation discussion is not a context-blind judge. Do not claim that an isolated review happened if the reviewer actually had access to that information.
+
+Use a genuinely separate agent, sub-agent, model session, or equivalent isolated execution context. Do not simulate an independent judge by simply reviewing your own implementation and calling it an AI judgement.
+
+If the available tooling cannot provide an independent context-isolated reviewer, report this limitation clearly. Never fabricate a judge report.
+
+#### Judge Review Scope
+
+The judge must be particularly strict about the following areas.
+
+**A. Correctness and Bugs**
+
+- Incorrect assumptions
+- Incorrect control flow
+- Unreachable code
+- Incorrect return values
+- Missing return paths
+- Incorrect state transitions
+- Incorrect error handling
+- Inconsistent behavior
+- Hidden logical bugs
+- Incorrect use of asynchronous operations
+- Promise handling and unhandled rejections
+- Race conditions
+- Concurrency-related bugs
+
+**B. Edge Cases**
+
+Look for realistic cases that can break the implementation, including:
+
+- `null` and `undefined`
+- Empty strings, arrays, objects, and collections
+- Missing properties
+- Invalid input types
+- Boundary values
+- Zero, negative, and unusually large values
+- Unexpected state
+- Duplicate operations
+- Repeated requests
+- Concurrent requests
+- Stale or inconsistent data
+- Partial failures
+- Timeouts
+- Resource exhaustion
+- Serialization and deserialization problems
+- Unexpected dependency responses
+
+Do not limit edge-case analysis to these examples. Find additional cases based on the actual code.
+
+**C. Security Vulnerabilities**
+
+Inspect for relevant security weaknesses, including:
+
+- Input validation failures
+- Injection vulnerabilities
+- Authorization and access-control issues
+- Information leakage
+- Sensitive-data exposure
+- Insecure error handling
+- Insecure cryptographic usage
+- Timing-related weaknesses
+- Race-condition vulnerabilities
+- Denial-of-service opportunities
+- Resource exhaustion
+- Unsafe deserialization
+- Incorrect trust boundaries
+- Misuse of third-party APIs
+
+**D. Performance and Resource Efficiency**
+
+Inspect for:
+
+- Unnecessary database or network operations
+- Unnecessary Redis operations
+- Repeated computation
+- Inefficient algorithms
+- Unnecessary memory allocations
+- Memory leaks
+- Blocking operations
+- Unbounded loops or collections
+- Excessive object copying
+- Unnecessary asynchronous operations
+- N+1 query patterns
+- Inefficient data structures
+- Unnecessary serialization or parsing
+- Avoidable I/O overhead
+
+Evaluate performance in the context of realistic execution patterns. Do not recommend meaningless micro-optimizations.
+
+**E. Syntax and Language-Level Quality**
+
+Inspect for:
+
+- Unnecessarily complicated syntax
+- Non-idiomatic language usage
+- Redundant operations
+- Unnecessary type assertions
+- Unsafe type conversions
+- Incorrect type narrowing
+- Unnecessary optional chaining or fallback expressions
+- Poor use of available language features
+- Unnecessary code duplication
+- Unclear abstractions
+- Avoidable complexity
+
+Prefer the simplest correct and maintainable implementation.
+
+#### Required Judge Report Format
+
+The judge must return a structured report.
+
+Each finding must include:
+
+- **Severity:** Critical, High, Medium, or Low
+- **Category:** Correctness, Edge Case, Security, Performance, or Syntax/Code Quality
+- **Location:** Exact file and relevant line, function, or code section
+- **Problem:** What is wrong or potentially wrong?
+- **Failure Scenario:** A concrete explanation of how the implementation could fail or become problematic
+- **Recommendation:** A specific and technically justified improvement
+
+The judge must distinguish actual defects from subjective preferences.
+
+It must not produce generic comments such as "improve error handling" without identifying a concrete failure scenario.
+
+If the implementation has no meaningful findings, explicitly report that no actionable issues were identified.
+
+#### Mandatory Improvement Loop
+
+The implementation agent must process every finding.
+
+- Fix all valid Critical and High findings.
+- Fix valid Medium findings.
+- Evaluate Low findings and fix them when they provide a meaningful improvement.
+- Reject incorrect or inapplicable findings only with a technically justified explanation.
+- Do not silently ignore findings.
+- Do not blindly apply a recommendation if it introduces another defect.
+
+After making changes, run the judge again against the revised code.
+
+Continue until there are no unresolved actionable findings, or until a remaining finding has a documented technical justification for not being applied.
+
+The implementation agent remains responsible for validating the feature against its actual requirements. A context-blind code judge cannot replace requirement-based testing because it deliberately does not know the feature requirements.
+
+**The purpose of this process is to make independent criticism a mandatory part of implementation, not an optional final review.**
 
 ### Delegated Validation
 

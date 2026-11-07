@@ -37,7 +37,9 @@ neutral `/health` probe on Fastify, port 3001 in development/test.
   shared response schemas), `errors/` +
   `filters/problem-details.filter.ts` (RFC 9457 error contract),
   `interceptors/response-envelope.interceptor.ts` (success envelope),
-  `pipes/zod-validation.pipe.ts`, `http/` (request IDs, API version).
+  `pipes/zod-validation.pipe.ts`, `http/` (request IDs, API version),
+  `throttler/` (global HTTP rate limiting: `@nestjs/throttler` + Redis
+  storage, named policies, `RedisThrottlerGuard`).
 - **Infrastructure provider tokens:** use `Symbol` tokens for infrastructure
   providers (e.g. `REDIS_CLIENT`), keep them defined inside the owning
   module's directory, and expose them to consumers only through the owning
@@ -141,12 +143,16 @@ src/
     redis/                 # global RedisModule: provider, RedisService, InjectRedis,
                            # key builder (redis-keys.ts)
     swagger/               # OpenAPI setup (dev-only), shared response schemas
+    throttler/             # global rate limiting: RedisThrottlerStorage, Guard,
+                           # module, keys
     enums/ errors/ filters/ http/ interceptors/ logging/ pipes/
 test/
   create-test-app.ts       # e2e app factory mirroring main.ts bootstrap
   *.e2e-spec.ts            # supertest-based e2e suites
+  *.redis-spec.ts          # real-Redis integration tests (pnpm test:redis)
   subpath-import-aliases.ts # Vitest resolution of # aliases (keep in sync)
-env/                       # .env.development / .env.test / .env.example (gitignored except example)
+env/                       # .env.development / .env.test / .env.example /
+                           # .env.redis-test (gitignored except example)
 ```
 
 ## Naming Conventions
@@ -196,17 +202,20 @@ pnpm format       # oxfmt --write .
 pnpm typecheck    # tsc --noEmit
 pnpm test         # Vitest unit tests
 pnpm test:e2e     # supertest e2e suite
+pnpm test:redis   # real-Redis rate-limit integration suite (env/.env.redis-test)
 ```
 
 ## Constraints
 
-- Follow the decision records in [../../DECISIONS.md](../../DECISIONS.md);
-  several are still **Pending** but implemented (URI versioning, `api`
-  prefix, body limit, Pino, request IDs, envelope) — do not build against
-  their rejected alternatives.
+- Follow the decision records in [../../DECISIONS.md](../../DECISIONS.md) —
+  all ADRs ADR-001 through ADR-015 are **Accepted** and implemented; do not
+  build against their rejected alternatives.
+- New architectural decisions follow the ADR-first workflow in the root
+  [AGENTS.md](../../AGENTS.md): propose the ADR, get explicit user approval,
+  write the accepted ADR as the first repository change, then implement.
 - Inspect existing shared infrastructure before adding any abstraction,
   dependency, or pattern — the `shared/` layer already covers config,
-  logging, errors, envelopes, and validation.
+  logging, errors, envelopes, validation, and rate limiting.
 - When a change matches a Documentation Update Triggers entry in the root
   [AGENTS.md](../../AGENTS.md), update the listed documentation in the same
   task (for the API that is usually this file, `ONBOARDING.md`, and

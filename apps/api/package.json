@@ -48,6 +48,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "node --env-file=env/.env.test node_modules/vitest/vitest.mjs run --config test/vitest-e2e.config.ts",
+    "test:redis": "node --env-file=env/.env.redis-test node_modules/vitest/vitest.mjs run --config test/vitest-redis.config.ts",
     "clean": "rm -rf dist"
   },
   "dependencies": {
@@ -59,6 +60,7 @@
     "@nestjs/platform-fastify": "12.2.0",
     "@nestjs/swagger": "12.1.0",
     "@nestjs/terminus": "12.1.0",
+    "@nestjs/throttler": "6.7.1",
     "ioredis": "^6.0.0",
     "nestjs-pino": "^5.3.1",
     "pino": "^10.4.0",

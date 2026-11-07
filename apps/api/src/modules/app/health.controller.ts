@@ -1,6 +1,9 @@
 import { Controller, Get, HttpStatus, VERSION_NEUTRAL } from '@nestjs/common';
 import { HealthCheck, HealthCheckService } from '@nestjs/terminus';
 import { ApiOkResponse, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
+// Both named global throttlers must be skipped explicitly: a bare
+// @SkipThrottle() targets the "default" name only and would leave them active.
+import { SkipThrottle } from '@nestjs/throttler';
 
 import {
   problemDetailsSchema,
@@ -13,6 +16,7 @@ import { RedisHealthIndicator } from '#src/shared/redis/redis.health.js';
 // (unwrapped) health schema — ours must apply after it so the documented
 // contract is the actual envelope-wrapped response.
 @ApiTags('health')
+@SkipThrottle({ short: true, long: true })
 @Controller({ path: 'health', version: VERSION_NEUTRAL })
 export class HealthController {
   constructor(

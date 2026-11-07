@@ -171,7 +171,7 @@ A compatible SWC configuration must be maintained, and type checking must stay e
 
 ## ADR-004: Use @nestjs/config and Zod for Configuration and Environment Validation
 
-- **Status:** Pending
+- **Status:** Accepted
 - **Date:** 2026-10-24
 
 ### Context
@@ -224,7 +224,7 @@ All environment variables must be declared in a Zod schema under `src/shared/con
 
 ## ADR-005: Use URI-Based API Versioning
 
-- **Status:** Pending
+- **Status:** Accepted
 - **Date:** 2026-10-25
 
 ### Context
@@ -267,7 +267,7 @@ Encoding the version into the `Accept` header is the most HTTP-idiomatic option,
 
 ## ADR-006: Configure a Maximum Request Body Size of 1 MiB
 
-- **Status:** Pending
+- **Status:** Accepted
 - **Date:** 2026-10-25
 
 ### Context
@@ -307,7 +307,7 @@ A fixed limit without an environment variable would force a code change whenever
 
 ## ADR-007: Use a Global `api` Prefix with a `/health` Exception
 
-- **Status:** Pending
+- **Status:** Accepted
 - **Date:** 2026-10-25
 
 ### Context
@@ -348,7 +348,7 @@ Serving `/api/v1/health` would tie infrastructure probing to API versions, forci
 
 ## ADR-008: Choose Pino for Structured Application Logging
 
-- **Status:** Pending
+- **Status:** Accepted
 - **Date:** 2026-10-25
 
 ### Context
@@ -394,7 +394,7 @@ They were rejected because Pino meets the requirements with a smaller, better-ma
 
 ## ADR-009: Use nestjs-pino for the NestJS Integration
 
-- **Status:** Pending
+- **Status:** Accepted
 - **Date:** 2026-10-25
 
 ### Context
@@ -437,7 +437,7 @@ This was rejected to keep a single logger configuration (the `LOG_CONFIG` namesp
 
 ## ADR-010: Use UUIDv4 for Request IDs
 
-- **Status:** Pending
+- **Status:** Accepted
 - **Date:** 2026-10-25
 
 ### Context
@@ -481,7 +481,7 @@ It was rejected because the application must honor and validate `x-request-id` f
 
 ## ADR-011: Exclude Special Response Types from the Standard Success Envelope
 
-- **Status:** Pending
+- **Status:** Accepted
 - **Date:** 2026-10-25
 
 ### Context
@@ -535,7 +535,7 @@ It was rejected in favor of a single global default with explicit, tested exclus
 
 ## ADR-012: Use ioredis Directly Without a Third-Party NestJS Redis Wrapper
 
-- **Status:** Pending
+- **Status:** Accepted
 - **Date:** 2026-11-02
 
 ### Context
@@ -606,7 +606,7 @@ the implemented resilience strategy.
 
 ## ADR-013: Global Redis Module with an Application-Level Abstraction
 
-- **Status:** Pending
+- **Status:** Accepted
 - **Date:** 2026-11-02
 
 ### Context
@@ -683,7 +683,7 @@ in `AppModule` guarantees one client while consumers stay import-free.
 
 ## ADR-014: Use Swagger/OpenAPI with Development-Only Availability
 
-- **Status:** Pending
+- **Status:** Accepted
 - **Date:** 2026-11-02
 
 ### Context
@@ -757,3 +757,102 @@ generated here can be imported into such platforms later if needed.
 - `/docs` (UI), `/docs/json`, and `/docs/yaml` exist only in development.
 - Endpoint work is not complete until its OpenAPI documentation matches the
   implementation, per the mandatory rule in `apps/api/AGENTS.md`.
+
+## ADR-015: Global HTTP Rate Limiting with Redis-Backed @nestjs/throttler
+
+- **Status:** Accepted
+- **Date:** 2026-11-07
+
+### Context
+
+The API runs multiple backend instances simultaneously behind a load balancer. A per-IP rate limit enforced in process memory would not be shared across instances, allowing clients to exceed limits by distributing requests across instances. Redis is already a mandatory dependency (ADR-012/013) and the existing `RedisModule` owns a single shared ioredis connection. The rate limiter must reuse this connection — no second Redis client, no independent connection lifecycle.
+
+The official `@nestjs/throttler` (v6) provides the guard behavior, metadata handling, decorators (`@Throttle`, `@SkipThrottle`), tracker resolution, key generation, and HTTP 429 response handling. Only the storage backend needs customization to use Redis with atomic operations.
+
+### Decision
+
+Use the official `@nestjs/throttler` package for all guard/decoration/metadata behavior. Implement a custom `RedisThrottlerStorage` that:
+
+- Receives the existing `REDIS_CLIENT` (ioredis) via `ThrottlerModule.forRootAsync()`.
+- Executes a single atomic Lua script per throttler evaluation (read-check-write: check block, increment counter, set expiration, apply block policy, compute retry times).
+- Never opens or closes the Redis connection — lifecycle stays with `RedisModule`.
+- Never falls back to in-memory storage; Redis failures propagate as HTTP 500.
+
+Two named global throttlers are configured:
+
+- `short`: 10 requests / 1 second (configurable via `RATE_LIMIT_SHORT_LIMIT`, `RATE_LIMIT_SHORT_TTL_SECONDS`).
+- `long`: 100 requests / 1 minute (configurable via `RATE_LIMIT_LONG_LIMIT`, `RATE_LIMIT_LONG_TTL_MINUTES`).
+
+Both apply globally to guarded HTTP endpoints. A request is rejected when it exceeds either policy. Endpoint-level overrides use the official `@Throttle({ short: { limit, ttl }, long: { limit, ttl } })` decorator. Skipping uses `@SkipThrottle({ short: true, long: true })` (named, because bare `@SkipThrottle()` targets only the "default" name). Health/readiness endpoints are skipped.
+
+The custom `RedisThrottlerGuard` extends `ThrottlerGuard` to add:
+
+- Standard `Retry-After` header (plus named `Retry-After-<name>`).
+- `X-RateLimit-Limit/Remaining/Reset` headers on both success and 429 responses (the official guard only sets them on success).
+
+`ThrottlerException` is mapped to `RATE_LIMITED` Problem Details (HTTP 429) in the global exception filter.
+
+### Third-Party Package Evaluation
+
+The initial candidate was `@nest-lab/throttler-storage-redis` (https://github.com/jmcdo29/nest-lab/tree/main/packages/throttler-storage-redis).
+
+**Investigation results:**
+
+| Criterion                                           | Finding                                                                                                             |
+| --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| NestJS 12 / @nestjs/throttler 6 compatibility       | Compatible (peer deps allow)                                                                                        |
+| Existing Redis client reuse                         | Accepts an ioredis instance in constructor                                                                          |
+| Connection lifecycle                                | Does not close the passed instance (acceptable)                                                                     |
+| Redis Cluster support                               | Keys not hash-tagged; would need changes                                                                            |
+| Atomicity                                           | Uses Lua script but checks block _after_ increment                                                                  |
+| Issue #74 (block extended by requests during block) | **Unfixed** — hit counter incremented before block check; stale counter can rearm and block again after Retry-After |
+| Issue #55 (SET PX 0 for zero blockDuration)         | **Unfixed** — sends invalid expiration to Redis                                                                     |
+| Issue #52 (EVAL vs EVALSHA)                         | Uses `EVAL` every call; no script caching                                                                           |
+| Maintenance                                         | Low activity; open issues since 2023                                                                                |
+| Key prefix                                          | Configurable but not enforced to project convention                                                                 |
+
+**Decision:** Reject the third-party provider. The known correctness bugs (especially #74) are unacceptable for production. A custom storage implementation (~140 lines) is simpler than patching or forking the package, avoids the dependency, and guarantees correct atomic behavior matching the project's requirements.
+
+### Algorithm Trade-offs
+
+**Fixed-window counter with temporary block** (implemented):
+
+- First hit starts the TTL window; `INCR` counts requests.
+- When limit exceeded and `blockDuration > 0`, a block key is set and the hit counter's TTL is synchronized to the block duration — no stale counter survives into the post-block window.
+- `blockDuration = 0` is a deliberate no-block policy: rejected on counter alone, no block key created, no `SET PX 0` sent to Redis. Retry timing uses the remaining counter window.
+- Concurrency: single Lua script guarantees atomic read-modify-write.
+- Boundary burst: up to `2 * limit` requests can be accepted at window boundaries (one full window from the end of the previous, one from the start of the next). Documented as acceptable for coarse per-IP protection.
+
+The installed `@nestjs/throttler` in-memory storage uses a sliding-window timestamp list. This Redis implementation uses fixed-window; the semantics differ at boundaries. This is explicitly documented and accepted.
+
+### HTTP and Proxy Behavior
+
+- HTTP adapter: Fastify (ADR-002), `@nestjs/platform-fastify` 12.2.0.
+- Client IP: `request.ip` (default tracker), respects Fastify's `trustProxy` resolution.
+- `trustProxy`: Configurable via `TRUST_PROXY` environment variable. Development: `false` (or `loopback` when behind a local proxy). Production: specific CIDR ranges (e.g. `10.10.0.0/16`) derived from deployment topology. **Fastify ≥ 5.12.1 no longer supports numeric hop-count trust**; numeric values and `true` are avoided.
+- IPv6: Official tracker normalizes IPv4-mapped IPv6 to IPv4 and groups IPv6 addresses into `/64` subnets — prevents rotation bypass within the same subnet.
+- Spoofing protection: Untrusted `X-Forwarded-For` values are ignored by Fastify when `trustProxy` is configured correctly.
+
+### Operational Consequences
+
+- **Redis availability dependency**: Guarded routes fail closed (HTTP 500) when Redis is unreachable. This is intentional — a rate-limit check that cannot be evaluated must never silently allow the request. Health endpoint is skipped so probes remain accessible.
+- **Failure behavior**: HTTP 500 with `APPLICATION_ERROR` code, no Redis details exposed. Bounded command timeouts prevent indefinite hangs.
+- **Redis key namespace**: `neo-bank:throttler:rate-limit:{hit|block}:{<key>}`. Hash-tagged for Redis Cluster compatibility.
+- **TTL cleanup**: All keys have controlled expirations. No permanent keys created. Expired keys auto-removed by Redis.
+- **Multi-instance behavior**: Shared counters across instances. Application restart does not reset counters (they live in Redis until TTL).
+- **Script caching**: Uses `EVAL` (not `EVALSHA`) — simple, correct, no `NOSCRIPT`/failover complexity. Script size is small; performance is acceptable for the expected volume.
+
+### Alternatives Considered
+
+1. **Default Nest in-memory storage** — Rejected: not shared across instances.
+2. **@nest-lab/throttler-storage-redis** — Rejected: unfixed correctness bugs (#74, #55), no Cluster hash-tagging, `EVAL` every call.
+3. **Custom Redis storage** — Selected: correct atomic behavior, reuses existing connection, matches project conventions, fully tested.
+4. **Sliding-window sorted-set Redis storage** — Rejected: unnecessary complexity for coarse per-IP protection; fixed-window with block is sufficient and simpler.
+
+### References
+
+- [@nestjs/throttler documentation](https://docs.nestjs.com/security/rate-limiting)
+- [nest-lab issue #74](https://github.com/jmcdo29/nest-lab/issues/74)
+- [nest-lab issue #55](https://github.com/jmcdo29/nest-lab/issues/55)
+- [nest-lab issue #52](https://github.com/jmcdo29/nest-lab/issues/52)
+- ADR-012, ADR-013 (Redis integration)

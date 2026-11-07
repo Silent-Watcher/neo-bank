@@ -34,6 +34,7 @@ pnpm format
 pnpm format:check
 pnpm typecheck
 pnpm test
+pnpm test:redis   # API Redis integration tests (requires running Redis)
 pnpm clean
 pnpm cm
 ```

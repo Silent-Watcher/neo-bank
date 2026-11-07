@@ -1,6 +1,6 @@
 # Current Development State
 
-Snapshot of what exists in the repository. Last verified: 2026-11-02.
+Snapshot of what exists in the repository. Last verified: 2026-11-07.
 Legend: **Implemented** / **Partial** / **Planned** / **Unknown**.
 
 ## Maturity
@@ -20,20 +20,33 @@ auth, no deployment setup.
   request-ID generation, global `api` prefix, URI versioning (`/api/v1`),
   CORS from validated config.
 - Configuration system: Zod-validated env (ADR-004), env files in
-  `env/` (`.env.development`, `.env.test`, `.env.example`), namespaced
-  `registerAs` factories, fail-fast validation. Validated variables:
+  `env/` (`.env.development`, `.env.test`, `.env.example`, `.env.redis-test`),
+  namespaced `registerAs` factories, fail-fast validation. Validated variables:
   `APP_ENV`, `HOST`, `PORT`, `CORS_ORIGIN`, `TRUST_PROXY`, `BODY_LIMIT`,
   `LOG_LEVEL`, `REDIS_URL`, `REDIS_USERNAME`, `REDIS_PASSWORD`, `REDIS_DB`,
   `REDIS_TLS`, `REDIS_CONNECT_TIMEOUT_MS`, `REDIS_COMMAND_TIMEOUT_MS`,
-  `REDIS_MAX_RETRIES_PER_REQUEST`, `REDIS_SHUTDOWN_TIMEOUT_MS`.
+  `REDIS_MAX_RETRIES_PER_REQUEST`, `REDIS_SHUTDOWN_TIMEOUT_MS`,
+  `RATE_LIMIT_SHORT_LIMIT`, `RATE_LIMIT_SHORT_TTL_SECONDS`,
+  `RATE_LIMIT_LONG_LIMIT`, `RATE_LIMIT_LONG_TTL_MINUTES`.
 - Redis integration (ADR-012/013): global `RedisModule` in
   `src/shared/redis/` with a single lazy ioredis 6 client (symbol token,
   `@InjectRedis()` escape hatch), `RedisService` application abstraction
   (get/set+TTL, UNLINK delete, exists/expire/ttl, atomic counters, bounded
   SCAN, PING), non-blocking startup connection, capped exponential backoff
   reconnection, graceful bounded shutdown, and a Terminus indicator that
-  reports `degraded` (HTTP 200) when Redis is unreachable. No feature uses
-  it yet (planned for OTP storage).
+  reports `degraded` (HTTP 200) when Redis is unreachable. Consumers:
+  enrollments OTP storage and global rate limiting.
+- Global HTTP rate limiting (ADR-015): official `@nestjs/throttler` (v6) with
+  two named policies (`short`: 10 req/1s default; `long`: 100 req/1m default)
+  backed by custom `RedisThrottlerStorage` using the shared Redis connection.
+  Atomic Lua script evaluates block state before incrementing the counter
+  (prevents nest-lab #74 re-arming). Custom `RedisThrottlerGuard` sets
+  standard `Retry-After` and `X-RateLimit-*` headers on both success and 429.
+  `@Throttle()`/`@SkipThrottle()` decorators with named throttler objects work
+  correctly. Health/readiness endpoints skipped. No in-memory fallback —
+  Redis failure = HTTP 500 (fail-closed). `pnpm test:redis` runs 32 real-Redis
+  integration tests (atomicity, block regression, multi-instance sharing,
+  proxy/IPv6 behavior, Redis failure).
 - Logging: Pino via nestjs-pino (ADR-008/009), header redaction,
   `pino-pretty` in development only.
 - Request IDs: UUIDv4, inbound `x-request-id` strictly validated (ADR-010).
@@ -61,7 +74,8 @@ auth, no deployment setup.
   Missing, expired, and incorrect OTPs all return the identical generic
   `OTP_VERIFICATION_FAILED` Problem Details response. No registration or
   authentication steps yet.
-- Tests: Vitest unit (24 files / 178 tests) and e2e (13 files / 62 tests).
+- Tests: Vitest unit (26 files / 196 tests), e2e (13 files / 62 tests),
+  Redis integration (2 files / 32 tests via `pnpm test:redis`).
 
 **Partial**
 
@@ -99,7 +113,8 @@ None. The workspace contains only `apps/*`; no `packages/` directory exists.
 
 **Implemented:** Redis client integration in the API (global `RedisModule`,
 ioredis 6, degraded-mode health, standardized key naming); the enrollments
-challenge feature stores its OTP in Redis. Docker infrastructure
+challenge feature stores its OTP in Redis; global rate limiting uses the same
+connection via atomic Lua scripts. Docker infrastructure
 (`docs/docker.md`): dev and prod Compose stacks with PostgreSQL and Redis,
 per-app dev/prod images (`turbo prune`, non-root, hot reloading in dev;
 Redis intentionally has no persistence volume). Beyond that,
@@ -140,17 +155,10 @@ Per-app commands are listed in each `apps/<app>/ONBOARDING.md`.
   added there as well as in `apps/api/package.json`.
 - The pre-push hook runs the full test suite; pushes fail if it fails.
 
-## Pending Architectural Decisions
+## Accepted Architectural Decisions
 
 All ADRs live in [DECISIONS.md](../DECISIONS.md). Status as of this snapshot:
 
-- **Accepted:** ADR-001 (Turborepo), ADR-002 (Fastify), ADR-003 (SWC).
-- **Pending:** ADR-004 (@nestjs/config + Zod), ADR-005 (URI versioning),
-  ADR-006 (1 MiB body limit), ADR-007 (`api` prefix), ADR-008/009 (Pino /
-  nestjs-pino), ADR-010 (UUIDv4 request IDs), ADR-011 (envelope exclusions),
-  ADR-012 (ioredis without a wrapper), ADR-013 (Redis module architecture),
-  ADR-014 (Swagger/OpenAPI, development-only).
+- **Accepted:** ADR-001 (Turborepo), ADR-002 (Fastify), ADR-003 (SWC), ADR-004 (@nestjs/config + Zod), ADR-005 (URI versioning), ADR-006 (1 MiB body limit), ADR-007 (`api` prefix), ADR-008/009 (Pino / nestjs-pino), ADR-010 (UUIDv4 request IDs), ADR-011 (envelope exclusions), ADR-012 (ioredis without a wrapper), ADR-013 (Redis module architecture), ADR-014 (Swagger/OpenAPI, development-only), ADR-015 (Global HTTP rate limiting with Redis-backed @nestjs/throttler).
 
-The pending ADRs are implemented in code but not yet formally accepted; do not
-build on their alternatives (e.g. do not introduce header versioning or a
-second logger).
+All architectural decisions are accepted and implemented. Do not build on rejected alternatives (e.g. do not introduce header versioning or a second logger).

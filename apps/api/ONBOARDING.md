@@ -44,8 +44,10 @@ feature coverage is minimal.
 - pnpm **12.10.1** (enabled via `packageManager` in the root `package.json`;
   use `corepack enable` if pnpm is missing).
 - A Redis server (≥ 4.0, required for `UNLINK`) is needed for Redis-backed
-  features, but the API starts without one: connection settings are
-  validated at boot, and an unreachable server only degrades `/health`.
+  features (enrollments OTP, global rate limiting), but the API starts without
+  one: connection settings are validated at boot, and an unreachable server
+  only degrades `/health`. Guarded routes fail closed (HTTP 500) when Redis
+  is unreachable — no in-memory fallback.
 
 ## 4. Getting Started
 
@@ -76,6 +78,10 @@ cp env/.env.example env/.env.development
 | `REDIS_COMMAND_TIMEOUT_MS`         | Per-command timeout (ms)                  | `5000`                                            |
 | `REDIS_MAX_RETRIES_PER_REQUEST`    | Command retry budget                      | `3`                                               |
 | `REDIS_SHUTDOWN_TIMEOUT_MS`        | Graceful-QUIT window (ms)                 | `2000`                                            |
+| `RATE_LIMIT_SHORT_LIMIT`           | Short-window max requests                 | `10`                                              |
+| `RATE_LIMIT_SHORT_TTL_SECONDS`     | Short-window TTL in seconds               | `1`                                               |
+| `RATE_LIMIT_LONG_LIMIT`            | Long-window max requests                  | `100`                                             |
+| `RATE_LIMIT_LONG_TTL_MINUTES`      | Long-window TTL in minutes                | `1`                                               |
 
 Startup fails fast with a readable Zod error if validation fails.
 
@@ -92,6 +98,7 @@ Verify with `curl http://localhost:3001/health`.
 ```sh
 pnpm test         # unit tests (Vitest)
 pnpm test:e2e     # e2e suite (uses env/.env.test automatically)
+pnpm test:redis   # Redis integration tests (uses env/.env.redis-test; requires running Redis)
 ```
 
 **Build:**
@@ -205,6 +212,7 @@ pnpm build                     # production build (SWC → dist/)
 pnpm start                     # run the built app
 pnpm test                      # unit tests
 pnpm test:e2e                  # e2e tests (env/.env.test)
+pnpm test:redis                # Redis integration tests (env/.env.redis-test)
 pnpm lint                      # Oxlint
 pnpm format                    # Oxfmt (write)
 pnpm format:check              # Oxfmt (check only)

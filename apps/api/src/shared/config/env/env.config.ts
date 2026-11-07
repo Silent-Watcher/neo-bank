@@ -2,6 +2,7 @@ import { z } from 'zod';
 
 import { EnvValidationError } from '#errors/env-validation.error.js';
 import { logEnvSchema } from './schema/log.env.js';
+import { rateLimitEnvSchema } from './schema/rate-limit.env.js';
 import { redisEnvSchema } from './schema/redis.env.js';
 import { isCorsOriginRequiredInProduction, serverEnvSchema } from './schema/server.env.js';
 
@@ -10,6 +11,7 @@ export const envSchema = z
     ...serverEnvSchema.shape,
     ...logEnvSchema.shape,
     ...redisEnvSchema.shape,
+    ...rateLimitEnvSchema.shape,
   })
   .superRefine((env, ctx) => {
     if (isCorsOriginRequiredInProduction(env)) {

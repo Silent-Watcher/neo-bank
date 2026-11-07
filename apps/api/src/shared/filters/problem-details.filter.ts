@@ -2,6 +2,7 @@ import { Catch, HttpException, HttpStatus } from '@nestjs/common';
 import type { ArgumentsHost, ExceptionFilter } from '@nestjs/common';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import { PinoLogger } from 'nestjs-pino';
+import { ThrottlerException } from '@nestjs/throttler';
 
 import { AppHttpException } from '#errors/app-http.exception.js';
 import { ErrorCode, errorCodeForStatus } from '#errors/error.code.js';
@@ -10,6 +11,7 @@ import { resolveApiVersion } from '#http/api-version.js';
 import { X_REQUEST_ID_HEADER } from '#http/request-id.js';
 
 const GENERIC_SERVER_ERROR_DETAIL = 'An unexpected error occurred.';
+const RATE_LIMITED_DETAIL = 'Too many requests. Retry later.';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
@@ -86,6 +88,17 @@ export class ProblemDetailsFilter implements ExceptionFilter {
         status: exception.getStatus(),
         code: exception.code,
         detail: detailFromHttpException(exception),
+      };
+    }
+
+    // Identified specifically (not via the status) so unrelated HTTP 429s
+    // keep the generic status-based handling; the framework exception
+    // message is replaced with a safe, predictable detail.
+    if (exception instanceof ThrottlerException) {
+      return {
+        status: HttpStatus.TOO_MANY_REQUESTS,
+        code: ErrorCode.RateLimited,
+        detail: RATE_LIMITED_DETAIL,
       };
     }
 
