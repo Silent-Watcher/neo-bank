@@ -74,6 +74,24 @@ function* leaves(catalog: Catalog, prefix: string): Generator<{ key: string; val
   }
 }
 
+// Yields plural-shaped message objects (walking the tree; unlike `leaves`,
+// which yields only scalar leaves). A plural node is not descended into —
+// its category entries are its leaves.
+function* pluralNodes(
+  catalog: Catalog,
+  prefix: string,
+): Generator<{ key: string; value: Catalog }> {
+  for (const [name, value] of Object.entries(catalog)) {
+    const key = prefix ? `${prefix}.${name}` : name;
+    if (!isCatalog(value)) continue;
+    if (isPluralForms(value)) {
+      yield { key, value };
+    } else {
+      yield* pluralNodes(value, key);
+    }
+  }
+}
+
 function messageAt(catalog: Catalog, key: string): unknown {
   return key
     .split('.')
@@ -117,16 +135,21 @@ describe('translation catalog consistency', () => {
   });
 
   it('carries every Persian plural category for plural-shaped messages', () => {
-    for (const { key, value } of leaves(ENGLISH_CATALOG, '')) {
-      if (!isRecord(value) || !isPluralForms(value)) continue;
+    const englishPluralKeys = [...pluralNodes(ENGLISH_CATALOG, '')].map((node) => node.key).sort();
+    const persianPluralKeys = [...pluralNodes(PERSIAN_CATALOG, '')].map((node) => node.key).sort();
 
-      const persianLeaf = messageAt(PERSIAN_CATALOG, key);
+    // Symmetric parity so a plural message added to only one locale fails
+    // here too (the structure test only compares scalar leaf paths).
+    expect(persianPluralKeys).toEqual(englishPluralKeys);
 
-      expect(isRecord(persianLeaf) && isPluralForms(persianLeaf), `fa:${key}`).toBe(true);
-      if (isRecord(persianLeaf)) {
-        for (const category of PERSIAN_PLURAL_CATEGORIES) {
-          expect(category in persianLeaf, `fa:${key}:${category}`).toBe(true);
-        }
+    for (const { key } of pluralNodes(PERSIAN_CATALOG, '')) {
+      const persianNode = messageAt(PERSIAN_CATALOG, key);
+
+      if (!isCatalog(persianNode) || !isPluralForms(persianNode)) {
+        throw new Error(`Catalog key fa:${key} must be a plural-shaped message.`);
+      }
+      for (const category of PERSIAN_PLURAL_CATEGORIES) {
+        expect(category in persianNode, `fa:${key}:${category}`).toBe(true);
       }
     }
   });

@@ -8,3 +8,5 @@ coverage/
 .env.*
 !.env.example
 !.env.docker.example
+# pnpm store
+/.pnpm-store/

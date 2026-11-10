@@ -18,6 +18,10 @@ with their technical justification and the status `Won't Fix`.
   i18n: module registration, Zod pipe translation, error title keys, filter,
   envelope, Redis health indicator, catalog-consistency spec). 0 Critical,
   0 High, 4 Medium, 6 Low; findings below.
+- **Wave 2b** — 2026-11-11 — judge re-review of the three Wave 2 revisions
+  (batched pipe translation, title-key comment, array-excluding catalog
+  guard). 0 Critical/High; 1 contingent Medium invalidated, 1 Low and
+  1 Medium accepted and fixed; findings below.
 
 ---
 
@@ -281,3 +285,61 @@ with its technical justification.
   infrastructure hook in the loader path — not justified while three
   independent layers already catch the regression.
 - **Agreed resolution:** none; revisit if the build layout ever changes.
+
+### F-R1 — Batched pipe translation trusts an unverified 1:1 library contract
+
+- **Status:** Won't Fix (invalid — contract verified in source and pinned by an existing test)
+- **Severity:** Medium (contingent)
+- **Category:** Correctness
+- **Locations:** `ZodValidationPipe.transform` (`apps/api/src/shared/pipes/zod-validation.pipe.ts`)
+- **Technical explanation (judge assumption):** if
+  `translateStandardSchemaIssues` omitted skipped issues instead of mapping
+  1:1, path-less issues would vanish from the error list.
+- **Judge recommendation:** length-safe zip fallback or a contract-pinning
+  test.
+- **Investigation results:** the installed package's
+  `translateStandardSchemaIssues` is a plain `issues.map(...)` over the input
+  array (`dist/validation/standard-schema-messages.js`) — it cannot change
+  the array's length; every skipped issue is returned as-is. Additionally,
+  the existing pipe spec test "formats root-level issues without a path
+  prefix" runs a path-less issue through `transform()` and asserts the
+  message array has length 1 — if the helper ever dropped issues, that test
+  fails. A defensive zip would guard a contract that is both source-verified
+  and test-pinned.
+- **Agreed resolution:** none; the judge's contingent scenario cannot occur.
+
+### F-R2 — "Identical English text" invariant is documented but unenforced
+
+- **Status:** Resolved (2026-11-11 — applied)
+- **Severity:** Low
+- **Category:** Edge Case / Code Quality
+- **Locations:** `ERROR_CODE_TITLE_KEYS` comment (`apps/api/src/shared/errors/error.code.ts`)
+- **Technical explanation:** the comment claimed the status-based fallback
+  keys' English text is identical to the English title map — an invariant
+  nothing enforces.
+- **Judge recommendation:** test the invariant or drop the claim.
+- **Investigation results:** an assertion tying catalog JSON values to the
+  TypeScript title map would couple the catalog spec to a shared module for
+  a claim with no behavioral consumer (the filter always translates the
+  title; `buildProblemDetails`'s English text only serves the pre-i18n
+  request-ID path, which uses a different code).
+- **Agreed resolution:** applied — the comment now states only the enforced
+  fact: the status keys serve as the title source for those codes.
+
+### F-R4 — Plural-category test was vacuous
+
+- **Status:** Resolved (2026-11-11 — applied)
+- **Severity:** Medium
+- **Category:** Correctness (test suite)
+- **Locations:** plural test, `i18n.catalog.spec.ts` (`apps/api/src/i18n/i18n.catalog.spec.ts`)
+- **Technical explanation:** `leaves()` yields only scalar leaves, so the
+  plural test's `isRecord(value)` gate never passed — the test body (and all
+  its assertions) could never execute; a mistyped plural category in both
+  catalogs would pass every test.
+- **Judge recommendation:** walk the tree directly for plural-shaped nodes.
+- **Investigation results:** valid — dead test.
+- **Agreed resolution:** applied — new `pluralNodes()` walk yields
+  plural-shaped nodes (not descended into), the test asserts symmetric
+  en/fa plural-key parity plus every `Intl.PluralRules('fa')` category per
+  Persian plural message. No plural messages exist today, so the parity
+  assertion is what keeps a one-locale plural addition visible.

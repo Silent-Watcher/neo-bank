@@ -58,8 +58,8 @@ export function titleForErrorCode(code: ErrorCode): string | undefined {
 // emits the English title above; the exception filter replaces it with the
 // message for the request's locale. Codes without an application-specific
 // title (`BadRequest`, `NotFound`) are absent by design: the filter then
-// falls back to the status-based `errors.status.*` keys, whose English text
-// is identical.
+// falls back to the status-based `errors.status.*` keys, which serve as the
+// title source for those codes.
 const ERROR_CODE_TITLE_KEYS: ReadonlyMap<ErrorCode, I18nKey> = new Map([
   [ErrorCode.ApplicationError, 'errors.titles.applicationError'],
   [ErrorCode.InvalidRequestId, 'errors.titles.invalidRequestId'],
