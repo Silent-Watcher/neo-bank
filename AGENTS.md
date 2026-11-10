@@ -189,6 +189,10 @@ When multiple successful business paths exist, prefer extracting them into focus
 
 **The default expectation is fail-fast validation followed by a straightforward happy path.**
 
+### No Magic Strings
+
+Do not introduce unexplained string literals for application states, domain values, Redis keys, error codes, script return codes, configuration identifiers, or other semantic values. Before introducing a new string value, inspect whether an appropriate definition already exists and reuse it; avoid duplicating the same semantic value across multiple locations. Use named constants, enums, or existing domain-level definitions, following the project's naming and organization conventions. Do not create unnecessary abstractions or constants for ordinary text literals (log strings, prose). The same principle applies to numeric values with domain-specific meaning: avoid unexplained magic numbers and use named constants with explicit units in the name where appropriate (for example `OTP_SEND_WINDOW_MINUTES`, not `60`).
+
 ## Imports and Type Safety
 
 - **Import aliases:** Use the Node.js native `#...` subpath aliases for cross-directory imports instead of parent-relative imports. If a required alias does not exist, define it consistently for Node.js runtime, TypeScript, and tests before using it.
@@ -617,6 +621,28 @@ Continue until there are no unresolved actionable findings, or until a remaining
 The implementation agent remains responsible for validating the feature against its actual requirements. A context-blind code judge cannot replace requirement-based testing because it deliberately does not know the feature requirements.
 
 **The purpose of this process is to make independent criticism a mandatory part of implementation, not an optional final review.**
+
+#### Judge Findings Tracking
+
+Every Judge AI report containing findings must be processed through the findings tracker (`docs/judge-findings.md`) before any remediation work starts:
+
+1. Read the entire report and identify every finding, regardless of category or severity.
+2. Document every finding in the tracker with: title, severity, category, affected files and locations, technical explanation, failure scenario or reproduction conditions, the Judge AI recommendation, investigation results, agreed resolution, and current status.
+3. Never silently discard, omit, or downgrade a finding. A finding judged invalid or not applicable stays in the tracker with its technical justification and the status `Won't Fix`.
+4. Keep findings traceable across subsequent reviews. Update the tracker as each finding progresses through the statuses: `Reported`, `Investigating`, `Awaiting Approval`, `Approved`, `In Progress`, `Resolved`, `Won't Fix (with technical justification)`.
+
+The tracker is documentation: when the feature is committed, its findings section is part of the deliverable. Do not create duplicate tracking documents.
+
+#### Approval Before Remediation
+
+Judge AI recommendations are findings to investigate, not implementation requirements. For every finding:
+
+1. Investigate the actual implementation and surrounding architecture; establish the real contract before judging the finding.
+2. Identify all technically viable remediation strategies and evaluate their security, correctness, complexity, maintainability, and compatibility with existing conventions.
+3. Present the viable options with advantages, disadvantages, and possible regressions, together with a recommendation, to the user.
+4. Wait for explicit user approval before implementing a change that requires an architectural or behavioral decision. Minor implementation details that do not change the agreed design may be handled independently.
+
+Judge AI findings are not exempt from the ADR-first workflow: any remediation involving an architectural decision, a meaningful behavioral change, or long-term technical consequences requires an ADR. A small bug fix does not — but never skip an ADR merely because the change originated from a Judge finding.
 
 ### Delegated Validation
 

@@ -64,18 +64,26 @@ auth, no deployment setup.
 - Feature module `enrollments`: `POST /api/v1/enrollments/challenge` —
   validates an Iranian mobile number (with normalization for
   `+98`/`0098`/`98`/missing zero/whitespace), generates a cryptographically
-  random 6-digit OTP (100000–999999), and stores it in Redis under
+  random 6-digit OTP (100000–999999), and stores only its HMAC-SHA-256 digest
+  (`phone:otp` keyed with the dedicated `ENROLLMENTS_OTP_HMAC_SECRET`,
+  ADR-018) — bound to a per-issuance UUIDv4 challenge ID — in Redis under
   `neo-bank:enrollments:challenge:otp:<phone>` with an exact 120-second TTL
   using atomic `SET NX EX` combined with a lockout check (prevents race
   conditions where concurrent requests could overwrite an existing OTP or
   extend its TTL, and an OTP is never issued while a verification lockout is
-  active). The response contains only the phone number; the OTP value is never
+  active). The plaintext OTP never reaches Redis. The
+  response contains only the phone number; the OTP value is never
   returned and no SMS is sent.
 - Feature module `enrollments`: `POST /api/v1/enrollments/verify` —
   validates the phone and a six-character numeric OTP (string, leading zeros
-  preserved) with Zod before any Redis access, then atomically verifies and
-  consumes the stored code via a single Lua script (read-compare-UNLINK with
-  attempt counting). Missing, expired, incorrect, and exhausted-attempt OTPs
+  preserved) with Zod before any Redis access, then compares the submitted
+  OTP's HMAC digest against the stored digest with `crypto.timingSafeEqual`
+  in Node.js and atomically resolves consumption and attempt counting via a
+  Lua script that re-checks the lockout, the verified challenge's identity,
+  and the OTP-key existence (ADR-018/019): a replaced challenge is never
+  consumed, and verification without a live challenge creates no attempts or
+  lockout state. Missing,
+  expired, incorrect, and exhausted-attempt OTPs
   all return the identical generic `OTP_VERIFICATION_FAILED` Problem Details
   response. Failed attempts are counted up to a configurable maximum
   (`ENROLLMENTS_MAX_VERIFY_ATTEMPTS`, default 5); when reached, a lockout is
@@ -179,6 +187,6 @@ Per-app commands are listed in each `apps/<app>/ONBOARDING.md`.
 
 All ADRs live in [DECISIONS.md](../DECISIONS.md). Status as of this snapshot:
 
-- **Accepted:** ADR-001 (Turborepo), ADR-002 (Fastify), ADR-003 (SWC), ADR-004 (@nestjs/config + Zod), ADR-005 (URI versioning), ADR-006 (1 MiB body limit), ADR-007 (`api` prefix), ADR-008/009 (Pino / nestjs-pino), ADR-010 (UUIDv4 request IDs), ADR-011 (envelope exclusions), ADR-012 (ioredis without a wrapper), ADR-013 (Redis module architecture), ADR-014 (Swagger/OpenAPI, development-only), ADR-015 (Global HTTP rate limiting with Redis-backed @nestjs/throttler), ADR-016 (Testcontainers for integration and e2e testing), ADR-017 (OTP verification attempt lockout for enrollment security).
+- **Accepted:** ADR-001 (Turborepo), ADR-002 (Fastify), ADR-003 (SWC), ADR-004 (@nestjs/config + Zod), ADR-005 (URI versioning), ADR-006 (1 MiB body limit), ADR-007 (`api` prefix), ADR-008/009 (Pino / nestjs-pino), ADR-010 (UUIDv4 request IDs), ADR-011 (envelope exclusions), ADR-012 (ioredis without a wrapper), ADR-013 (Redis module architecture), ADR-014 (Swagger/OpenAPI, development-only), ADR-015 (Global HTTP rate limiting with Redis-backed @nestjs/throttler), ADR-016 (Testcontainers for integration and e2e testing), ADR-017 (OTP verification attempt lockout for enrollment security), ADR-018 (HMAC-SHA-256 digest storage for enrollment OTPs), ADR-019 (OTP verification hardening — conditional attempt counting and challenge identity).
 
 All architectural decisions are accepted and implemented. Do not build on rejected alternatives (e.g. do not introduce header versioning or a second logger).

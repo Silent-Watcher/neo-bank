@@ -2,11 +2,16 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest
 import request from 'supertest';
 import type { TestingModuleBuilder } from '@nestjs/testing';
 
+import { randomUUID } from 'node:crypto';
 import { RedisService } from '#src/shared/redis/redis.service.js';
 import { RATE_LIMIT_CONFIG } from '#config/rate-limit.config.js';
 import { createRedisClient } from '#src/shared/redis/redis.provider.js';
 import { createTestApp } from './create-test-app.js';
 import { _env } from '#src/shared/config/env/env.config.js';
+import {
+  composeOtpChallengeValue,
+  computeOtpDigest,
+} from '#src/modules/enrollments/enrollments.otp-digest.js';
 import type { RedisClient } from '#src/shared/redis/inject-redis.decorator.js';
 
 let inspectClient: RedisClient;
@@ -93,14 +98,14 @@ describe('EnrollmentsController (e2e)', () => {
   // uses the real Redis from env.test (high limits) so validation errors are
   // not masked by throttling.
 
-  it('validates the phone number, stores a six-digit OTP in Redis, and returns only the phone number', async () => {
+  it('validates the phone number, stores only the challenge value (challenge ID + OTP HMAC digest) in Redis, and returns only the phone number', async () => {
     // Arrange
     const issueOtp = vi
       .fn<
         (
           otpKey: string,
           lockoutKey: string,
-          otp: string,
+          challengeValue: string,
           ttlSeconds: number,
         ) => Promise<'issued' | 'exists' | 'locked'>
       >()
@@ -126,10 +131,14 @@ describe('EnrollmentsController (e2e)', () => {
       60,
     );
     expect(issueOtp).toHaveBeenCalledTimes(1);
-    const [otpKey, lockoutKey, otp, ttl] = issueOtp.mock.calls[0];
+    const [otpKey, lockoutKey, challengeValue, ttl] = issueOtp.mock.calls[0];
     expect(otpKey).toBe('neo-bank:enrollments:challenge:otp:09123456789');
     expect(lockoutKey).toBe('neo-bank:enrollments:challenge:lockout:09123456789');
-    expect(otp).toMatch(/^[1-9]\d{5}$/);
+    // The stored value is `<challengeId>:<digest>` (ADR-019) — never the six-digit OTP.
+    expect(challengeValue).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}:[0-9a-f]{64}$/,
+    );
+    expect(challengeValue).not.toMatch(/(^\d{6}$)|:\d{6}$/);
     expect(ttl).toBe(120);
     await close();
   });
@@ -141,7 +150,7 @@ describe('EnrollmentsController (e2e)', () => {
         (
           otpKey: string,
           lockoutKey: string,
-          otp: string,
+          challengeValue: string,
           ttlSeconds: number,
         ) => Promise<'issued' | 'exists' | 'locked'>
       >()
@@ -285,20 +294,32 @@ describe('EnrollmentsController (e2e)', () => {
   });
 
   describe('POST /enrollments/verify', () => {
-    function createAppWithVerifyMock(verifyResult: boolean | Error) {
+    function createAppWithVerifyMock(resolveResult: boolean | Error, storedValue?: string) {
       return createTestAppWithMockRedis().then(({ app, close }) => {
-        const verifyOtpAndCountAttempts =
-          verifyResult instanceof Error
-            ? vi.fn().mockRejectedValue(verifyResult)
-            : vi.fn().mockResolvedValue(verifyResult);
-        overrideRedisService(app, { verifyOtpAndCountAttempts });
-        return { app, close, verifyOtpAndCountAttempts };
+        const resolveOtpVerification =
+          resolveResult instanceof Error
+            ? vi.fn().mockRejectedValue(resolveResult)
+            : vi.fn().mockResolvedValue(resolveResult);
+        // The default stored value is a challenge (ID + digest) for the
+        // correct OTP below, so the Node-side timing-safe comparison matches.
+        const get = vi
+          .fn<(key: string) => Promise<string | null>>()
+          .mockResolvedValue(
+            storedValue === undefined
+              ? composeOtpChallengeValue(
+                  randomUUID(),
+                  computeOtpDigest('09123456789', '048391', _env.ENROLLMENTS_OTP_HMAC_SECRET),
+                )
+              : storedValue,
+          );
+        overrideRedisService(app, { get, resolveOtpVerification });
+        return { app, close, resolveOtpVerification };
       });
     }
 
     it('verifies a correct OTP and returns only the phone number', async () => {
       // Arrange
-      const { app, close, verifyOtpAndCountAttempts } = await createAppWithVerifyMock(true);
+      const { app, close, resolveOtpVerification } = await createAppWithVerifyMock(true);
 
       // Act
       const response = await request(app.getHttpServer())
@@ -309,11 +330,12 @@ describe('EnrollmentsController (e2e)', () => {
       expect(response.status).toBe(201);
       expect(response.body.data).toEqual({ phoneNumber: '09123456789' });
       expect(JSON.stringify(response.body)).not.toContain('048391');
-      expect(verifyOtpAndCountAttempts).toHaveBeenCalledWith(
+      expect(resolveOtpVerification).toHaveBeenCalledWith(
         'neo-bank:enrollments:challenge:otp:09123456789',
         'neo-bank:enrollments:challenge:attempts:09123456789',
         'neo-bank:enrollments:challenge:lockout:09123456789',
-        '048391',
+        expect.any(String),
+        true,
         5,
         900,
       );
@@ -321,8 +343,15 @@ describe('EnrollmentsController (e2e)', () => {
     });
 
     it('normalizes the phone number before the Redis lookup', async () => {
-      // Arrange
-      const { app, close, verifyOtpAndCountAttempts } = await createAppWithVerifyMock(true);
+      // Arrange — stored challenge is computed for the normalized number and
+      // the submitted OTP, so the phone normalization is exercised end to end.
+      const { app, close, resolveOtpVerification } = await createAppWithVerifyMock(
+        true,
+        composeOtpChallengeValue(
+          randomUUID(),
+          computeOtpDigest('09123456789', '000001', _env.ENROLLMENTS_OTP_HMAC_SECRET),
+        ),
+      );
 
       // Act
       const response = await request(app.getHttpServer())
@@ -332,11 +361,12 @@ describe('EnrollmentsController (e2e)', () => {
       // Assert
       expect(response.status).toBe(201);
       expect(response.body.data).toEqual({ phoneNumber: '09123456789' });
-      expect(verifyOtpAndCountAttempts).toHaveBeenCalledWith(
+      expect(resolveOtpVerification).toHaveBeenCalledWith(
         'neo-bank:enrollments:challenge:otp:09123456789',
         'neo-bank:enrollments:challenge:attempts:09123456789',
         'neo-bank:enrollments:challenge:lockout:09123456789',
-        '000001',
+        expect.any(String),
+        true,
         5,
         900,
       );
@@ -379,7 +409,7 @@ describe('EnrollmentsController (e2e)', () => {
     it('rejects an invalid phone number or OTP format before any Redis access', async () => {
       // Arrange — each request uses a distinct X-Forwarded-For so the per-IP
       // rate limiter does not interfere (TRUST_PROXY=true in test env).
-      const { app, close, verifyOtpAndCountAttempts } = await createAppWithVerifyMock(true);
+      const { app, close, resolveOtpVerification } = await createAppWithVerifyMock(true);
       const invalidBodies = [
         { phone: '02112345678', otp: '048391' },
         { phone: '09123456789', otp: '48391' },
@@ -400,7 +430,7 @@ describe('EnrollmentsController (e2e)', () => {
         expect(response.headers['content-type']).toContain('application/problem+json');
         expect(response.body.code).toBe('BAD_REQUEST');
       }
-      expect(verifyOtpAndCountAttempts).not.toHaveBeenCalled();
+      expect(resolveOtpVerification).not.toHaveBeenCalled();
       await close();
     });
 

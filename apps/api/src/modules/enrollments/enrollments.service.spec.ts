@@ -20,6 +20,7 @@ vi.mock('#config/env/env.config.js', () => ({
     REDIS_SHUTDOWN_TIMEOUT_MS: 2000,
     ENROLLMENTS_MAX_VERIFY_ATTEMPTS: 5,
     ENROLLMENTS_LOCKOUT_TTL_SECONDS: 900,
+    ENROLLMENTS_OTP_HMAC_SECRET: '1111111111111111111111111111111111111111111111111111111111111111',
   },
 }));
 
@@ -27,13 +28,27 @@ const { randomIntMock } = vi.hoisted(() => ({
   randomIntMock: vi.fn<(min: number, max: number) => number>(),
 }));
 
-vi.mock('node:crypto', () => ({ randomInt: randomIntMock }));
+// Only randomInt is replaced; the real HMAC/timingSafeEqual primitives stay so
+// the digest stored in Redis is the genuine one.
+vi.mock('node:crypto', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('node:crypto')>()),
+  randomInt: randomIntMock,
+}));
 
 import { RedisService } from '#src/shared/redis/redis.service.js';
 import type { IssueOtpResult } from '#src/shared/redis/redis.service.js';
 import { AppHttpException } from '#errors/app-http.exception.js';
 import { ErrorCode } from '#errors/error.code.js';
+import {
+  composeOtpChallengeValue,
+  computeOtpDigest,
+  parseOtpChallengeValue,
+} from './enrollments.otp-digest.js';
 import { CHALLENGE_OTP_TTL_SECONDS, EnrollmentsService } from './enrollments.service.js';
+
+const TEST_SECRET = '1111111111111111111111111111111111111111111111111111111111111111';
+const TEST_PHONE = '09123456789';
+const TEST_OTP = '483921';
 
 describe('EnrollmentsService', () => {
   const redisService = {
@@ -42,17 +57,19 @@ describe('EnrollmentsService', () => {
         (
           otpKey: string,
           lockoutKey: string,
-          otp: string,
+          challengeValue: string,
           ttlSeconds: number,
         ) => Promise<IssueOtpResult>
       >(),
-    verifyOtpAndCountAttempts:
+    get: vi.fn<(key: string) => Promise<string | null>>(),
+    resolveOtpVerification:
       vi.fn<
         (
           otpKey: string,
           attemptsKey: string,
           lockoutKey: string,
-          otp: string,
+          observedChallengeId: string,
+          matched: boolean,
           maxAttempts: number,
           lockoutTtlSeconds: number,
         ) => Promise<boolean>
@@ -69,11 +86,17 @@ describe('EnrollmentsService', () => {
     randomIntMock.mockReset();
     redisService.issueOtp.mockReset();
     redisService.issueOtp.mockResolvedValue('issued');
+    redisService.get.mockReset();
+    redisService.get.mockResolvedValue(null);
+    redisService.resolveOtpVerification.mockReset();
+    redisService.resolveOtpVerification.mockResolvedValue(false);
     redisService.checkOtpRateLimit.mockReset();
     redisService.checkOtpRateLimit.mockResolvedValue(true);
-    redisService.verifyOtpAndCountAttempts.mockReset();
-    redisService.verifyOtpAndCountAttempts.mockResolvedValue(false);
-    configService.getOrThrow.mockReturnValue({ maxVerifyAttempts: 5, lockoutTtlSeconds: 900 });
+    configService.getOrThrow.mockReturnValue({
+      maxVerifyAttempts: 5,
+      lockoutTtlSeconds: 900,
+      otpHmacSecret: TEST_SECRET,
+    });
 
     const module = await Test.createTestingModule({
       providers: [
@@ -86,19 +109,25 @@ describe('EnrollmentsService', () => {
     service = module.get(EnrollmentsService);
   });
 
-  it('stores the generated OTP in Redis under the naming-convention key with an exact 120-second TTL via the atomic issue script', async () => {
+  it('stores the challenge value (challenge ID + OTP HMAC digest) — never the plaintext OTP — in Redis under the naming-convention key with an exact 120-second TTL via the atomic issue script', async () => {
     // Arrange
     randomIntMock.mockReturnValue(483_921);
 
     // Act
-    await service.requestChallenge('09123456789');
+    await service.requestChallenge(TEST_PHONE);
 
     // Assert
     expect(redisService.issueOtp).toHaveBeenCalledTimes(1);
-    const [otpKey, lockoutKey, otp, ttl] = redisService.issueOtp.mock.calls[0];
+    const [otpKey, lockoutKey, challengeValue, ttl] = redisService.issueOtp.mock.calls[0];
     expect(otpKey).toBe('neo-bank:enrollments:challenge:otp:09123456789');
     expect(lockoutKey).toBe('neo-bank:enrollments:challenge:lockout:09123456789');
-    expect(otp).toBe('483921');
+    const parsed = parseOtpChallengeValue(challengeValue);
+    expect(parsed).not.toBeNull();
+    expect(parsed?.challengeId).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+    );
+    expect(parsed?.digest).toBe(computeOtpDigest(TEST_PHONE, TEST_OTP, TEST_SECRET));
+    expect(challengeValue).not.toContain(TEST_OTP);
     expect(ttl).toBe(CHALLENGE_OTP_TTL_SECONDS);
   });
 
@@ -107,26 +136,31 @@ describe('EnrollmentsService', () => {
     randomIntMock.mockReturnValue(483_921);
 
     // Act
-    const result = await service.requestChallenge('09123456789');
+    const result = await service.requestChallenge(TEST_PHONE);
 
     // Assert
-    expect(result).toEqual({ phoneNumber: '09123456789' });
+    expect(result).toEqual({ phoneNumber: TEST_PHONE });
     expect(Object.keys(result).length).toBe(1);
   });
 
-  it('generates the OTP as a string of exactly six digits across the full range', async () => {
+  it('generates the OTP as a string of exactly six digits across the full range before digesting it', async () => {
     // Arrange & Act
     randomIntMock.mockReturnValue(100_000);
-    await service.requestChallenge('09123456789');
-    const lowerOtp = redisService.issueOtp.mock.calls[0][2];
+    await service.requestChallenge(TEST_PHONE);
+    const lowerValue = redisService.issueOtp.mock.calls[0][2];
 
     randomIntMock.mockReturnValue(999_999);
-    await service.requestChallenge('09123456789');
-    const upperOtp = redisService.issueOtp.mock.calls[1][2];
+    await service.requestChallenge(TEST_PHONE);
+    const upperValue = redisService.issueOtp.mock.calls[1][2];
 
-    // Assert
-    expect(lowerOtp).toBe('100000');
-    expect(upperOtp).toBe('999999');
+    // Assert — the two range boundaries map to two different digests, each
+    // under its own challenge ID.
+    const lower = parseOtpChallengeValue(lowerValue);
+    const upper = parseOtpChallengeValue(upperValue);
+    expect(lower?.digest).toBe(computeOtpDigest(TEST_PHONE, '100000', TEST_SECRET));
+    expect(upper?.digest).toBe(computeOtpDigest(TEST_PHONE, '999999', TEST_SECRET));
+    expect(lower?.digest).not.toBe(upper?.digest);
+    expect(lower?.challengeId).not.toBe(upper?.challengeId);
   });
 
   it('draws the OTP from the cryptographically secure randomInt over the six-digit range', async () => {
@@ -134,7 +168,7 @@ describe('EnrollmentsService', () => {
     randomIntMock.mockReturnValue(123_456);
 
     // Act
-    await service.requestChallenge('09123456789');
+    await service.requestChallenge(TEST_PHONE);
 
     // Assert
     expect(randomIntMock).toHaveBeenCalledTimes(1);
@@ -147,8 +181,8 @@ describe('EnrollmentsService', () => {
     redisService.issueOtp.mockResolvedValue('exists');
 
     // Act & Assert
-    await expect(service.requestChallenge('09123456789')).rejects.toThrow(AppHttpException);
-    await expect(service.requestChallenge('09123456789')).rejects.toMatchObject({
+    await expect(service.requestChallenge(TEST_PHONE)).rejects.toThrow(AppHttpException);
+    await expect(service.requestChallenge(TEST_PHONE)).rejects.toMatchObject({
       code: ErrorCode.OtpVerificationFailed,
     });
   });
@@ -159,7 +193,7 @@ describe('EnrollmentsService', () => {
     redisService.issueOtp.mockResolvedValue('locked');
 
     // Act & Assert
-    const promise = service.requestChallenge('09123456789');
+    const promise = service.requestChallenge(TEST_PHONE);
     await expect(promise).rejects.toThrow(AppHttpException);
     await expect(promise).rejects.toMatchObject({
       code: ErrorCode.OtpRateLimitExceeded,
@@ -172,7 +206,7 @@ describe('EnrollmentsService', () => {
     redisService.issueOtp.mockRejectedValue(new Error('connection lost'));
 
     // Act & Assert
-    await expect(service.requestChallenge('09123456789')).rejects.toThrow('connection lost');
+    await expect(service.requestChallenge(TEST_PHONE)).rejects.toThrow('connection lost');
   });
 
   it('checks the per-phone hourly rate limit before attempting to store the OTP', async () => {
@@ -180,7 +214,7 @@ describe('EnrollmentsService', () => {
     randomIntMock.mockReturnValue(483_921);
 
     // Act
-    await service.requestChallenge('09123456789');
+    await service.requestChallenge(TEST_PHONE);
 
     // Assert
     expect(redisService.checkOtpRateLimit).toHaveBeenCalledTimes(1);
@@ -197,7 +231,7 @@ describe('EnrollmentsService', () => {
     redisService.checkOtpRateLimit.mockResolvedValue(false);
 
     // Act
-    const promise = service.requestChallenge('09123456789');
+    const promise = service.requestChallenge(TEST_PHONE);
 
     // Assert
     await expect(promise).rejects.toThrow(AppHttpException);
@@ -215,72 +249,140 @@ describe('EnrollmentsService', () => {
     redisService.checkOtpRateLimit.mockRejectedValue(new Error('connection lost'));
 
     // Act & Assert
-    await expect(service.requestChallenge('09123456789')).rejects.toThrow('connection lost');
+    await expect(service.requestChallenge(TEST_PHONE)).rejects.toThrow('connection lost');
   });
 
   describe('verifyChallenge', () => {
-    it('verifies correct OTP passing otp, attempts, and lockout keys with the configured max attempts and lockout TTL', async () => {
+    const STORED_CHALLENGE_ID = '3f2504e0-4f89-11d3-9a0c-0305e82c3301';
+    const storedChallengeValue = (otp: string, secret = TEST_SECRET): string =>
+      composeOtpChallengeValue(STORED_CHALLENGE_ID, computeOtpDigest(TEST_PHONE, otp, secret));
+
+    it('reads the stored value, compares digests in Node, and resolves with the observed challenge ID and matched=true for the correct OTP', async () => {
       // Arrange
-      redisService.verifyOtpAndCountAttempts.mockResolvedValue(true);
+      const otpKey = 'neo-bank:enrollments:challenge:otp:09123456789';
+      redisService.get.mockResolvedValue(storedChallengeValue(TEST_OTP));
+      redisService.resolveOtpVerification.mockResolvedValue(true);
 
       // Act
-      const result = await service.verifyChallenge('09123456789', '048391');
+      const result = await service.verifyChallenge(TEST_PHONE, TEST_OTP);
 
       // Assert
-      expect(redisService.verifyOtpAndCountAttempts).toHaveBeenCalledWith(
-        'neo-bank:enrollments:challenge:otp:09123456789',
+      expect(redisService.get).toHaveBeenCalledWith(otpKey);
+      expect(redisService.resolveOtpVerification).toHaveBeenCalledWith(
+        otpKey,
         'neo-bank:enrollments:challenge:attempts:09123456789',
         'neo-bank:enrollments:challenge:lockout:09123456789',
-        '048391',
+        STORED_CHALLENGE_ID,
+        true,
         5,
         900,
       );
-      expect(result).toEqual({ phoneNumber: '09123456789' });
+      expect(result).toEqual({ phoneNumber: TEST_PHONE });
       expect(Object.keys(result).length).toBe(1);
+    });
+
+    it('resolves with matched=false but the observed challenge ID when the submitted OTP is wrong', async () => {
+      // Arrange
+      redisService.get.mockResolvedValue(storedChallengeValue(TEST_OTP));
+
+      // Act & Assert — matched=false flows to the resolve; the service still
+      // throws only when the resolve itself reports failure.
+      await expect(service.verifyChallenge(TEST_PHONE, '999999')).rejects.toThrow(AppHttpException);
+      expect(redisService.resolveOtpVerification).toHaveBeenCalledWith(
+        'neo-bank:enrollments:challenge:otp:09123456789',
+        'neo-bank:enrollments:challenge:attempts:09123456789',
+        'neo-bank:enrollments:challenge:lockout:09123456789',
+        STORED_CHALLENGE_ID,
+        false,
+        5,
+        900,
+      );
+    });
+
+    it('resolves with matched=false — never an exception — when Redis holds no value', async () => {
+      // Arrange
+      redisService.get.mockResolvedValue(null);
+
+      // Act & Assert — the missing key becomes a plain failed match; the only
+      // throw is the domain error from the resolve's false result.
+      await expect(service.verifyChallenge(TEST_PHONE, TEST_OTP)).rejects.toThrow(AppHttpException);
+      expect(redisService.resolveOtpVerification).toHaveBeenCalledWith(
+        'neo-bank:enrollments:challenge:otp:09123456789',
+        'neo-bank:enrollments:challenge:attempts:09123456789',
+        'neo-bank:enrollments:challenge:lockout:09123456789',
+        '',
+        false,
+        5,
+        900,
+      );
+    });
+
+    it('resolves with matched=false when Redis holds a malformed stored value', async () => {
+      // Arrange
+      redisService.get.mockResolvedValue('not-a-hex-digest');
+
+      // Act & Assert — the malformed value is a failed match, never an
+      // exception from the comparison itself.
+      await expect(service.verifyChallenge(TEST_PHONE, TEST_OTP)).rejects.toThrow(AppHttpException);
+      expect(redisService.resolveOtpVerification).toHaveBeenCalledWith(
+        'neo-bank:enrollments:challenge:otp:09123456789',
+        'neo-bank:enrollments:challenge:attempts:09123456789',
+        'neo-bank:enrollments:challenge:lockout:09123456789',
+        '',
+        false,
+        5,
+        900,
+      );
     });
 
     it('rejects every failure condition with the same generic error', async () => {
       // Arrange — false covers locked, missing, expired, incorrect, or exhausted attempts alike.
-      redisService.verifyOtpAndCountAttempts.mockResolvedValue(false);
+      redisService.resolveOtpVerification.mockResolvedValue(false);
 
       // Act & Assert — one error code for all of them.
-      await expect(service.verifyChallenge('09123456789', '999999')).rejects.toThrow(
-        AppHttpException,
-      );
-      await expect(service.verifyChallenge('09123456789', '999999')).rejects.toMatchObject({
+      await expect(service.verifyChallenge(TEST_PHONE, '999999')).rejects.toThrow(AppHttpException);
+      await expect(service.verifyChallenge(TEST_PHONE, '999999')).rejects.toMatchObject({
         code: ErrorCode.OtpVerificationFailed,
       });
     });
 
     it('propagates Redis failures instead of converting them into verification failures', async () => {
       // Arrange
-      redisService.verifyOtpAndCountAttempts.mockRejectedValue(new Error('connection lost'));
+      redisService.resolveOtpVerification.mockRejectedValue(new Error('connection lost'));
 
       // Act & Assert — a plain Error, not the verification failure, so the
       // global filter serves its generic 500 (asserted in e2e).
-      await expect(service.verifyChallenge('09123456789', '048391')).rejects.toThrow(
+      await expect(service.verifyChallenge(TEST_PHONE, TEST_OTP)).rejects.toThrow(
         'connection lost',
       );
     });
 
-    it('uses the configured max verification attempts and lockout TTL from environment', async () => {
+    it('uses the configured max verification attempts, lockout TTL, and HMAC secret from environment', async () => {
       // Arrange
-      configService.getOrThrow.mockReturnValue({ maxVerifyAttempts: 3, lockoutTtlSeconds: 300 });
-      redisService.verifyOtpAndCountAttempts.mockResolvedValue(true);
+      const customSecret = 'ab'.repeat(32);
+      configService.getOrThrow.mockReturnValue({
+        maxVerifyAttempts: 3,
+        lockoutTtlSeconds: 300,
+        otpHmacSecret: customSecret,
+      });
+      redisService.get.mockResolvedValue(storedChallengeValue(TEST_OTP, customSecret));
+      redisService.resolveOtpVerification.mockResolvedValue(true);
 
       // Act
-      await service.verifyChallenge('09123456789', '048391');
+      const result = await service.verifyChallenge(TEST_PHONE, TEST_OTP);
 
       // Assert
       expect(configService.getOrThrow).toHaveBeenCalled();
-      expect(redisService.verifyOtpAndCountAttempts).toHaveBeenCalledWith(
+      expect(redisService.resolveOtpVerification).toHaveBeenCalledWith(
         'neo-bank:enrollments:challenge:otp:09123456789',
         'neo-bank:enrollments:challenge:attempts:09123456789',
         'neo-bank:enrollments:challenge:lockout:09123456789',
-        '048391',
+        STORED_CHALLENGE_ID,
+        true,
         3,
         300,
       );
+      expect(result).toEqual({ phoneNumber: TEST_PHONE });
     });
   });
 });

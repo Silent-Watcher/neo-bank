@@ -12,6 +12,21 @@ import { REDIS_CLIENT } from './redis.constants.js';
 const SCAN_DEFAULT_LIMIT = 100;
 const SCAN_DEFAULT_COUNT = 100;
 
+// Lua script integer return codes. ioredis delivers integer replies as
+// JavaScript numbers: `stringNumbers` is never enabled (see redis-options.ts)
+// and the provider builds exactly one client type, so the reply type is a
+// fixed contract — anything else is a programming error and fails fast.
+const SCRIPT_SUCCESS = 1;
+const SCRIPT_OTP_LOCKED = 3;
+
+/** Narrows an `eval` reply to the script return code (ADR-019 / F4). */
+function scriptReply(result: unknown): number {
+  if (typeof result !== 'number') {
+    throw new Error('Unexpected Redis script reply type.');
+  }
+  return result;
+}
+
 // Atomic read-check-delete: the key is removed only when it holds exactly
 // the expected value, in a single Lua execution. Running GET and DEL as
 // separate commands would leave a window where the key could change (or be
@@ -24,9 +39,10 @@ end
 return 0
 `;
 
-// Atomic issue-OTP: checks lockout, then atomically stores the OTP with SET NX EX.
+// Atomic issue-OTP: checks lockout, then atomically stores the challenge value
+// (challenge ID + digest, ADR-019) with SET NX EX.
 // KEYS[1] = OTP key, KEYS[2] = lockout key
-// ARGV[1] = OTP value, ARGV[2] = OTP TTL seconds
+// ARGV[1] = challenge value, ARGV[2] = OTP TTL seconds
 // Returns: 1 = issued (stored), 0 = active OTP already exists, 3 = lockout active
 const ISSUE_OTP_SCRIPT = `
 local otpKey = KEYS[1]
@@ -47,34 +63,51 @@ end
 return 0
 `;
 
-// Atomic verify-and-count-attempts with lockout enforcement: rejects when a
-// lockout is active, consumes on match, or increments the attempt counter and
-// sets the lockout when max attempts is reached.
+// Atomic verify resolution with lockout enforcement. The OTP digest
+// comparison happens in Node.js (crypto.timingSafeEqual, ADR-018); this script
+// receives the Node-side match result and the challenge ID that was verified,
+// and performs no digest comparison — the ID is a random, non-secret
+// identifier (ADR-019).
 // KEYS[1] = OTP key, KEYS[2] = attempts key, KEYS[3] = lockout key
-// ARGV[1] = submitted OTP, ARGV[2] = max attempts, ARGV[3] = lockout TTL seconds
-// Returns: 1 = verified and consumed, 0 = failed (locked, missing/incorrect OTP, or lockout set)
-const VERIFY_OTP_ATTEMPTS_SCRIPT = `
+// ARGV[1] = challenge ID observed by the Node-side verification ('' when none)
+// ARGV[2] = '1' when the Node-side timing-safe comparison matched, '0' otherwise
+// ARGV[3] = max attempts, ARGV[4] = lockout TTL seconds
+// Returns: 1 = verified and consumed, 0 = failed (locked, missing/incorrect
+// OTP, replaced challenge, or lockout set)
+const RESOLVE_OTP_VERIFICATION_SCRIPT = `
 local otpKey = KEYS[1]
 local attemptsKey = KEYS[2]
 local lockoutKey = KEYS[3]
-local submittedOtp = ARGV[1]
-local maxAttempts = tonumber(ARGV[2])
-local lockoutTtlSeconds = tonumber(ARGV[3])
+local observedChallengeId = ARGV[1]
+local matched = ARGV[2] == '1'
+local maxAttempts = tonumber(ARGV[3])
+local lockoutTtlSeconds = tonumber(ARGV[4])
 
 -- Lockout active: reject without incrementing attempts (prevents lockout extension via spam)
 if redis.call('EXISTS', lockoutKey) == 1 then
   return 0
 end
 
-local storedOtp = redis.call('GET', otpKey)
-if storedOtp == submittedOtp then
-  redis.call('UNLINK', otpKey)
-  redis.call('UNLINK', attemptsKey)
-  redis.call('UNLINK', lockoutKey)
+-- Consume only when the stored challenge is exactly the one whose digest the
+-- Node-side comparison matched: the stored value's challenge ID must still be
+-- the observed one. A replaced challenge (ID mismatch) is never consumed.
+local storedValue = redis.call('GET', otpKey)
+local challengeIdEnd = storedValue and string.find(storedValue, ':', 1, true)
+if storedValue and challengeIdEnd and matched
+   and string.sub(storedValue, 1, challengeIdEnd - 1) == observedChallengeId then
+  redis.call('UNLINK', otpKey, attemptsKey, lockoutKey)
   return 1
 end
 
--- OTP missing, expired, or incorrect: increment attempts
+-- Attempt counting is conditional on a live challenge (ADR-019): verifying
+-- against a missing, expired, or consumed OTP never creates attempts or
+-- lockout state, so a lockout can only arise from guesses against a real
+-- challenge.
+if redis.call('EXISTS', otpKey) == 0 then
+  return 0
+end
+
+-- Incorrect (or stale-matched) verification of a live challenge: increment attempts
 local attempts = redis.call('INCR', attemptsKey)
 local attemptsTtl = redis.call('TTL', attemptsKey)
 if attemptsTtl <= 0 then
@@ -261,17 +294,16 @@ export class RedisService implements OnModuleInit, OnApplicationShutdown {
    * different value leaves Redis untouched and simply returns false.
    */
   async deleteIfEquals(key: string, value: string): Promise<boolean> {
-    const result: unknown = await this.client.eval(DELETE_IF_EQUALS_SCRIPT, 1, key, value);
-    // Redis answers Lua integer returns with a number; stringNumbers clients
-    // would see '1', so both are accepted without asserting the reply type.
-    return result === 1 || result === '1';
+    const result = scriptReply(await this.client.eval(DELETE_IF_EQUALS_SCRIPT, 1, key, value));
+    return result === SCRIPT_SUCCESS;
   }
 
   /**
-   * Atomically checks the lockout and stores the OTP with `SET NX EX`, as a
-   * single Lua execution. Returns `'locked'` when a lockout key is present
-   * (no state is modified), `'exists'` when an active OTP already exists, or
-   * `'issued'` when the OTP was stored with the given TTL.
+   * Atomically checks the lockout and stores the OTP digest (ADR-018) with
+   * `SET NX EX`, as a single Lua execution. Returns `'locked'` when a lockout
+   * key is present (no state is modified), `'exists'` when an active OTP
+   * already exists, or `'issued'` when the digest was stored with the given
+   * TTL.
    *
    * Combining the lockout check and the NX store in one script closes the race
    * where a concurrent verification sets the lockout between a separate check
@@ -280,57 +312,63 @@ export class RedisService implements OnModuleInit, OnApplicationShutdown {
   async issueOtp(
     otpKey: string,
     lockoutKey: string,
-    otp: string,
+    otpDigest: string,
     ttlSeconds: number,
   ): Promise<IssueOtpResult> {
-    const result: unknown = await this.client.eval(
-      ISSUE_OTP_SCRIPT,
-      2,
-      otpKey,
-      lockoutKey,
-      otp,
-      ttlSeconds,
+    const result = scriptReply(
+      await this.client.eval(ISSUE_OTP_SCRIPT, 2, otpKey, lockoutKey, otpDigest, ttlSeconds),
     );
-    if (result === 3 || result === '3') {
+    if (result === SCRIPT_OTP_LOCKED) {
       return 'locked';
     }
-    if (result === 1 || result === '1') {
+    if (result === SCRIPT_SUCCESS) {
       return 'issued';
     }
     return 'exists';
   }
 
   /**
-   * Atomically verifies an OTP and tracks failed attempts, as a single Lua
-   * execution. When a lockout key is present the verification is rejected
-   * immediately without touching the counters (so verification spam cannot
-   * extend the lockout). On a correct OTP the OTP, attempts, and lockout keys
-   * are all removed and `true` is returned. On a missing/incorrect OTP the
-   * attempts counter is incremented (with the lockout TTL applied on first
-   * failure); when the counter reaches `maxAttempts` the lockout key is set
-   * with `lockoutTtlSeconds` and the OTP is invalidated so no further attempts
-   * can succeed. Returns `false` for every failure — callers cannot
-   * distinguish locked, missing, expired, incorrect, or invalidated OTPs.
+   * Atomically resolves an OTP verification whose digest comparison was
+   * already performed in Node.js (`crypto.timingSafeEqual`, ADR-018) and
+   * tracks failed attempts, as a single Lua execution. The script performs no
+   * digest comparison itself: when a lockout key is present the verification
+   * is rejected immediately without touching the counters (so verification
+   * spam cannot extend the lockout). When `matched` is true and the stored
+   * challenge still carries the `observedChallengeId` the comparison verified,
+   * the OTP, attempts, and lockout keys are all removed and `true` is
+   * returned — a replaced challenge (ADR-019) is never consumed. When no OTP
+   * key exists, the verification fails without creating any state, so a
+   * lockout can never be triggered without a live challenge (ADR-019).
+   * Otherwise the attempts counter is incremented (with the lockout TTL
+   * applied on first failure); when the counter reaches `maxAttempts` the
+   * lockout key is set with `lockoutTtlSeconds` and the OTP is invalidated so
+   * no further attempts can succeed. Returns `false` for every failure —
+   * callers cannot distinguish locked, missing, expired, incorrect, or
+   * invalidated OTPs.
    */
-  async verifyOtpAndCountAttempts(
+  async resolveOtpVerification(
     otpKey: string,
     attemptsKey: string,
     lockoutKey: string,
-    submittedOtp: string,
+    observedChallengeId: string,
+    matched: boolean,
     maxAttempts: number,
     lockoutTtlSeconds: number,
   ): Promise<boolean> {
-    const result: unknown = await this.client.eval(
-      VERIFY_OTP_ATTEMPTS_SCRIPT,
-      3,
-      otpKey,
-      attemptsKey,
-      lockoutKey,
-      submittedOtp,
-      maxAttempts,
-      lockoutTtlSeconds,
+    const result = scriptReply(
+      await this.client.eval(
+        RESOLVE_OTP_VERIFICATION_SCRIPT,
+        3,
+        otpKey,
+        attemptsKey,
+        lockoutKey,
+        observedChallengeId,
+        matched ? '1' : '0',
+        maxAttempts,
+        lockoutTtlSeconds,
+      ),
     );
-    return result === 1 || result === '1';
+    return result === SCRIPT_SUCCESS;
   }
 
   /**
@@ -351,16 +389,18 @@ export class RedisService implements OnModuleInit, OnApplicationShutdown {
     const windowMs = windowMinutes * 60 * 1000;
     const keyTtlSeconds = windowMinutes * 60;
 
-    const result: unknown = await this.client.eval(
-      CHECK_OTP_RATE_LIMIT_SCRIPT,
-      1,
-      rateLimitKey,
-      now,
-      windowMs,
-      maxSends,
-      keyTtlSeconds,
+    const result = scriptReply(
+      await this.client.eval(
+        CHECK_OTP_RATE_LIMIT_SCRIPT,
+        1,
+        rateLimitKey,
+        now,
+        windowMs,
+        maxSends,
+        keyTtlSeconds,
+      ),
     );
-    return result === 1 || result === '1';
+    return result === SCRIPT_SUCCESS;
   }
 
   /**

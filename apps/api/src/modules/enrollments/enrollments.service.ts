@@ -1,4 +1,4 @@
-import { randomInt } from 'node:crypto';
+import { randomInt, randomUUID } from 'node:crypto';
 import { HttpStatus, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 
@@ -14,6 +14,12 @@ import {
   challengeOtpKey,
   challengeRateLimitKey,
 } from './enrollments.keys.js';
+import {
+  composeOtpChallengeValue,
+  computeOtpDigest,
+  otpDigestMatches,
+  parseOtpChallengeValue,
+} from './enrollments.otp-digest.js';
 
 // OTPs cover every six-digit code from 100000 to 999999; randomInt's upper
 // bound is exclusive, hence the + 1 at the call site.
@@ -25,6 +31,9 @@ export const CHALLENGE_OTP_TTL_SECONDS = 120;
 
 // Maximum OTP sends allowed per phone number within a rolling 60-minute window.
 const MAX_OTP_SENDS_PER_HOUR = 5;
+
+// Width of the rolling window for the per-phone send quota, in minutes.
+const OTP_SEND_WINDOW_MINUTES = 60;
 
 // Single generic message for every verification failure — missing, expired,
 // or incorrect OTPs are deliberately indistinguishable to clients.
@@ -48,7 +57,7 @@ export class EnrollmentsService {
     const allowed = await this.redisService.checkOtpRateLimit(
       rateLimitKey,
       MAX_OTP_SENDS_PER_HOUR,
-      60,
+      OTP_SEND_WINDOW_MINUTES,
     );
 
     if (!allowed) {
@@ -59,13 +68,18 @@ export class EnrollmentsService {
       );
     }
 
-    // Atomically check the lockout and store the OTP: an OTP can never be
-    // issued while a verification lockout is active for this phone number.
+    // Atomically check the lockout and store the challenge value: an OTP can
+    // never be issued while a verification lockout is active for this phone
+    // number. Only the HMAC digest — bound to a per-issuance challenge ID — is
+    // stored; the plaintext OTP never reaches Redis (ADR-018/019).
     const otp = randomInt(OTP_MIN, OTP_MAX + 1).toString();
+    const { otpHmacSecret } = this.configService.getOrThrow<EnrollmentsConfig>(ENROLLMENTS_CONFIG);
+    const otpDigest = computeOtpDigest(phoneNumber, otp, otpHmacSecret);
+    const challengeValue = composeOtpChallengeValue(randomUUID(), otpDigest);
     const issueResult = await this.redisService.issueOtp(
       challengeOtpKey(phoneNumber),
       challengeLockoutKey(phoneNumber),
-      otp,
+      challengeValue,
       CHALLENGE_OTP_TTL_SECONDS,
     );
 
@@ -92,14 +106,26 @@ export class EnrollmentsService {
   }
 
   async verifyChallenge(phone: string, otp: string): Promise<{ phoneNumber: string }> {
-    const { maxVerifyAttempts, lockoutTtlSeconds } =
+    const { maxVerifyAttempts, lockoutTtlSeconds, otpHmacSecret } =
       this.configService.getOrThrow<EnrollmentsConfig>(ENROLLMENTS_CONFIG);
 
-    const verified = await this.redisService.verifyOtpAndCountAttempts(
-      challengeOtpKey(phone),
+    // The digest comparison happens in Node (timing-safe, ADR-018); the
+    // script below only transitions the Redis state atomically, consuming
+    // only the exact challenge whose digest matched (challenge identity,
+    // ADR-019). A missing or malformed stored value is a failed match, never
+    // an exception.
+    const otpKey = challengeOtpKey(phone);
+    const storedChallenge = parseOtpChallengeValue(await this.redisService.get(otpKey));
+    const submittedDigest = computeOtpDigest(phone, otp, otpHmacSecret);
+    const matched =
+      storedChallenge !== null && otpDigestMatches(submittedDigest, storedChallenge.digest);
+
+    const verified = await this.redisService.resolveOtpVerification(
+      otpKey,
       challengeAttemptsKey(phone),
       challengeLockoutKey(phone),
-      otp,
+      storedChallenge?.challengeId ?? '',
+      matched,
       maxVerifyAttempts,
       lockoutTtlSeconds,
     );

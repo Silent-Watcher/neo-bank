@@ -1,5 +1,4 @@
 import { Body, Controller, HttpStatus, Post } from '@nestjs/common';
-import { seconds, Throttle } from '@nestjs/throttler';
 import {
   ApiBadRequestResponse,
   ApiBody,
@@ -8,6 +7,7 @@ import {
   ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
+import { seconds, Throttle } from '@nestjs/throttler';
 
 import { ZodValidationPipe } from '#src/shared/pipes/zod-validation.pipe.js';
 import {
@@ -16,8 +16,8 @@ import {
   toJsonSchemaObject,
 } from '#src/shared/swagger/openapi.schemas.js';
 
-import { challengeRequestSchema, verifyRequestSchema } from './enrollments.schema.js';
 import type { ChallengeRequestBody, VerifyRequestBody } from './enrollments.schema.js';
+import { challengeRequestSchema, verifyRequestSchema } from './enrollments.schema.js';
 import { EnrollmentsService } from './enrollments.service.js';
 
 // The Zod schemas stay the single source of truth for validation; their

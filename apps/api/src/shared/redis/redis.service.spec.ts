@@ -243,10 +243,21 @@ describe('RedisService', () => {
       // Act & Assert
       evalSpy.mockResolvedValue(1);
       await expect(service.deleteIfEquals('some:key', '048391')).resolves.toBe(true);
-      evalSpy.mockResolvedValue('1');
-      await expect(service.deleteIfEquals('some:key', '048391')).resolves.toBe(true);
       evalSpy.mockResolvedValue(0);
       await expect(service.deleteIfEquals('some:key', 'wrong')).resolves.toBe(false);
+    });
+
+    it('rejects a non-numeric script reply — stringNumbers is never enabled (ADR-019)', async () => {
+      // Arrange
+      const service = await createService(client);
+      const evalSpy = vi.spyOn(client, 'eval');
+      evalSpy.mockResolvedValue('1');
+
+      // Act & Assert — the reply type is a fixed numeric contract; anything
+      // else is a programming error and fails fast.
+      await expect(service.deleteIfEquals('some:key', '048391')).rejects.toThrow(
+        'Unexpected Redis script reply type.',
+      );
     });
 
     it('propagates Redis errors from the script execution', async () => {

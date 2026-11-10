@@ -760,3 +760,141 @@ More complex; not justified for the current threat model. A fixed configurable w
 - `prompts/_023-production-ready-otp-enrollment-flow.md`, `prompts/_025-otp-slow-harassment-prevention.md`
 
 ---
+
+## ADR-018: HMAC-SHA-256 Digest Storage for Enrollment OTPs
+
+- **Status:** Accepted
+- **Date:** 2026-11-10
+
+### Context
+
+The enrollment OTP flow stores OTP values in Redis as plaintext under `neo-bank:enrollments:challenge:otp:<phone>` with a 120s TTL. A Redis read-only compromise (unencrypted snapshot or backup leak, replication tap, accidental exposure via `GET`/logging tooling) therefore exposes every active OTP as a directly usable credential.
+
+The OTP itself has only ~19.8 bits of entropy (`log2(900000)` for six digits in 100000–999999). Any storage form that lets an attacker _verify a candidate offline_ — plaintext, plain SHA-256, or salted SHA-256 — allows exhaustive enumeration of the space once the stored value is in hand. The existing defenses (5 attempts per 900s lockout window, 5 sends/phone/hour, per-IP throttles) constrain only _online_ guessing; they do not apply to an attacker working offline from leaked Redis data. This item was tracked as mandatory deferred work (`DEFERRED.md`, item 1).
+
+### Decision
+
+Replace plaintext OTP storage with keyed digests, keeping the Redis key structure, TTLs, rate limits, lockout semantics, and HTTP contracts unchanged:
+
+1. **New required env var `ENROLLMENTS_OTP_HMAC_SECRET`** — a dedicated cryptographic secret, validated by the Zod environment layer at startup: exactly 64 hexadecimal characters, i.e. 32 decoded bytes (`openssl rand -hex 32`). No default, no fallback, never logged, never stored in Redis, must be identical across all API instances, and must not be reused from other credentials (JWT/session secrets). It is decoded to its 32 key bytes before use — the encoded string length is never mistaken for the key length.
+
+2. **Digest generation in Node.js:** the stored value is `HMAC-SHA-256(key, "<phone>:<otp>")` using `node:crypto` `createHmac`. The phone number is bound into the HMAC input: it is validated digits-only by the request schema, so `:` is an unambiguous separator, and binding it prevents digest substitution between challenges (an attacker with Redis _write_ access cannot copy the digest of an OTP they legitimately received for their own phone onto a victim's phone key).
+
+3. **Issuance:** `requestChallenge` computes the digest and passes it to the existing atomic `ISSUE_OTP_SCRIPT` (lockout check + `SET NX EX`). The script performs no comparison; only the stored value changes from six digits to 64 hex characters. Key, TTL, and NX semantics are untouched.
+
+4. **Verification — comparison entirely in Node.js with `crypto.timingSafeEqual`:**
+   - Read the stored value with a plain `GET`.
+   - Compute the HMAC digest of the submitted OTP and compare it against the stored digest over equal-length 32-byte buffers. A missing or malformed stored value (wrong length, non-hex) results in a failed verification — never an exception, never a fallback comparison of raw values. No plaintext `===`/`==` comparison exists anywhere.
+   - Atomically resolve through a Lua script that performs **no digest comparison**: it receives the Node-side `matched` result and either (a) rejects because the lockout key exists (without counting an attempt), (b) consumes — `UNLINK` of otp/attempts/lockout — when matched and the OTP key still exists, or (c) counts the failed attempt (`INCR` + lockout set at max).
+
+   **Why the Lua script does no digest comparison (deliberate deviation from "compare inside the atomic script"):** ordinary Lua string equality is not a timing-safe comparison, and the project forbids hand-rolling constant-time comparison inside Redis. The comparison therefore happens in Node with `crypto.timingSafeEqual`. The match decision is computed against a `GET` snapshot, and the resolve script re-checks both the lockout key and the OTP key's existence authoritatively at resolve time, so the attempt limit remains non-bypassable: any resolve executed after the lockout is set is rejected, exactly as in the fully-atomic variant. `WATCH/MULTI/EXEC` is not required because the resolve script alone provides the necessary atomicity.
+
+   **Documented residual window (stale match after rotation):** between the `GET` and the resolve, the OTP key can expire and — since `SET NX` only guards an existing key — a new challenge can re-create it with a _different_ digest. In that sub-millisecond window, a `matched` decision (which always required a genuinely valid OTP for that phone) consumes the newly issued OTP without it being verified. This is not an authentication bypass — knowledge of a valid OTP for the same phone is still required, and phone binding prevents cross-phone substitution — and the old fully-atomic comparison would instead have counted the attempt. **Superseded by ADR-019:** consumption is now bound to a per-issuance challenge ID verified atomically at resolve time, closing this window; this paragraph is retained as decision history.
+
+   **Documented micro-difference:** none — enforced semantics are identical to the previous fully-atomic script. The resolve script implements the same three outcomes (lockout present → reject without counting; matched and the OTP key still exists → consume; anything else → count the attempt), so a matched decision whose OTP key disappeared between the `GET` and the resolve falls through to attempt counting exactly as the old script counted a verify against a missing key. The comparison is merely computed against a snapshot instead of inside the script; every state transition remains atomic.
+
+5. **No migration, no plaintext fallback:** OTPs issued before deployment fail verification under the new mechanism and expire naturally within ≤120s; users re-request a code. Verification of a plaintext value against a digest can never succeed, so no compatibility path is offered.
+
+### Alternatives Considered
+
+- **Plaintext storage (status quo):** simplest and directly verifiable, but a Redis read-only leak exposes usable OTPs. Rejected — this is the problem being solved.
+- **Plain SHA-256:** one-way, but with only ~19.8 bits of search space, an attacker holding the digest enumerates all 900,000 candidates in seconds on commodity hardware. Rejected.
+- **Salted SHA-256:** defeats precomputation, but the salt sits next to the digest in Redis; exhaustive enumeration of the small space per-salt remains trivial. Rejected.
+- **HMAC-SHA-256 (selected):** keyed verification — without the independently protected secret, stored digests cannot be matched against candidate OTPs at all. No new dependency (`node:crypto`), microseconds per verify.
+- **Encryption (e.g. AES-GCM):** reversible; requires key management _and_ decryption on every inspection, while verification only needs a digest comparison. Provides no benefit over HMAC here and keeps usable ciphertext in Redis. Rejected.
+- **Argon2id/bcrypt:** password hashing is the wrong tool class: designed for human-memorable low-entropy passwords without rate limiting, costing tens to hundreds of milliseconds per verification on a hot endpoint, while the actual enforcement of bounded guessing already comes from the attempt limit and lockout. HMAC achieves the keyed-verification goal at negligible cost. Rejected.
+- **Comparison inside the atomic Lua script (digest-vs-digest):** preserves single-round-trip atomicity, but relies on Lua string equality — a timing-sensitive comparison of secret-derived values, which the decision explicitly excludes. The two-phase Node-compare + atomic resolve achieves equivalent enforced semantics.
+
+### Consequences
+
+**Positive**
+
+- Redis read-only compromise no longer yields usable OTPs: digests without the HMAC secret cannot be matched against candidate codes offline.
+- Digest substitution between phone numbers is blocked by phone binding.
+- Digest comparison is timing-safe (`crypto.timingSafeEqual` over fixed-length buffers).
+- OTP lifecycle, Redis keys, TTLs, rate limits, lockout semantics, and HTTP contracts are unchanged; no new dependencies.
+
+**Negative / limitations (stated plainly)**
+
+- HMAC does **not** increase OTP entropy. If an attacker obtains _both_ Redis data and the HMAC secret, offline brute-force of a single digest is limited only by the ~19.8-bit OTP space — computationally trivial. The scheme's security therefore rests on the secret being protected independently of Redis.
+- Online guessing resistance is **unchanged**: it continues to depend on the attempt limit, lockout, rate limits, and TTL, none of which this decision modifies.
+- Redis _write_ access is not mitigated beyond phone binding: an attacker who can write can delete OTPs or attempt to poison state as before.
+- `timingSafeEqual` protects the byte comparison only, not every conceivable timing side channel of the endpoint.
+- Rotating the secret invalidates all pending digests instantly (at most 120s of in-flight codes fail); operators must deploy rotation with that expectation.
+
+### Operational Implications
+
+- **Provisioning:** the secret is generated once per environment (`openssl rand -hex 32`) and provided through the existing env-file workflow (`ENROLLMENTS_OTP_HMAC_SECRET`); startup fails fast when it is missing, malformed, or not 32 decoded bytes.
+- **Consistency:** all API instances verifying the same OTPs must share the identical secret — same requirement class as any shared signing credential.
+- **Rotation:** restart all instances with the new value; pending OTPs issued under the old key fail verification and users re-request. No automatic dual-key window is provided (YAGNI for a 120s validity window).
+- **Migration:** none; no dual-read of plaintext.
+
+### References
+
+- `docs/security-otp-enrollment.md` (threat model, updated alongside this ADR)
+- ADR-013 (Redis module), ADR-017 (OTP verification attempt lockout)
+- `apps/api/src/modules/enrollments/` (digest module, service), `apps/api/src/shared/redis/redis.service.ts` (resolve script)
+- `DEFERRED.md` item 1 (resolved by this ADR; approach adapted from the suggested Argon2id to HMAC-SHA-256, see Alternatives)
+
+---
+
+## ADR-019: OTP Verification Hardening — Conditional Attempt Counting and Challenge Identity
+
+- **Status:** Accepted
+- **Date:** 2026-11-10
+
+### Context
+
+Two findings from the judge review of ADR-018 (tracked with full investigation results in `docs/judge-findings.md`, F1/F2):
+
+1. **Lockout without a challenge (F1, Medium):** the resolve script counts attempts whenever the OTP key is missing — expired, consumed, or never issued. Because `ISSUE_OTP_SCRIPT` refuses issuance while a lockout exists, an unauthenticated attacker can lock any phone out of issuance entirely with garbage verify requests, without the victim ever requesting a challenge. The per-IP throttle (5 req/120 s) bounds single-source abuse but not distributed per-phone abuse. This behavior predates ADR-018 (ADR-017's script had the same fall-through) and was a documented trade-off; this ADR now resolves it.
+
+2. **Stale match consumes a replaced challenge (F2, Low):** ADR-018's verification compares the digest against a `GET` snapshot in Node and the resolve script consumes on `matched && EXISTS otpKey`. In the sub-millisecond gap the key can expire and be re-issued with a different digest, so a matched decision consumes a challenge that was never verified. No authentication bypass (a genuinely valid OTP for the same phone is still required), but consumption and verification can diverge.
+
+### Decision
+
+**F1 — attempt counting is conditional on a live challenge.** The resolve script increments `attemptsKey` (and can set the lockout) only when `EXISTS otpKey == 1`. Verification against a missing, expired, or consumed challenge is rejected without touching any state. Consequences, verified against the full lifecycle:
+
+- Every path that can create `lockoutKey` now requires a live challenge, so the no-challenge lockout DoS is impossible. Triggering a lockout now costs the attacker a real issuance (per-phone 5 sends/hour) plus max wrong guesses against that live challenge — the bounded §2.5 scenario.
+- Brute-force protection is unchanged: guesses only matter against a stored OTP, attempts still count while it is live, the OTP cannot be extended (`SET NX`, fixed 120 s TTL), and the attempts counter persists across challenge replacement within the lockout window (ADR-017).
+- No new enumeration or error surface: the resolve still returns a single boolean and every failure remains one generic response.
+
+**F2 — challenge identity binds consumption to the verified snapshot.** Every issuance generates a `crypto.randomUUID()` challenge ID and stores `<challengeId>:<digest>` under the existing key. Verification parses the stored value; the digest comparison stays in Node with `crypto.timingSafeEqual`; the observed challenge ID is passed to the resolve script, which consumes the challenge only when the currently stored value's ID prefix still equals the observed one. A replaced challenge (ID mismatch) falls to the attempt branch instead of being consumed.
+
+The challenge ID is a random identifier, not secret-derived material; comparing it inside Lua does not reintroduce the timing-sensitive comparison of secret digests that ADR-018 excluded. `crypto.timingSafeEqual` remains the only comparison of secret-derived values. The ID is internal — it is never returned to, or accepted from, clients, so the API contract is unchanged and the API-level `challengeId` deferral (`DEFERRED.md` item 2) remains deferred.
+
+### Alternatives Considered
+
+**F1:**
+
+- _Gate on OTP existence (selected):_ script-only change; removes every lockout-without-challenge path while keeping enforced attempt semantics identical for live challenges.
+- _Gate + independent per-phone verify rate limiter (new sorted-set key and script):_ rejected as YAGNI — after gating, stateless garbage verifies have no security effect and no state cost; the global throttler bounds volume. Revisit if abuse patterns appear.
+- _Separate verification lock from issuance lock (two lockout keys):_ rejected — a larger redesign of ADR-017's semantics without additional protection.
+
+**F2:**
+
+- _Challenge ID + atomic compare-and-consume (selected):_ one script, one round trip, no new concurrency pattern; consumption is provably bound to the verified snapshot.
+- _`WATCH`/`MULTI`/`EXEC` optimistic transactions:_ equivalent guarantees but the match decision happens outside the transaction, all three keys must be watched, a bounded retry loop is required, and transactions are a pattern that does not exist in this codebase — more machinery for the same outcome. Rejected.
+- _Script returns the current value for Node re-comparison:_ re-creates the fetch-then-compare race or pushes the digest comparison into Lua. Rejected.
+
+### Consequences
+
+**Positive**
+
+- A phone can no longer be locked out of issuance without a live challenge; the remaining lockout path requires a real issuance.
+- Consumption and verification are snapshot-consistent: an expired or replaced challenge is never consumed through a stale match; the previous residual window (documented in ADR-018) is closed.
+- Enforced attempt semantics for live challenges are unchanged; all Lua state transitions remain single-script atomic.
+
+**Negative**
+
+- Verification against an expired OTP no longer counts an attempt (previously counted). This is the intended behavior: attempts exist to bound guessing of a _live_ code.
+- The stored value grows from 64 to 101 characters (UUID + separator + digest); a UUIDv4 is generated per issuance.
+- Parsing adds one strict-format step; a malformed stored value is fail-closed (failed verification, no consumption, no exception), same as ADR-018's malformed-digest handling.
+
+### References
+
+- `docs/judge-findings.md` (F1/F2 investigation record), ADR-017, ADR-018
+- `apps/api/src/modules/enrollments/enrollments.otp-digest.ts` (challenge value compose/parse), `apps/api/src/shared/redis/redis.service.ts` (resolve script)
+- `docs/security-otp-enrollment.md` (threat model, updated alongside)
+
+---

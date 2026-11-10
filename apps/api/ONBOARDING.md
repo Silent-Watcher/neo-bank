@@ -65,28 +65,29 @@ cp env/.env.example env/.env.development
 # edit values if needed; defaults work for local development
 ```
 
-| Variable                           | Meaning                                   | Default behavior if unset                         |
-| ---------------------------------- | ----------------------------------------- | ------------------------------------------------- |
-| `APP_ENV`                          | `development` \| `production` \| `test`   | required                                          |
-| `HOST`, `PORT`                     | Bind address and port                     | required (dev/test files set `3001`)              |
-| `CORS_ORIGIN`                      | Comma-separated allowed origins           | CORS disabled; required when `APP_ENV=production` |
-| `TRUST_PROXY`                      | Trust proxy headers (`true`/`false`)      | `false`                                           |
-| `BODY_LIMIT`                       | Max request body bytes                    | `1048576` (1 MiB)                                 |
-| `LOG_LEVEL`                        | Pino level                                | `info`                                            |
-| `REDIS_URL`                        | Redis URL (`redis://` or `rediss://`)     | required                                          |
-| `REDIS_USERNAME`, `REDIS_PASSWORD` | Redis ACL credentials                     | required; empty value = no authentication         |
-| `REDIS_DB`                         | Logical database index (0–15)             | server default                                    |
-| `REDIS_TLS`                        | Force TLS for `redis://` (`true`/`false`) | `false` (`rediss://` always uses TLS)             |
-| `REDIS_CONNECT_TIMEOUT_MS`         | Connection timeout (ms)                   | `10000`                                           |
-| `REDIS_COMMAND_TIMEOUT_MS`         | Per-command timeout (ms)                  | `5000`                                            |
-| `REDIS_MAX_RETRIES_PER_REQUEST`    | Command retry budget                      | `3`                                               |
-| `REDIS_SHUTDOWN_TIMEOUT_MS`        | Graceful-QUIT window (ms)                 | `2000`                                            |
-| `RATE_LIMIT_SHORT_LIMIT`           | Short-window max requests                 | `10`                                              |
-| `RATE_LIMIT_SHORT_TTL_SECONDS`     | Short-window TTL in seconds               | `1`                                               |
-| `RATE_LIMIT_LONG_LIMIT`            | Long-window max requests                  | `100`                                             |
-| `RATE_LIMIT_LONG_TTL_MINUTES`      | Long-window TTL in minutes                | `1`                                               |
-| `ENROLLMENTS_MAX_VERIFY_ATTEMPTS`  | Max failed OTP verify attempts per window | `5`                                               |
-| `ENROLLMENTS_LOCKOUT_TTL_SECONDS`  | Lockout window after max attempts (s)     | `900` (15 min)                                    |
+| Variable                           | Meaning                                                                                                                                                                  | Default behavior if unset                         |
+| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------- |
+| `APP_ENV`                          | `development` \| `production` \| `test`                                                                                                                                  | required                                          |
+| `HOST`, `PORT`                     | Bind address and port                                                                                                                                                    | required (dev/test files set `3001`)              |
+| `CORS_ORIGIN`                      | Comma-separated allowed origins                                                                                                                                          | CORS disabled; required when `APP_ENV=production` |
+| `TRUST_PROXY`                      | Trust proxy headers (`true`/`false`)                                                                                                                                     | `false`                                           |
+| `BODY_LIMIT`                       | Max request body bytes                                                                                                                                                   | `1048576` (1 MiB)                                 |
+| `LOG_LEVEL`                        | Pino level                                                                                                                                                               | `info`                                            |
+| `REDIS_URL`                        | Redis URL (`redis://` or `rediss://`)                                                                                                                                    | required                                          |
+| `REDIS_USERNAME`, `REDIS_PASSWORD` | Redis ACL credentials                                                                                                                                                    | required; empty value = no authentication         |
+| `REDIS_DB`                         | Logical database index (0–15)                                                                                                                                            | server default                                    |
+| `REDIS_TLS`                        | Force TLS for `redis://` (`true`/`false`)                                                                                                                                | `false` (`rediss://` always uses TLS)             |
+| `REDIS_CONNECT_TIMEOUT_MS`         | Connection timeout (ms)                                                                                                                                                  | `10000`                                           |
+| `REDIS_COMMAND_TIMEOUT_MS`         | Per-command timeout (ms)                                                                                                                                                 | `5000`                                            |
+| `REDIS_MAX_RETRIES_PER_REQUEST`    | Command retry budget                                                                                                                                                     | `3`                                               |
+| `REDIS_SHUTDOWN_TIMEOUT_MS`        | Graceful-QUIT window (ms)                                                                                                                                                | `2000`                                            |
+| `RATE_LIMIT_SHORT_LIMIT`           | Short-window max requests                                                                                                                                                | `10`                                              |
+| `RATE_LIMIT_SHORT_TTL_SECONDS`     | Short-window TTL in seconds                                                                                                                                              | `1`                                               |
+| `RATE_LIMIT_LONG_LIMIT`            | Long-window max requests                                                                                                                                                 | `100`                                             |
+| `RATE_LIMIT_LONG_TTL_MINUTES`      | Long-window TTL in minutes                                                                                                                                               | `1`                                               |
+| `ENROLLMENTS_MAX_VERIFY_ATTEMPTS`  | Max failed OTP verify attempts per window                                                                                                                                | `5`                                               |
+| `ENROLLMENTS_LOCKOUT_TTL_SECONDS`  | Lockout window after max attempts (s)                                                                                                                                    | `900` (15 min)                                    |
+| `ENROLLMENTS_OTP_HMAC_SECRET`      | HMAC-SHA-256 key for OTP digest storage (ADR-018); required, no default — generate with `openssl rand -hex 32` (64 hex chars = 32 bytes), identical across API instances | —                                                 |
 
 Startup fails fast with a readable Zod error if validation fails.
 

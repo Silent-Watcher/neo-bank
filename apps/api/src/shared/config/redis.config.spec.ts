@@ -18,6 +18,7 @@ describe('redisConfig factory', () => {
     vi.stubEnv('REDIS_URL', 'redis://localhost:6379');
     vi.stubEnv('REDIS_USERNAME', 'default');
     vi.stubEnv('REDIS_PASSWORD', 'secret');
+    vi.stubEnv('ENROLLMENTS_OTP_HMAC_SECRET', 'ab'.repeat(32));
     for (const [key, value] of Object.entries(overrides)) {
       vi.stubEnv(key, value);
     }

@@ -18,6 +18,7 @@ describe('logConfig factory', () => {
     vi.stubEnv('REDIS_URL', 'redis://localhost:6379');
     vi.stubEnv('REDIS_USERNAME', '');
     vi.stubEnv('REDIS_PASSWORD', '');
+    vi.stubEnv('ENROLLMENTS_OTP_HMAC_SECRET', 'ab'.repeat(32));
   }
 
   it('enables pretty printing only in the development environment', async () => {
