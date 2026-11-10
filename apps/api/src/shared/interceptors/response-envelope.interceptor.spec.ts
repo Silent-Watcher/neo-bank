@@ -1,6 +1,7 @@
 import { StreamableFile } from '@nestjs/common';
 import { HEADERS_METADATA } from '@nestjs/common/constants.js';
 import type { CallHandler, ExecutionContext } from '@nestjs/common';
+import { I18nService } from '@nestjs/i18n';
 import { of } from 'rxjs';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -46,8 +47,11 @@ function createInterceptorContext(
 }
 
 async function interceptOnce(context: ExecutionContext, next: CallHandler): Promise<unknown> {
+  // Catalog-consistency tests guarantee the real 'common.success' message;
+  // the stub keeps this spec independent of the loader.
+  const i18n = { t: vi.fn(() => 'Success') } as unknown as I18nService;
   return new Promise((resolve) => {
-    new ResponseEnvelopeInterceptor().intercept(context, next).subscribe(resolve);
+    new ResponseEnvelopeInterceptor(i18n).intercept(context, next).subscribe(resolve);
   });
 }
 

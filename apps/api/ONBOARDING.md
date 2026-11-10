@@ -33,6 +33,7 @@ feature coverage is minimal.
 | SWC                                      | TypeScript transpilation (fast builds; type checking stays with `tsc`)                                  |
 | Zod 4                                    | Validation for HTTP input and environment variables                                                     |
 | @nestjs/config                           | Configuration namespaces via `registerAs` + `ConfigService`                                             |
+| @nestjs/i18n                             | Bilingual en/fa translations: locale resolution, JSON catalogs ([ADR-021](../../DECISIONS.md))          |
 | Pino / nestjs-pino                       | Structured logging; request-scoped context, header redaction                                            |
 | @nestjs/terminus                         | `/health` endpoint                                                                                      |
 | ioredis 6                                | Redis client behind the shared `RedisService` ([ADR-012](../../DECISIONS.md)/[013](../../DECISIONS.md)) |
@@ -120,6 +121,8 @@ pnpm start        # node dist/main.js
 ```
 src/
   main.ts                  # bootstrap: Fastify options, /api prefix, /v1 versioning, CORS
+  i18n/                    # translation catalogs src/i18n/{en,fa}/*.json, key type
+                           # registration (i18n.types.ts), catalog-consistency spec
   modules/
     app/                   # AppModule wiring, health check, Problem Type docs page
     enrollments/           # first feature module (OTP endpoint)
@@ -129,9 +132,11 @@ src/
     errors/                # AppHttpException, ErrorCode, Problem Details helpers
     filters/               # global Problem Details error filter
     http/                  # request-ID generation/lifecycle, API version helpers
+    i18n/                  # global I18nModule registration (locales, resolver,
+                           # missing-key policy, catalog loader)
     interceptors/          # global success response envelope
     logging/               # nestjs-pino module and pino-http options
-    pipes/                 # ZodValidationPipe
+    pipes/                 # ZodValidationPipe (translates Zod issues per request locale)
     redis/                 # global RedisModule: ioredis provider, RedisService,
                            # @InjectRedis(), degraded-mode health indicator
     swagger/               # dev-only OpenAPI setup + shared response schemas

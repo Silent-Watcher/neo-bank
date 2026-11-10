@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { HealthIndicatorService, type HealthIndicatorResult } from '@nestjs/terminus';
+import { I18nService } from '@nestjs/i18n';
 
 import { RedisService } from './redis.service.js';
 
@@ -17,6 +18,7 @@ export class RedisHealthIndicator {
   constructor(
     private readonly healthIndicatorService: HealthIndicatorService,
     private readonly redisService: RedisService,
+    private readonly i18n: I18nService,
   ) {}
 
   async check(): Promise<HealthIndicatorResult> {
@@ -29,8 +31,10 @@ export class RedisHealthIndicator {
       // Error messages from ioredis reference host/port (e.g.
       // "connect ECONNREFUSED 127.0.0.1:6379"), never credentials or the
       // full URL, so they are safe diagnostics for the health response.
+      // Those raw technical messages pass through untranslated; only the
+      // fallback for a non-Error failure is localized.
       return indicator.degraded({
-        message: error instanceof Error ? error.message : 'Redis is unavailable.',
+        message: error instanceof Error ? error.message : this.i18n.t('health.redisUnavailable'),
       });
     }
   }

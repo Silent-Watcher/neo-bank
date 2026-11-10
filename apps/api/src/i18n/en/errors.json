@@ -1,0 +1,31 @@
+{
+  "titles": {
+    "applicationError": "Application Error",
+    "invalidRequestId": "Invalid Request Id",
+    "otpRateLimitExceeded": "Too Many Requests",
+    "otpVerificationFailed": "Verification Failed",
+    "rateLimited": "Too Many Requests"
+  },
+  "details": {
+    "unexpected": "An unexpected error occurred.",
+    "rateLimited": "Too many requests. Retry later."
+  },
+  "status": {
+    "badRequest": "Bad Request",
+    "unauthorized": "Unauthorized",
+    "forbidden": "Forbidden",
+    "notFound": "Not Found",
+    "methodNotAllowed": "Method Not Allowed",
+    "notAcceptable": "Not Acceptable",
+    "conflict": "Conflict",
+    "gone": "Gone",
+    "unsupportedMediaType": "Unsupported Media Type",
+    "unprocessableEntity": "Unprocessable Entity",
+    "tooManyRequests": "Too Many Requests",
+    "internalServerError": "Internal Server Error",
+    "badGateway": "Bad Gateway",
+    "serviceUnavailable": "Service Unavailable",
+    "gatewayTimeout": "Gateway Timeout",
+    "http": "HTTP {status}"
+  }
+}

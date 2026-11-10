@@ -942,3 +942,62 @@ Redis Stack bundles the Redis server, the Redis Stack modules, and Redis Insight
 - `docs/docker.md` (ports table, Insight access)
 
 ---
+
+## ADR-021: Bilingual Internationalization (en/fa) via the Official @nestjs/i18n
+
+- **Status:** Accepted
+- **Date:** 2026-11-10
+
+### Context
+
+The API is English-only. Every user-facing message — the success envelope's `message`, Problem Details `title`/`detail`, OTP service error details, and Zod validation messages — is a hardcoded English string constant. The application must support English (`en`) and Persian (`fa`), resolved per request from `Accept-Language` only, without changing any API contract. Clients already rely on machine-readable fields (`code`, `status`, `type`, envelope shape) as the stable contract; human-readable fields (`title`, `detail`, `message`) are documented as non-contractual.
+
+The existing architecture has three message-producing paths: the `ResponseEnvelopeInterceptor` (success `message`), the `ProblemDetailsFilter` (exception `title`/`detail`, including Zod message arrays joined from `BadRequestException`), and the `ZodValidationPipe` (Zod issue strings). Zod 4 is a Standard Schema implementer.
+
+### Decision
+
+Introduce the official **`@nestjs/i18n`** (NestJS org, first-party, zero runtime dependencies, peer deps `@nestjs/common|core ^12.1.0`, `@standard-schema/spec ^1.0.0`) as the single i18n foundation:
+
+- **Locale configuration:** `defaultLocale: 'en'`, `supportedLocales: ['en', 'fa']` pinned explicitly (loaded catalog directories never widen the set), `fallbacks: { 'fa-IR': 'fa', 'en-US': 'en' }`. English is the default and the catalog source of truth.
+- **Locale resolution:** `AcceptLanguageLocaleResolver` as the only active resolver, registered in one centralized `I18nModule.forRootAsync` call with an in-place comment block documenting exactly how to add further resolvers (import source, registration point, input configuration, ordering = precedence, supported-locale requirement, tests to add). Missing header, unsupported languages, and `q` values resolve per the library's documented behavior; regional identifiers fall back to their base language.
+- **Request isolation:** the library's middleware + AsyncLocalStorage context. No mutable global locale state; concurrent requests cannot interfere.
+- **Response headers:** `responseHeaders: true` (library default) sets `Content-Language` and `Vary: Accept-Language`.
+- **Catalogs:** JSON, per locale, namespaced files (`common`, `validation`, `errors`, `otp`) under `apps/api/src/i18n/{en,fa}/`, shipped to production through `nest-cli.json` `compilerOptions.assets` → `dist/i18n/**` (covered by turbo `outputs: dist/**` and the production image's `COPY dist`), loaded via `JsonI18nLoader({ path: join(import.meta.dirname, 'i18n'), watch: <development only> })`.
+- **Missing-key policy:** `'throw'` in development and test (fail visibly), `'fallback'` (to English, with diagnostics) in production.
+- **Type safety:** the English catalog is type-imported and augmented into `I18nTypes`, making unknown keys a compile error.
+- **Integration by adaptation, not replacement:** the existing `ZodValidationPipe`, `AppHttpException`, `ProblemDetailsFilter`, and `ResponseEnvelopeInterceptor` keep their responsibilities and output shapes. Only message production is localized: Zod schema messages reference catalog keys (`i18nIssueMessage`), the pipe translates issues before formatting; services throw `AppHttpException(code, t(key, args), status)`; the filter translates `title` and generic fallback details at response time; the envelope translates only `message`. HTTP statuses, `ErrorCode` values, and envelope/error structures are unchanged.
+- **Non-goals:** no locale other than `en`/`fa`; no additional resolvers activated; no translation of JSON property names, error codes, enum identifiers, health machine fields, ioredis error passthrough, env-schema operator messages, or logs; the Fastify-level request-ID rejection stays English (it runs before the i18n middleware).
+
+### Reasons
+
+- First-party package: guaranteed NestJS 12 alignment, maintained by the Nest team; peers match the installed Nest 12.2.0 exactly.
+- Native Standard Schema support fits Zod 4 without a wrapper.
+- AsyncLocalStorage context resolves locale per request with no scoped proxies and works from singleton services.
+- All behaviors the task requires — q-value parsing, regional fallback, plural categories via `Intl.PluralRules`, missing-key policy, response headers, typed keys — are built in.
+
+### Alternatives Considered
+
+- _`nestjs-i18n` (toonvanstrijp) 10.8.5:_ mature and widely used, but lacks a Standard Schema validation pipe, declares `peerDependencies: "*"` (no Nest 12 contract), and is community-owned. Rejected in favor of the first-party package.
+- _Custom minimal i18n (~200 lines):_ feasible, but re-implements Accept-Language negotiation, plural rules, fallback chains, and cache headers — worse than using the platform's official module.
+- _Translate centrally in the exception filter only:_ would couple the filter to every throw site's keys and lose throw-time interpolation arguments; rejected.
+
+### Consequences and Trade-offs
+
+**Positive**
+
+- A single, typed catalog source of truth; adding a language is a new directory plus a `supportedLocales` entry.
+- Validation, error, and success message localization with no change to wire contracts.
+- Dev/test failures on missing keys keep catalogs honest; production degrades to English with diagnostics.
+
+**Negative**
+
+- `@nestjs/i18n` is young (first releases, 0.x). Maturity risk accepted in exchange for first-party stewardship; bugs found in the package are reported upstream (and contributed back where practical) rather than worked around silently.
+- JSON catalogs must be manually kept structurally consistent; catalog-consistency tests enforce this.
+- Error message text becomes locale-dependent; consumers must keep relying on `code`/`status`/`type` (already the documented contract).
+
+### References
+
+- `apps/api/src/shared/i18n/` (module registration), `apps/api/src/i18n/{en,fa}/` (catalogs), `apps/api/src/shared/pipes/zod-validation.pipe.ts`, `apps/api/src/shared/filters/problem-details.filter.ts`, `apps/api/src/shared/interceptors/response-envelope.interceptor.ts`
+- Official documentation: `https://docs.nestjs.com/application/i18n`
+
+---

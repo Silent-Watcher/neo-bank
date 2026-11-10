@@ -1,0 +1,5 @@
+{
+  "phoneNumber": "Phone number must be an Iranian mobile number in the format 09XXXXXXXXX.",
+  "otp": "OTP must be a six-digit numeric string.",
+  "invalid_type": "Expected {expected}, but received {received}."
+}

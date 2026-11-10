@@ -1,0 +1,4 @@
+{
+  "verificationFailed": "Phone number verification failed.",
+  "rateLimited": "Too many OTP requests. Please try again later."
+}

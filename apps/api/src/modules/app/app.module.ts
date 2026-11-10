@@ -5,6 +5,7 @@ import { configModule } from '#config/config.js';
 import { ProblemDetailsFilter } from '#filters/problem-details.filter.js';
 import { ResponseEnvelopeInterceptor } from '#interceptors/response-envelope.interceptor.js';
 import { AppLoggerModule } from '#src/shared/logging/logger.module.js';
+import { i18nModule } from '#src/shared/i18n/i18n.module.js';
 import { RedisModule } from '#src/shared/redis/redis.module.js';
 import { RedisThrottlerGuard } from '#src/shared/throttler/redis-throttler.guard.js';
 import { throttlerModule } from '#src/shared/throttler/throttler.module.js';
@@ -17,6 +18,7 @@ import { EnrollmentsModule } from '#modules/enrollments/enrollments.module.js';
 @Module({
   imports: [
     configModule,
+    i18nModule,
     AppLoggerModule,
     TerminusModule,
     RedisModule,

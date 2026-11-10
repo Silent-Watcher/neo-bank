@@ -1,3 +1,5 @@
+import type { I18nKey } from '@nestjs/i18n';
+
 // Application-wide error codes. Only codes actually needed by the current
 // behavior live here; business features add their own codes as they arrive.
 export enum ErrorCode {
@@ -50,4 +52,22 @@ const ERROR_CODE_TITLES: ReadonlyMap<ErrorCode, string> = new Map([
 
 export function titleForErrorCode(code: ErrorCode): string | undefined {
   return ERROR_CODE_TITLES.get(code);
+}
+
+// Catalog keys for the translated titles (ADR-021). `buildProblemDetails`
+// emits the English title above; the exception filter replaces it with the
+// message for the request's locale. Codes without an application-specific
+// title (`BadRequest`, `NotFound`) are absent by design: the filter then
+// falls back to the status-based `errors.status.*` keys, which serve as the
+// title source for those codes.
+const ERROR_CODE_TITLE_KEYS: ReadonlyMap<ErrorCode, I18nKey> = new Map([
+  [ErrorCode.ApplicationError, 'errors.titles.applicationError'],
+  [ErrorCode.InvalidRequestId, 'errors.titles.invalidRequestId'],
+  [ErrorCode.OtpRateLimitExceeded, 'errors.titles.otpRateLimitExceeded'],
+  [ErrorCode.OtpVerificationFailed, 'errors.titles.otpVerificationFailed'],
+  [ErrorCode.RateLimited, 'errors.titles.rateLimited'],
+]);
+
+export function titleKeyForErrorCode(code: ErrorCode): I18nKey | undefined {
+  return ERROR_CODE_TITLE_KEYS.get(code);
 }

@@ -27,6 +27,9 @@ export function registerRequestIdLifecycle(instance: FastifyInstance, logger: Lo
     const problem = buildProblemDetails({
       status: HttpStatus.BAD_REQUEST,
       code: ErrorCode.InvalidRequestId,
+      // This hook runs as a raw Fastify onRequest hook, before the i18n
+      // middleware resolves a locale, so the message stays English by design
+      // (ADR-021). Clients identify it by the stable `code`, not the detail.
       detail: `${X_REQUEST_ID_HEADER} header must be a valid UUIDv4.`,
       requestId: String(request.id),
       apiVersion: resolveApiVersion(request.url),

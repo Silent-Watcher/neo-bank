@@ -1,8 +1,7 @@
+import { i18nIssueMessage } from '@nestjs/i18n';
 import { z } from 'zod';
 
 const IRANIAN_MOBILE_PATTERN = /^09\d{9}$/;
-const IRANIAN_MOBILE_MESSAGE =
-  'Phone number must be an Iranian mobile number in the format 09XXXXXXXXX.';
 
 // Normalizes common user spellings to the national mobile format before
 // validation: surrounding whitespace is trimmed, and a +98 / 0098 / 98
@@ -25,7 +24,7 @@ function toNationalMobile(value: string): string {
 export const phoneNumberSchema = z
   .string()
   .transform(toNationalMobile)
-  .pipe(z.string().regex(IRANIAN_MOBILE_PATTERN, IRANIAN_MOBILE_MESSAGE));
+  .pipe(z.string().regex(IRANIAN_MOBILE_PATTERN, i18nIssueMessage('validation.phoneNumber')));
 
 export const challengeRequestSchema = z.object({
   phoneNumber: phoneNumberSchema,
@@ -37,7 +36,7 @@ export type ChallengeRequestBody = z.infer<typeof challengeRequestSchema>;
 // be coerced to a number because leading zeros are significant.
 export const verifyRequestSchema = z.object({
   phoneNumber: phoneNumberSchema,
-  otp: z.string().regex(/^\d{6}$/, 'OTP must be a six-digit numeric string.'),
+  otp: z.string().regex(/^\d{6}$/, i18nIssueMessage('validation.otp')),
 });
 
 export type VerifyRequestBody = z.infer<typeof verifyRequestSchema>;

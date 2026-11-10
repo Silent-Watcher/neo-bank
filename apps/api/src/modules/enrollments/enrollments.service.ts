@@ -1,6 +1,7 @@
 import { randomInt, randomUUID } from 'node:crypto';
 import { HttpStatus, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { I18nService } from '@nestjs/i18n';
 
 import { AppHttpException } from '#errors/app-http.exception.js';
 import { ErrorCode } from '#errors/error.code.js';
@@ -35,19 +36,17 @@ const MAX_OTP_SENDS_PER_HOUR = 5;
 // Width of the rolling window for the per-phone send quota, in minutes.
 const OTP_SEND_WINDOW_MINUTES = 60;
 
-// Single generic message for every verification failure — missing, expired,
-// or incorrect OTPs are deliberately indistinguishable to clients.
-const VERIFICATION_FAILED_DETAIL = 'Phone number verification failed.';
-
-// Single generic message for OTP rate limit exceeded — the hourly quota is
-// deliberately indistinguishable from the cooldown to clients.
-const OTP_RATE_LIMIT_DETAIL = 'Too many OTP requests. Please try again later.';
+// Verification failures share one generic message (missing, expired, or
+// incorrect OTPs are deliberately indistinguishable to clients), and the
+// hourly quota is deliberately indistinguishable from the cooldown — both
+// translate the same catalog keys for the request's locale.
 
 @Injectable()
 export class EnrollmentsService {
   constructor(
     private readonly redisService: RedisService,
     private readonly configService: ConfigService,
+    private readonly i18n: I18nService,
   ) {}
 
   async requestChallenge(phoneNumber: string): Promise<{ phoneNumber: string }> {
@@ -63,7 +62,7 @@ export class EnrollmentsService {
     if (!allowed) {
       throw new AppHttpException(
         ErrorCode.OtpRateLimitExceeded,
-        OTP_RATE_LIMIT_DETAIL,
+        this.i18n.t('otp.rateLimited'),
         HttpStatus.BAD_REQUEST,
       );
     }
@@ -88,7 +87,7 @@ export class EnrollmentsService {
       // generic detail, so the lockout state is not disclosed.
       throw new AppHttpException(
         ErrorCode.OtpRateLimitExceeded,
-        OTP_RATE_LIMIT_DETAIL,
+        this.i18n.t('otp.rateLimited'),
         HttpStatus.BAD_REQUEST,
       );
     }
@@ -96,7 +95,7 @@ export class EnrollmentsService {
     if (issueResult === 'exists') {
       throw new AppHttpException(
         ErrorCode.OtpVerificationFailed,
-        VERIFICATION_FAILED_DETAIL,
+        this.i18n.t('otp.verificationFailed'),
         HttpStatus.BAD_REQUEST,
       );
     }
@@ -133,7 +132,7 @@ export class EnrollmentsService {
     if (!verified) {
       throw new AppHttpException(
         ErrorCode.OtpVerificationFailed,
-        VERIFICATION_FAILED_DETAIL,
+        this.i18n.t('otp.verificationFailed'),
         HttpStatus.BAD_REQUEST,
       );
     }

@@ -116,8 +116,9 @@ describe('challengeRequestSchema', () => {
     // Arrange + Act
     const issues = parseIssues(challengeRequestSchema, { phoneNumber: '0912345678' });
 
-    // Assert
-    expect(issues[0]).toContain('09XXXXXXXXX');
+    // Assert — the message is a translation-key reference (resolved for the
+    // request locale by ZodValidationPipe, asserted in e2e).
+    expect(issues[0]).toContain('validation.phoneNumber');
   });
 });
 

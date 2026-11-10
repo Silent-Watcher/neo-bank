@@ -1,6 +1,6 @@
 # Current Development State
 
-Snapshot of what exists in the repository. Last verified: 2026-11-10.
+Snapshot of what exists in the repository. Last verified: 2026-11-11.
 Legend: **Implemented** / **Partial** / **Planned** / **Unknown**.
 
 ## Maturity
@@ -59,6 +59,23 @@ auth, no deployment setup.
   Problem Details error filter; `/problems/application-error` documentation
   page.
 - `ZodValidationPipe` for body/param/query validation against Zod schemas.
+- Internationalization (ADR-021): the official `@nestjs/i18n` with locales
+  `en` (default) and `fa`, resolved per request by the
+  `AcceptLanguageLocaleResolver` (the only active resolver; q-values,
+  regional identifiers like `fa-IR` → base language, missing/unsupported →
+  default). JSON catalogs in `src/i18n/{en,fa}/{common,errors,health,otp,
+  validation}.json`, delivered to production via nest-cli assets into
+  `dist/i18n`; the English catalog registers compile-time-checked keys
+  (`src/i18n/i18n.types.ts`). Localized surfaces: envelope `message`,
+  Problem Details `title`/`detail`, OTP error details, Zod validation
+  messages, and the Redis health fallback — error codes, statuses, and all
+  machine-readable values unchanged. Missing keys `throw` in
+  development/test and fall back to English with diagnostics in production.
+  Responses carry `Content-Language` and `Vary: Accept-Language`. The
+  Fastify-level request-ID rejection stays English by design (runs before
+  locale resolution). Catalog-consistency tests enforce key/placeholder/
+  plural parity; `test/i18n.e2e-spec.ts` covers resolution, headers,
+  localization, isolation, and health regression.
 - Swagger/OpenAPI (ADR-014): development-only via `@nestjs/swagger` —
   Swagger UI at `/docs`, document at `/docs/json`/`/docs/yaml`; request
   schemas generated from Zod with `z.toJSONSchema()`; shared envelope and
@@ -100,7 +117,7 @@ auth, no deployment setup.
   An additional per-phone hourly rate limit (5 sends / rolling 60 min) is
   enforced atomically via Redis sorted set. No registration or authentication
   steps yet.
-- Tests: Vitest unit (29 files / 245 tests), e2e (13 files / 65 tests),
+- Tests: Vitest unit (30 files / 262 tests), e2e (14 files / 77 tests),
   Redis integration (4 files / 60 tests via `pnpm test:redis`). All integration
   and e2e tests use Testcontainers (`apps/api/test/testcontainers.ts`) to
   start isolated `redis:8.2-alpine` containers per test file with dynamic
@@ -115,7 +132,7 @@ auth, no deployment setup.
 **Planned / Not started**
 
 - Persistence, authentication/authorization, remaining banking features,
-  rate limiting, SMS provider integration.
+  SMS provider integration.
 
 ### `apps/web` — Next.js 16 customer app (scaffold)
 
@@ -196,6 +213,6 @@ Per-app commands are listed in each `apps/<app>/ONBOARDING.md`.
 
 All ADRs live in [DECISIONS.md](../DECISIONS.md). Status as of this snapshot:
 
-- **Accepted:** ADR-001 (Turborepo), ADR-002 (Fastify), ADR-003 (SWC), ADR-004 (@nestjs/config + Zod), ADR-005 (URI versioning), ADR-006 (1 MiB body limit), ADR-007 (`api` prefix), ADR-008/009 (Pino / nestjs-pino), ADR-010 (UUIDv4 request IDs), ADR-011 (envelope exclusions), ADR-012 (ioredis without a wrapper), ADR-013 (Redis module architecture), ADR-014 (Swagger/OpenAPI, development-only), ADR-015 (Global HTTP rate limiting with Redis-backed @nestjs/throttler), ADR-016 (Testcontainers for integration and e2e testing), ADR-017 (OTP verification attempt lockout for enrollment security), ADR-018 (HMAC-SHA-256 digest storage for enrollment OTPs), ADR-019 (OTP verification hardening — conditional attempt counting and challenge identity), ADR-020 (development Redis service migrated to Redis Stack with bundled Redis Insight).
+- **Accepted:** ADR-001 (Turborepo), ADR-002 (Fastify), ADR-003 (SWC), ADR-004 (@nestjs/config + Zod), ADR-005 (URI versioning), ADR-006 (1 MiB body limit), ADR-007 (`api` prefix), ADR-008/009 (Pino / nestjs-pino), ADR-010 (UUIDv4 request IDs), ADR-011 (envelope exclusions), ADR-012 (ioredis without a wrapper), ADR-013 (Redis module architecture), ADR-014 (Swagger/OpenAPI, development-only), ADR-015 (Global HTTP rate limiting with Redis-backed @nestjs/throttler), ADR-016 (Testcontainers for integration and e2e testing), ADR-017 (OTP verification attempt lockout for enrollment security), ADR-018 (HMAC-SHA-256 digest storage for enrollment OTPs), ADR-019 (OTP verification hardening — conditional attempt counting and challenge identity), ADR-020 (development Redis service migrated to Redis Stack with bundled Redis Insight), ADR-021 (bilingual internationalization en/fa via the official @nestjs/i18n).
 
 All architectural decisions are accepted and implemented. Do not build on rejected alternatives (e.g. do not introduce header versioning or a second logger).
