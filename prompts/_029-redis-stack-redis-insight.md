@@ -29,5 +29,6 @@ Round 1: one Medium (empty string must mean "unset" — an env file listing the 
 
 ## Notes
 
+- **Follow-up (same session):** the user's `pnpm docker:dev` failed building all three dev images with `ERR_PNPM_IGNORED_BUILDS` (`cpu-features@0.0.10`, `protobufjs@7.6.6`, `ssh2@1.17.0` — transitive dependencies of `@testcontainers` added to the lockfile after the last image build). Fixed by denying their optional build scripts in `pnpm-workspace.yaml` `allowBuilds` (`false` — ssh2 falls back to pure JS; `cpu-features` would need a node-gyp toolchain the slim images lack), mirroring the existing `@scarf/scarf: false` pattern. Verified: all three dev images build, the full stack comes up healthy (`pnpm docker:dev`), and the containerized API logs `Redis Insight: http://localhost:8001`.
 - The dev redis container (`neo-bank-dev-redis-1`) is left running on 6380/8001 (recreated for validation; it was started by this agent in a previous task and holds only ephemeral data).
 - No commit created (awaiting explicit user approval).

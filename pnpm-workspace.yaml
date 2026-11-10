@@ -19,3 +19,13 @@ allowBuilds:
   # explicitly so non-interactive installs (Docker, CI) do not fail with
   # ERR_PNPM_IGNORED_BUILDS.
   '@scarf/scarf': false
+  # Transitive dependencies of @testcontainers (ssh2 → cpu-features,
+  # protobufjs). Their build scripts are optional native-compilation or
+  # tooling steps: ssh2 falls back to its pure-JS implementation without
+  # cpu-features, and cpu-features would need a node-gyp toolchain the slim
+  # Docker images do not contain. Denied so non-interactive installs
+  # (Docker, CI) do not fail with ERR_PNPM_IGNORED_BUILDS and no native
+  # code is compiled in the images.
+  'cpu-features': false
+  protobufjs: false
+  ssh2: false
