@@ -25,7 +25,7 @@ const API_DEFAULT_VERSION = '1';
 const API_BASE_PATH = `/${API_GLOBAL_PREFIX}/v${API_DEFAULT_VERSION}`;
 
 async function bootstrap() {
-  const { env, host, port, trustProxy, bodyLimit, corsOrigins } = serverConfig();
+  const { env, host, port, trustProxy, bodyLimit, corsOrigins, redisInsightUrl } = serverConfig();
 
   const app = await NestFactory.create<NestFastifyApplication>(
     AppModule,
@@ -96,7 +96,15 @@ async function bootstrap() {
   const addresses = resolveStartupAddresses(host);
   const toUrls = (path: string) => addresses.map((address) => buildStartupUrl(address, port, path));
   const swaggerUrls = isSwaggerEnabled ? toUrls(`/${SWAGGER_DOCS_PATH}`) : null;
-  app.get(Logger).log(buildStartupLogMessage({ apiUrls: toUrls(API_BASE_PATH), swaggerUrls }));
+  // The Redis Insight URL is only logged where it is actually exposed: the
+  // development Compose stack injects it; everywhere else it is unset.
+  app.get(Logger).log(
+    buildStartupLogMessage({
+      apiUrls: toUrls(API_BASE_PATH),
+      swaggerUrls,
+      redisInsightUrl: redisInsightUrl ?? null,
+    }),
+  );
 }
 
 void bootstrap();

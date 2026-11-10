@@ -32,7 +32,7 @@ auth, no deployment setup.
   `REDIS_MAX_RETRIES_PER_REQUEST`, `REDIS_SHUTDOWN_TIMEOUT_MS`,
   `RATE_LIMIT_SHORT_LIMIT`, `RATE_LIMIT_SHORT_TTL_SECONDS`,
   `RATE_LIMIT_LONG_LIMIT`, `RATE_LIMIT_LONG_TTL_MINUTES`,
-  `ENROLLMENTS_MAX_VERIFY_ATTEMPTS`.
+  `ENROLLMENTS_MAX_VERIFY_ATTEMPTS`, `REDIS_INSIGHT_URL`.
 - Redis integration (ADR-012/013): global `RedisModule` in
   `src/shared/redis/` with a single lazy ioredis 6 client (symbol token,
   `@InjectRedis()` escape hatch), `RedisService` application abstraction
@@ -143,7 +143,10 @@ None. The workspace contains only `apps/*`; no `packages/` directory exists.
 **Implemented:** Redis client integration in the API (global `RedisModule`,
 ioredis 6, degraded-mode health, standardized key naming); the enrollments
 challenge feature stores its OTP in Redis; global rate limiting uses the same
-connection via atomic Lua scripts. Testcontainers (ADR-016) provides isolated
+connection via atomic Lua scripts. The development Compose stack runs
+`redis/redis-stack:latest` with bundled Redis Insight on port 8001
+(ADR-020); the API logs the host-accessible Insight URL at startup when the
+stack injects `REDIS_INSIGHT_URL`. Testcontainers (ADR-016) provides isolated
 `redis:8.2-alpine` containers for integration and e2e tests — each test file
 starts its own container with dynamic ports in `beforeAll`/`afterAll`, enabling
 parallel execution and true isolation without manual Docker Compose. Docker
@@ -193,6 +196,6 @@ Per-app commands are listed in each `apps/<app>/ONBOARDING.md`.
 
 All ADRs live in [DECISIONS.md](../DECISIONS.md). Status as of this snapshot:
 
-- **Accepted:** ADR-001 (Turborepo), ADR-002 (Fastify), ADR-003 (SWC), ADR-004 (@nestjs/config + Zod), ADR-005 (URI versioning), ADR-006 (1 MiB body limit), ADR-007 (`api` prefix), ADR-008/009 (Pino / nestjs-pino), ADR-010 (UUIDv4 request IDs), ADR-011 (envelope exclusions), ADR-012 (ioredis without a wrapper), ADR-013 (Redis module architecture), ADR-014 (Swagger/OpenAPI, development-only), ADR-015 (Global HTTP rate limiting with Redis-backed @nestjs/throttler), ADR-016 (Testcontainers for integration and e2e testing), ADR-017 (OTP verification attempt lockout for enrollment security), ADR-018 (HMAC-SHA-256 digest storage for enrollment OTPs), ADR-019 (OTP verification hardening — conditional attempt counting and challenge identity).
+- **Accepted:** ADR-001 (Turborepo), ADR-002 (Fastify), ADR-003 (SWC), ADR-004 (@nestjs/config + Zod), ADR-005 (URI versioning), ADR-006 (1 MiB body limit), ADR-007 (`api` prefix), ADR-008/009 (Pino / nestjs-pino), ADR-010 (UUIDv4 request IDs), ADR-011 (envelope exclusions), ADR-012 (ioredis without a wrapper), ADR-013 (Redis module architecture), ADR-014 (Swagger/OpenAPI, development-only), ADR-015 (Global HTTP rate limiting with Redis-backed @nestjs/throttler), ADR-016 (Testcontainers for integration and e2e testing), ADR-017 (OTP verification attempt lockout for enrollment security), ADR-018 (HMAC-SHA-256 digest storage for enrollment OTPs), ADR-019 (OTP verification hardening — conditional attempt counting and challenge identity), ADR-020 (development Redis service migrated to Redis Stack with bundled Redis Insight).
 
 All architectural decisions are accepted and implemented. Do not build on rejected alternatives (e.g. do not introduce header versioning or a second logger).

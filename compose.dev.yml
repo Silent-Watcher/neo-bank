@@ -27,6 +27,10 @@ services:
       REDIS_URL: redis://redis:6379
       REDIS_USERNAME: default
       REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD is required in .env.docker.dev}
+      # Host-accessible Redis Insight URL (ADR-020), logged at API startup.
+      # Set only here: the API never advertises an address it cannot know
+      # exists, so local non-Docker development and production log nothing.
+      REDIS_INSIGHT_URL: http://localhost:${REDIS_INSIGHT_PORT:-8001}
     volumes:
       # Source bind mount for hot reloading; the named volumes keep the
       # container-installed node_modules from being shadowed by the host's.
@@ -127,23 +131,21 @@ services:
       retries: 10
 
   redis:
-    image: redis:8.2-alpine
+    image: redis/redis-stack:latest
     # Data is intentionally ephemeral: no persistence, no volume, no AOF.
     # Authentication is enabled in every environment so dev matches prod.
-    command:
-      [
-        'redis-server',
-        '--save',
-        '',
-        '--appendonly',
-        'no',
-        '--requirepass',
-        '${REDIS_PASSWORD:?REDIS_PASSWORD is required in .env.docker.dev}',
-      ]
+    # The Stack entrypoint starts redis-server plus the bundled modules and
+    # Redis Insight; server args are passed through REDIS_ARGS (ADR-020).
     environment:
       REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD is required in .env.docker.dev}
+      REDIS_ARGS: >-
+        --save ''
+        --appendonly no
+        --requirepass ${REDIS_PASSWORD:?REDIS_PASSWORD is required in .env.docker.dev}
     ports:
       - '${REDIS_PORT:-6379}:6379'
+      # Redis Insight, bundled in the Stack image (ADR-020): development only.
+      - '${REDIS_INSIGHT_PORT:-8001}:8001'
     healthcheck:
       test: ['CMD-SHELL', 'redis-cli -a "$$REDIS_PASSWORD" ping | grep PONG']
       interval: 5s

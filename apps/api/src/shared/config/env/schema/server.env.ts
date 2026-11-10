@@ -58,6 +58,32 @@ export const serverEnvSchema = z.object({
   // Request body size in bytes. Constrains payload size to bound memory
   // consumption per request and limit the impact of oversized-payload abuse.
   BODY_LIMIT: positiveSafeInteger('BODY_LIMIT').default(1048576),
+  // Host-accessible Redis Insight URL (ADR-020). Optional and set only where
+  // Redis Insight is actually exposed (the development Compose stack): the
+  // startup log prints the URL only when this is configured, so environments
+  // without Insight never advertise an address that does not exist. Blank
+  // values are treated as unset, and credentials in the URL are rejected so
+  // no secret can reach the startup log.
+  REDIS_INSIGHT_URL: z
+    .string()
+    .transform((value) => {
+      const trimmed = value.trim();
+      return trimmed === '' ? undefined : trimmed;
+    })
+    .pipe(
+      z
+        .url({ protocol: /^https?$/, error: 'REDIS_INSIGHT_URL must be a valid http(s) URL.' })
+        .optional(),
+    )
+    .refine(
+      (url) => {
+        if (url === undefined) return true;
+        const parsed = new URL(url);
+        return parsed.username === '' && parsed.password === '';
+      },
+      { error: 'REDIS_INSIGHT_URL must not contain credentials.' },
+    )
+    .optional(),
 });
 
 export type ServerEnv = z.infer<typeof serverEnvSchema>;

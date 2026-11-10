@@ -86,13 +86,24 @@ lives in the named `postgres_dev_data` / `postgres_prod_data` volumes).
 
 ## Ports
 
-| Service    | Container            | Host (interpolation variable)       | Exposed in production          |
-| ---------- | -------------------- | ----------------------------------- | ------------------------------ |
-| API        | 3001                 | `${API_PORT}` (default 3001)        | yes                            |
-| Web        | 3000                 | `${WEB_PORT}` (default 3000)        | yes                            |
-| Admin      | 5173 dev / 8080 prod | `${ADMIN_PORT}` (default 5173/8080) | yes                            |
-| PostgreSQL | 5432                 | `${POSTGRES_PORT}` (default 5432)   | **no** (internal network only) |
-| Redis      | 6379                 | `${REDIS_PORT}` (default 6379)      | **no** (internal network only) |
+| Service       | Container            | Host (interpolation variable)          | Exposed in production          |
+| ------------- | -------------------- | -------------------------------------- | ------------------------------ |
+| API           | 3001                 | `${API_PORT}` (default 3001)           | yes                            |
+| Web           | 3000                 | `${WEB_PORT}` (default 3000)           | yes                            |
+| Admin         | 5173 dev / 8080 prod | `${ADMIN_PORT}` (default 5173/8080)    | yes                            |
+| PostgreSQL    | 5432                 | `${POSTGRES_PORT}` (default 5432)      | **no** (internal network only) |
+| Redis         | 6379                 | `${REDIS_PORT}` (default 6379)         | **no** (internal network only) |
+| Redis Insight | 8001                 | `${REDIS_INSIGHT_PORT}` (default 8001) | **no** (development only)      |
+
+## Redis Insight
+
+The development stack's `redis` service runs `redis/redis-stack:latest`
+(ADR-020), which bundles Redis Insight. When the dev stack is up, Insight is
+at `http://localhost:${REDIS_INSIGHT_PORT}` (default 8001). The API logs the
+URL at startup (`Redis Insight: http://localhost:8001`) because the dev
+Compose stack injects it as `REDIS_INSIGHT_URL`; environments without Insight
+(local non-Docker development, production) never log it. The production stack
+keeps the version-pinned standalone `redis:8.2-alpine` image.
 
 During development, reach PostgreSQL and Redis on `localhost` with the host
 ports above; in production they are reachable only from containers on the

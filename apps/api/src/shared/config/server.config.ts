@@ -12,6 +12,7 @@ const serverConfig = registerAs(SERVER_CONFIG, () => ({
   corsOrigins: _env.CORS_ORIGIN,
   trustProxy: _env.TRUST_PROXY,
   bodyLimit: _env.BODY_LIMIT,
+  redisInsightUrl: _env.REDIS_INSIGHT_URL,
 }));
 
 export default serverConfig;

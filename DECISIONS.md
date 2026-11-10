@@ -898,3 +898,47 @@ The challenge ID is a random identifier, not secret-derived material; comparing 
 - `docs/security-otp-enrollment.md` (threat model, updated alongside)
 
 ---
+
+## ADR-020: Migrate the Development Redis Service to Redis Stack with Bundled Redis Insight
+
+- **Status:** Accepted
+- **Date:** 2026-11-10
+
+### Context
+
+The Docker development stack (`compose.dev.yml`) runs a standalone `redis:8.2-alpine` server. Developing and debugging the enrollment OTP flow, the rate-limiting Lua scripts, and future Redis-backed features requires inspecting live keys, TTLs, and script behavior. Redis Insight is the official GUI for this, but running it as a separately managed Compose service would add another image, port mapping, healthcheck, and connection configuration — extra infrastructure for a developer-only tool.
+
+Redis Stack bundles the Redis server, the Redis Stack modules, and Redis Insight in a single image (`redis/redis-stack`): Redis serves on port 6379 exactly as before, and Redis Insight listens on port 8001 inside the same container. Swapping the image makes Insight available automatically whenever the local stack starts, with no additional service to manage.
+
+### Decision
+
+- **Development stack only:** the `compose.dev.yml` `redis` service uses `redis/redis-stack:latest`. The standalone Redis connectivity contract is preserved unchanged: same service name (`redis`), same internal port (6379), same authentication (`--requirepass` via the image's `REDIS_ARGS`), same ephemeral persistence settings (`--save '' --appendonly no`), same healthcheck mechanism, same networks and dependency wiring.
+- **Redis Insight is exposed only in development** through the host mapping `${REDIS_INSIGHT_PORT:-8001}:8001` and is reachable at `http://localhost:8001`. The production stack (`compose.prod.yml`) keeps the version-pinned standalone `redis:8.2-alpine` image and exposes no Redis ports; production gains nothing from a developer GUI and does not carry an unpinned `latest` image.
+- **The API logs the Redis Insight URL at startup** — `Redis Insight: http://localhost:8001` — through the existing Pino startup logging (`main.ts` / `startup-url.ts`). The URL comes from a new optional `REDIS_INSIGHT_URL` environment variable, set only by the development Compose stack. When the variable is unset (local non-Docker development, production), the line is not logged, so the API never advertises an address it cannot know exists.
+
+### Alternatives Considered
+
+- _Keep the standalone Redis server without Redis Insight:_ no infrastructure change, but developers keep inspecting Redis through raw `redis-cli` commands; rejected as a worse development experience for zero cost saving.
+- _Keep Redis Server and run Redis Insight as a separate Compose service:_ decouples the images and keeps the server minimal, but adds a second container to configure, expose, healthcheck, and wire to the same network — exactly the separately managed service this migration avoids. Rejected.
+- _Use the Redis Stack image with bundled Redis Insight (selected):_ one image, one container, one port mapping; Insight appears automatically with the dev stack. Cost: the image is larger and carries modules the application does not use yet.
+
+### Consequences and Trade-offs
+
+**Positive**
+
+- Redis Insight is available without managing a separate service; it starts with the stack it inspects.
+- Developers discover the Insight URL directly from the API startup log.
+- The dev server gains Redis Stack capabilities (JSON, search, time series, bloom filters) should a future feature need them.
+
+**Negative**
+
+- `redis/redis-stack:latest` is unpinned, diverging from the repo's version-pinned image convention; the trade-off is accepted for the developer tooling image only. Revisit pinning when a Stack version is chosen for production use.
+- The dev container consumes more memory than the standalone server (bundled modules + the Insight web UI).
+- The Insight interface must stay restricted to the local development environment; it must never be exposed in production or on public networks. The production stack's Redis remains isolated on the internal network.
+
+### References
+
+- `compose.dev.yml` (redis service), `.env.docker.example` (REDIS_INSIGHT_PORT), `apps/api/src/shared/http/startup-url.ts` and `apps/api/src/main.ts` (startup logging), `apps/api/src/shared/config/env/schema/server.env.ts` (optional REDIS_INSIGHT_URL)
+- `docs/docker.md` (ports table, Insight access)
+
+---

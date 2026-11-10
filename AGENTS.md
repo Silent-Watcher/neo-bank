@@ -649,6 +649,28 @@ Judge AI findings are not exempt from the ADR-first workflow: any remediation in
 - Delegate validation work such as formatting, linting, running tests, and type checking to a subagent instead of executing those commands yourself.
 - Read the subagent's report and base your conclusions on its results; never claim a check passed without its report confirming it.
 
+### Retry-Loop Prevention
+
+The agent must never get stuck in an endless retry-and-failure loop. Apply
+these rules to all future tasks:
+
+1. Never repeatedly execute the same failed command or operation without identifying a concrete reason why another attempt is likely to succeed.
+2. For an ordinary failure, allow at most two attempts in total. A retry must be justified by a meaningful change or new evidence.
+3. For external dependency failures, network problems, authentication failures, Docker image pull failures, and similar issues outside the agent's direct control, stop after the first unsuccessful attempt.
+4. Never repeatedly retry Docker image pulls, dependency downloads, or other network-dependent operations.
+5. Never silently switch to a different image, version, registry, tool, or implementation as a workaround for a failed external operation.
+6. Once the retry threshold is reached, immediately stop and report:
+   - What failed.
+   - The exact error message.
+   - What was attempted.
+   - Why continuing automatically is not appropriate.
+   - The exact action or command that the user needs to execute.
+7. Wait for the user's intervention before continuing the blocked operation.
+
+Prioritize identifying the cause of failure and communicating it clearly over
+repeatedly attempting the same operation. This is a permanent project-wide
+rule, not a task-specific instruction.
+
 ### Execution Process
 
 1. Inspect the relevant code, configuration, Git status, and existing changes.

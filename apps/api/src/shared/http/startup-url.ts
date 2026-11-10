@@ -49,18 +49,28 @@ export interface StartupUrlSections {
   readonly apiUrls: readonly string[];
   /** `null` when Swagger is not registered (non-development environments). */
   readonly swaggerUrls: readonly string[] | null;
+  /** Host-accessible Redis Insight URL; `null` where none is exposed. */
+  readonly redisInsightUrl: string | null;
 }
 
 // Renders the startup log message. The first address is labeled Local, the
 // rest Network; for an explicitly configured host there is a single "Local"
 // line carrying that exact host.
-export function buildStartupLogMessage({ apiUrls, swaggerUrls }: StartupUrlSections): string {
+export function buildStartupLogMessage({
+  apiUrls,
+  swaggerUrls,
+  redisInsightUrl,
+}: StartupUrlSections): string {
   const lines: string[] = ['Application successfully started', '', 'API:'];
   lines.push(...labeledUrls(apiUrls));
 
   if (swaggerUrls !== null) {
     lines.push('', 'Swagger:');
     lines.push(...labeledUrls(swaggerUrls));
+  }
+
+  if (redisInsightUrl !== null) {
+    lines.push('', `Redis Insight: ${redisInsightUrl}`);
   }
 
   return lines.join('\n');

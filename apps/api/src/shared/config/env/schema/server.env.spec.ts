@@ -396,6 +396,107 @@ describe('serverEnvSchema', () => {
     });
   });
 
+  describe('REDIS_INSIGHT_URL', () => {
+    it('resolves to undefined when the variable is unset', () => {
+      // Arrange
+      const input = { ...validBaseEnv };
+
+      // Act
+      const result = serverEnvSchema.parse(input);
+
+      // Assert
+      expect(result.REDIS_INSIGHT_URL).toBeUndefined();
+    });
+
+    it('resolves to undefined when the variable is empty', () => {
+      // Arrange
+      const input = { ...validBaseEnv, REDIS_INSIGHT_URL: '' };
+
+      // Act
+      const result = serverEnvSchema.parse(input);
+
+      // Assert
+      expect(result.REDIS_INSIGHT_URL).toBeUndefined();
+    });
+
+    it('resolves to undefined when the variable is whitespace-only', () => {
+      // Arrange
+      const input = { ...validBaseEnv, REDIS_INSIGHT_URL: '   ' };
+
+      // Act
+      const result = serverEnvSchema.parse(input);
+
+      // Assert
+      expect(result.REDIS_INSIGHT_URL).toBeUndefined();
+    });
+
+    it('accepts an http URL', () => {
+      // Arrange
+      const input = { ...validBaseEnv, REDIS_INSIGHT_URL: 'http://localhost:8001' };
+
+      // Act
+      const result = serverEnvSchema.parse(input);
+
+      // Assert
+      expect(result.REDIS_INSIGHT_URL).toBe('http://localhost:8001');
+    });
+
+    it('accepts an https URL with a path', () => {
+      // Arrange
+      const input = { ...validBaseEnv, REDIS_INSIGHT_URL: 'https://insight.example.com/insight/' };
+
+      // Act
+      const result = serverEnvSchema.parse(input);
+
+      // Assert
+      expect(result.REDIS_INSIGHT_URL).toBe('https://insight.example.com/insight/');
+    });
+
+    it('trims whitespace around the URL', () => {
+      // Arrange
+      const input = { ...validBaseEnv, REDIS_INSIGHT_URL: '  http://localhost:8001  ' };
+
+      // Act
+      const result = serverEnvSchema.parse(input);
+
+      // Assert
+      expect(result.REDIS_INSIGHT_URL).toBe('http://localhost:8001');
+    });
+
+    it('rejects a non-http(s) protocol', () => {
+      // Arrange
+      const input = { ...validBaseEnv, REDIS_INSIGHT_URL: 'redis://localhost:8001' };
+
+      // Act
+      const result = serverEnvSchema.safeParse(input);
+
+      // Assert
+      expect(result.success).toBe(false);
+    });
+
+    it('rejects a value without a scheme', () => {
+      // Arrange
+      const input = { ...validBaseEnv, REDIS_INSIGHT_URL: 'localhost:8001' };
+
+      // Act
+      const result = serverEnvSchema.safeParse(input);
+
+      // Assert
+      expect(result.success).toBe(false);
+    });
+
+    it('rejects a URL containing credentials', () => {
+      // Arrange
+      const input = { ...validBaseEnv, REDIS_INSIGHT_URL: 'http://admin:secret@localhost:8001' };
+
+      // Act
+      const result = serverEnvSchema.safeParse(input);
+
+      // Assert
+      expect(result.success).toBe(false);
+    });
+  });
+
   describe('isCorsOriginRequiredInProduction', () => {
     it('requires CORS origins in production when they are missing', () => {
       // Arrange

@@ -114,6 +114,7 @@ describe('buildStartupLogMessage', () => {
     const message = buildStartupLogMessage({
       apiUrls: ['http://127.0.0.1:3001/api/v1', 'http://192.168.1.10:3001/api/v1'],
       swaggerUrls: ['http://127.0.0.1:3001/docs', 'http://192.168.1.10:3001/docs'],
+      redisInsightUrl: null,
     });
 
     expect(message).toBe(
@@ -135,6 +136,7 @@ describe('buildStartupLogMessage', () => {
     const message = buildStartupLogMessage({
       apiUrls: ['http://127.0.0.1:3001/api/v1'],
       swaggerUrls: null,
+      redisInsightUrl: null,
     });
 
     expect(message).toBe(
@@ -146,5 +148,25 @@ describe('buildStartupLogMessage', () => {
       ].join('\n'),
     );
     expect(message).not.toContain('Swagger');
+  });
+
+  it('renders the Redis Insight URL when one is exposed', () => {
+    const message = buildStartupLogMessage({
+      apiUrls: ['http://127.0.0.1:3001/api/v1'],
+      swaggerUrls: null,
+      redisInsightUrl: 'http://localhost:8001',
+    });
+
+    expect(message).toContain('Redis Insight: http://localhost:8001');
+  });
+
+  it('omits the Redis Insight line where none is exposed', () => {
+    const message = buildStartupLogMessage({
+      apiUrls: ['http://127.0.0.1:3001/api/v1'],
+      swaggerUrls: null,
+      redisInsightUrl: null,
+    });
+
+    expect(message).not.toContain('Redis Insight');
   });
 });
