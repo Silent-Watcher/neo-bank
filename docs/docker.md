@@ -21,16 +21,21 @@ development Compose stack (`compose.dev.yml`) remains for local development
 | `compose.dev.yml`                      | Development stack (`neo-bank-dev` project)                                                 |
 | `compose.prod.yml`                     | Production stack (`neo-bank-prod` project)                                                 |
 | `.dockerignore`                        | Root build-context ignore                                                                  |
-| `.env.docker.example`                  | Interpolation values for both Compose files                                                |
+| `.env.docker.example`                  | Template for the interpolation files below                                                 |
+| `.env.docker.dev`                      | Interpolation values for `compose.dev.yml` (gitignored)                                    |
+| `.env.docker.prod`                     | Interpolation values for `compose.prod.yml` (gitignored)                                   |
 
 ## Environment Files
 
-Two distinct mechanisms, deliberately kept separate:
+Two distinct mechanisms, deliberately kept separate — and development and
+production use separate interpolation files so credentials never leak across
+environments:
 
-- **Interpolation** — `.env.docker` (copy from `.env.docker.example`) provides
-  values for `${VARIABLE}` placeholders in the Compose files themselves:
-  host ports, PostgreSQL credentials, and the Redis password. Pass it
-  explicitly with `--env-file .env.docker`.
+- **Interpolation** — `.env.docker.dev` (development) and `.env.docker.prod`
+  (production), each copied from `.env.docker.example`, provide values for
+  `${VARIABLE}` placeholders in the Compose files themselves: host ports,
+  PostgreSQL credentials, and the Redis password. Pass them explicitly with
+  `--env-file .env.docker.dev` or `--env-file .env.docker.prod`.
 - **Container configuration** — `env_file:` injects the applications' own env
   files into their containers: `apps/api/env/.env.development` (dev) and
   `apps/api/env/.env.production` (prod, create it from `apps/api/env/.env.example`).
@@ -48,31 +53,32 @@ Run from the repository root.
 **Development (hot reloading):**
 
 ```sh
-cp .env.docker.example .env.docker          # adjust ports/credentials
-docker compose --env-file .env.docker -f compose.dev.yml up --build
+cp .env.docker.example .env.docker.dev      # adjust ports/credentials
+pnpm docker:dev                             # = docker compose --env-file .env.docker.dev -f compose.dev.yml up --build -d
 ```
 
 **Production:**
 
 ```sh
-cp .env.docker.example .env.docker          # set POSTGRES_PASSWORD + REDIS_PASSWORD
+cp .env.docker.example .env.docker.prod     # set POSTGRES_PASSWORD + REDIS_PASSWORD
 cp apps/api/env/.env.example apps/api/env/.env.production
-docker compose --env-file .env.docker -f compose.prod.yml up --build -d
+pnpm docker:prod                            # = docker compose --env-file .env.docker.prod -f compose.prod.yml up --build -d
 ```
 
 **Rebuild after dependency changes:**
 
 ```sh
-docker compose --env-file .env.docker -f compose.dev.yml build
-docker compose --env-file .env.docker -f compose.prod.yml build
+docker compose --env-file .env.docker.dev -f compose.dev.yml build
+docker compose --env-file .env.docker.prod -f compose.prod.yml build
 ```
 
 **Stop / inspect:**
 
 ```sh
-docker compose --env-file .env.docker -f compose.dev.yml down
-docker compose --env-file .env.docker -f compose.prod.yml logs -f api
-docker compose --env-file .env.docker -f compose.prod.yml ps
+pnpm docker:dev:down
+pnpm docker:prod:down
+docker compose --env-file .env.docker.prod -f compose.prod.yml logs -f api
+docker compose --env-file .env.docker.prod -f compose.prod.yml ps
 ```
 
 Add `-v` to `down` to remove the PostgreSQL data volume (development data
@@ -104,7 +110,7 @@ internal network, by service name (`postgres`, `redis`).
   surviving a restart.
 
 In production Redis requires authentication (`--requirepass` with
-`REDIS_PASSWORD` from `.env.docker`, passed to the API through its
+`REDIS_PASSWORD` from its interpolation file, passed to the API through its
 `REDIS_PASSWORD` configuration).
 
 ## Hot Reloading (Development)
@@ -127,3 +133,16 @@ installed into the volumes.
 - The admin runtime is plain nginx (SPA fallback, hashed-asset caching,
   baseline security headers) — no Node.js in that final image.
 - Next.js uses `output: 'standalone'` for a minimal server bundle.
+
+## API Startup URLs
+
+After a successful listen, the API logs its API address
+(`http://<address>:<port>/api/v1`) and — in development only — the Swagger UI
+address (`http://<address>:<port>/docs`) using the Pino logger. The protocol
+is always `http`: the Fastify adapter is created without HTTPS options and no
+reverse proxy fronts the API, so no external URL is invented. For the wildcard
+bind address (`HOST=0.0.0.0`, the default in `apps/api/env/.env.development`
+and the prod Compose override), the log lists `127.0.0.1` plus the
+non-internal interface addresses. Inside a container those interface addresses
+are container-internal; the host-published port (`API_PORT`) is not knowable
+from inside the container and is never claimed.

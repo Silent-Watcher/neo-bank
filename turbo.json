@@ -1,6 +1,12 @@
 {
   "$schema": "./node_modules/turbo/schema.json",
   "ui": "tui",
+  // Strict env mode (the default) passes only declared variables to tasks.
+  // These runtime-only variables must reach tasks without affecting cache
+  // keys: CI/NO_COLOR/FORCE_COLOR adjust tool output, DOCKER_HOST and
+  // DOCKER_CONTEXT drive Testcontainers in the test tasks. No task currently
+  // hashes on a variable's value, so env/globalEnv stay empty by design.
+  "globalPassThroughEnv": ["CI", "NO_COLOR", "FORCE_COLOR", "DOCKER_HOST", "DOCKER_CONTEXT"],
   "tasks": {
     "dev": {
       "cache": false,

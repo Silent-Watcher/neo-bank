@@ -1,0 +1,31 @@
+# 028 — Root Docker Orchestration, Turbo Env Declarations, and API Startup Logging
+
+## Original User Request
+
+Master prompt (condensed): improve the monorepo's developer experience and orchestration. (1) Root `package.json` commands to start the complete development and production Docker Compose stacks (discovering the actual Compose filenames, not assuming them). (2) Turbo environment configuration: distinguish cache-affecting from pass-through variables, declare what tasks actually need, without blindly adding every variable. (3) Review the Docker environment files for completeness, correct Docker networking, dev/prod separation, and secret handling. (4) NestJS API startup logging: log the API address after a successful listen and the Swagger URL when Swagger is enabled, with correct `http`/`https` protocol detection, wildcard-host (`0.0.0.0`) handling showing loopback plus non-internal interface addresses, and no misleading container-port or external-URL claims. Two-stage workflow: investigate and present a proposal, stop for explicit approval, never commit without request.
+
+User approval with one modification: development and production must not share the same interpolation env file — split `.env.docker` into `.env.docker.dev` and `.env.docker.prod`.
+
+## Implementation
+
+- **Root Docker scripts** (`package.json`): `docker:dev` / `docker:dev:down` (compose.dev.yml, `--env-file .env.docker.dev`) and `docker:prod` / `docker:prod:down` (compose.prod.yml, `--env-file .env.docker.prod`). Plain scripts, deliberately not Turbo tasks — Compose is its own orchestrator. The four `docker:*` scripts were removed from `apps/api/package.json` (they lived only there, with `--project-directory ..` workarounds; web/admin never had any).
+- **Env file split** (user's approval condition): `.env.docker.dev` (created from the existing `.env.docker`, preserving the user's values) and `.env.docker.prod` (created from `.env.docker.example`; passwords left empty — production values must be supplied by the deployment environment, never invented). The stale `.env.docker` was left untouched for the user to delete. Compose file headers and `${REDIS_PASSWORD:?…}`/`${POSTGRES_PASSWORD:?…}` error messages updated to name the correct file; `.env.docker.example` documents both targets. `.gitignore` already covers `.env.*`.
+- **Turbo env declarations** (`turbo.json`): `globalPassThroughEnv: ["CI", "NO_COLOR", "FORCE_COLOR", "DOCKER_HOST", "DOCKER_CONTEXT"]`. Verified first: default `envMode` is `strict` (turbo 2.11.10 schema + docs), so undeclared variables are filtered from tasks; Docker/CI/color vars were silently dropped. Pass-through only — no cache-key effect. `env`/`globalEnv` stay empty by design: no task hashes on a variable's value today (apps read env files via `node --env-file`).
+- **Env file review** (Phase 4): variable names verified consistent across `apps/api/env/.env.example`/`.env.development`/`.env.production` (incl. `ENROLLMENTS_OTP_HMAC_SECRET`); `.env.test`/`.env.redis-test` legitimately omit optional-only vars. Compose networking verified correct (service names, `environment:` precedence over `env_file`), prod isolation correct (internal network, no infra host ports, `HOST=0.0.0.0` override). No env file changes required; no secrets printed or added.
+- **Startup logging** (Phase 5): new pure helper `apps/api/src/shared/http/startup-url.ts` — `resolveStartupAddresses` (explicit host verbatim; wildcard `0.0.0.0`/`::` → family-appropriate loopback first (`127.0.0.1`/`::1`) plus deduplicated non-internal interface addresses via injectable `os.networkInterfaces()`), `buildStartupUrl` (brackets IPv6 literals; documented leading-slash path precondition), `buildStartupLogMessage` (API + conditional Swagger sections, Local/Network labels). `main.ts` logs after `await app.listen(port, host)` through the existing Pino `Logger`. Protocol is a commented `http` constant: the adapter is created without HTTPS options and no reverse proxy fronts the API, so no external URL is invented and `X-Forwarded-Proto` is never consulted. `API_GLOBAL_PREFIX`/`API_DEFAULT_VERSION` constants now feed both the `setGlobalPrefix`/`enableVersioning` registrations and the URL composition; the Swagger URL is gated by a single `isSwaggerEnabled` binding shared with the registration, and built from the exported `SWAGGER_DOCS_PATH`. Inside containers the interface addresses are container-internal; the host-published port is never claimed.
+
+## Independent Judge (context-blind, two rounds)
+
+Round 1: five Low findings (no Critical/High/security). Applied: family-appropriate loopback seed; shared prefix/version constants; `isSwaggerEnabled` single source; leading-slash precondition documented. Rejected with justification (accepted by the judge in round 2): a `.catch` handler routing `void bootstrap()` failures through structured logging — pre-existing tail, default unhandled-rejection path already exits non-zero with full detail, and a root Pino logger outside the Nest context is a separate logging-architecture change. Round 2: no actionable issues remain.
+
+## Validation
+
+- `docker compose --env-file .env.docker.dev -f compose.dev.yml config --quiet` — pass. Prod config validated with placeholder `POSTGRES_PASSWORD`/`REDIS_PASSWORD` shell overrides (the empty passwords in `.env.docker.prod` make it fail-fast by design).
+- `pnpm format`, `pnpm lint` (3 workspaces, 0 errors), `pnpm typecheck` (3 workspaces) — pass.
+- `pnpm test` — unit 29 files / 245 tests, e2e 13 files / 65 tests (shared Redis on 6380). A stale-`dist/` compiled-spec-twin artifact inflated one unit run to 58 files / 490 tests; `pnpm clean && pnpm build` (tsconfig.build excludes specs) restored the real count. Redis integration tests not run: no Redis code changed.
+- Docs updated per triggers: root `README.md` (root commands), `docs/docker.md` (split env files, root commands, API startup-URL behavior), `docs/current-state.md` (bootstrap logging, root commands, test counts, verified date), `apps/api/ONBOARDING.md` (Docker section now points at the root scripts).
+
+## Notes
+
+- No commit created (awaiting explicit user approval).
+- The old `.env.docker` file remains on disk (gitignored, user-owned values); safe to delete now that the split files exist.

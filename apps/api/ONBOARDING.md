@@ -236,25 +236,11 @@ pnpm clean                     # remove dist/
 
 ### Docker Compose Commands
 
-Run from the `apps/api` directory (uses `--project-directory ..` to target repo-root Compose files).
-
-**Development (hot reloading, all services with bind mounts):**
-
-```sh
-pnpm docker:dev                # start dev stack (neo-bank-dev project)
-pnpm docker:dev:down           # stop dev stack
-```
-
-**Production (hardened images, internal network, no exposed infrastructure ports):**
-
-```sh
-pnpm docker:prod               # start prod stack (neo-bank-prod project) in background
-pnpm docker:prod:down          # stop prod stack
-```
+Docker Compose is orchestrated from the repository root, not from this workspace — see the root `package.json` (`pnpm docker:dev` / `pnpm docker:dev:down` / `pnpm docker:prod` / `pnpm docker:prod:down`) and `docs/docker.md`.
 
 **Prerequisites:**
 
-- Copy `.env.docker.example` to `.env.docker` at repo root and set `POSTGRES_PASSWORD` and `REDIS_PASSWORD`
+- Copy `.env.docker.example` to `.env.docker.dev` (development) or `.env.docker.prod` (production) at repo root and set `POSTGRES_PASSWORD` and `REDIS_PASSWORD`
 - For production, create `apps/api/env/.env.production` from `apps/api/env/.env.example`
 
 From the repo root, `pnpm test` runs unit + e2e for all workspaces through

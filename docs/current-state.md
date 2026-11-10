@@ -1,6 +1,6 @@
 # Current Development State
 
-Snapshot of what exists in the repository. Last verified: 2026-11-07.
+Snapshot of what exists in the repository. Last verified: 2026-11-10.
 Legend: **Implemented** / **Partial** / **Planned** / **Unknown**.
 
 ## Maturity
@@ -18,7 +18,11 @@ auth, no deployment setup.
 
 - Bootstrap in `src/main.ts`: Fastify adapter with `trustProxy`, `bodyLimit`,
   request-ID generation, global `api` prefix, URI versioning (`/api/v1`),
-  CORS from validated config.
+  CORS from validated config. After a successful listen, the API logs its
+  address (`http://<address>:<port>/api/v1`, loopback plus non-internal
+  interface addresses for the wildcard host) and, in development only, the
+  Swagger UI address — always plain `http`, since no TLS or reverse proxy
+  fronts the API.
 - Configuration system: Zod-validated env (ADR-004), env files in
   `env/` (`.env.development`, `.env.test`, `.env.example`, `.env.redis-test`),
   namespaced `registerAs` factories, fail-fast validation. Validated variables:
@@ -96,8 +100,8 @@ auth, no deployment setup.
   An additional per-phone hourly rate limit (5 sends / rolling 60 min) is
   enforced atomically via Redis sorted set. No registration or authentication
   steps yet.
-- Tests: Vitest unit (26 files / 202 tests), e2e (13 files / 65 tests),
-  Redis integration (4 files / 55 tests via `pnpm test:redis`). All integration
+- Tests: Vitest unit (29 files / 245 tests), e2e (13 files / 65 tests),
+  Redis integration (4 files / 60 tests via `pnpm test:redis`). All integration
   and e2e tests use Testcontainers (`apps/api/test/testcontainers.ts`) to
   start isolated `redis:8.2-alpine` containers per test file with dynamic
   ports — no manual Docker Compose required.
@@ -166,6 +170,8 @@ pnpm format:check
 pnpm typecheck                   # tsc per workspace
 pnpm test                        # unit tests (api only) + e2e via turbo
 pnpm test:e2e                    # api e2e only
+pnpm docker:dev                  # full Docker dev stack in the background
+pnpm docker:prod                 # full Docker production stack in the background
 pnpm clean
 pnpm cm                          # Commitizen (Conventional Commits)
 ```

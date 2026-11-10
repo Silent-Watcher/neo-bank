@@ -35,6 +35,8 @@ pnpm format:check
 pnpm typecheck
 pnpm test
 pnpm test:redis   # API Redis integration tests (requires running Redis)
+pnpm docker:dev   # start the full Docker dev stack in the background
+pnpm docker:prod  # start the full Docker production stack in the background
 pnpm clean
 pnpm cm
 ```

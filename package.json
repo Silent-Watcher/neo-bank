@@ -12,6 +12,10 @@
     "typecheck": "turbo typecheck",
     "test": "turbo test test:e2e",
     "test:e2e": "turbo test:e2e",
+    "docker:dev": "docker compose --env-file .env.docker.dev -f compose.dev.yml up --build -d",
+    "docker:dev:down": "docker compose --env-file .env.docker.dev -f compose.dev.yml down",
+    "docker:prod": "docker compose --env-file .env.docker.prod -f compose.prod.yml up --build -d",
+    "docker:prod:down": "docker compose --env-file .env.docker.prod -f compose.prod.yml down",
     "clean": "turbo clean",
     "cm": "cz",
     "prepare": "husky"

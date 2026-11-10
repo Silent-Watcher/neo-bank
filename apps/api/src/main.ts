@@ -9,7 +9,20 @@ import { AppModule } from './modules/app/app.module.js';
 import serverConfig from './shared/config/server.config.js';
 import { fastifyGenReqId } from './shared/http/request-id.js';
 import { registerRequestIdLifecycle } from './shared/http/request-id.lifecycle.js';
-import { setupSwagger } from './shared/swagger/swagger.setup.js';
+import {
+  buildStartupLogMessage,
+  buildStartupUrl,
+  resolveStartupAddresses,
+} from './shared/http/startup-url.js';
+import { setupSwagger, SWAGGER_DOCS_PATH } from './shared/swagger/swagger.setup.js';
+
+// Single source of truth for the API's externally visible base path: the
+// registrations below compose their values from these constants, and the
+// startup log builds its URLs from them. When a new API version ships, edit
+// the prefix/version constants — everything else follows.
+const API_GLOBAL_PREFIX = 'api';
+const API_DEFAULT_VERSION = '1';
+const API_BASE_PATH = `/${API_GLOBAL_PREFIX}/v${API_DEFAULT_VERSION}`;
 
 async function bootstrap() {
   const { env, host, port, trustProxy, bodyLimit, corsOrigins } = serverConfig();
@@ -44,13 +57,13 @@ async function bootstrap() {
   // versioning, but it does not remove the global prefix, so both routes are
   // explicitly excluded here. This keeps /problems/application-error serving
   // at exactly the URI used as the Problem Type in error responses.
-  app.setGlobalPrefix('api', {
+  app.setGlobalPrefix(API_GLOBAL_PREFIX, {
     exclude: [
       { path: 'health', method: RequestMethod.GET },
       { path: 'problems/application-error', method: RequestMethod.GET },
     ],
   });
-  app.enableVersioning({ type: VersioningType.URI, defaultVersion: '1' });
+  app.enableVersioning({ type: VersioningType.URI, defaultVersion: API_DEFAULT_VERSION });
 
   // Only explicitly configured origins are granted access; when no origins
   // are configured, CORS stays disabled entirely instead of allowing every
@@ -66,12 +79,24 @@ async function bootstrap() {
   // Swagger is a development aid only: it must not appear in e2e route
   // expectations (test) or expose the API surface publicly (production), so
   // the routes are registered exclusively in the development environment.
-  if (env === AppEnv.Development) {
+  // The startup log derives its Swagger section from this same binding, so
+  // the URL is only ever logged when the routes actually exist.
+  const isSwaggerEnabled = env === AppEnv.Development;
+  if (isSwaggerEnabled) {
     setupSwagger(app);
   }
 
   app.enableShutdownHooks();
   await app.listen(port, host);
+
+  // Startup address logging: URLs use the real prefix/version path and the
+  // Swagger URL appears only when Swagger is registered. Inside containers
+  // the interface addresses are container-internal; the host-published port
+  // is not knowable from here and is never claimed.
+  const addresses = resolveStartupAddresses(host);
+  const toUrls = (path: string) => addresses.map((address) => buildStartupUrl(address, port, path));
+  const swaggerUrls = isSwaggerEnabled ? toUrls(`/${SWAGGER_DOCS_PATH}`) : null;
+  app.get(Logger).log(buildStartupLogMessage({ apiUrls: toUrls(API_BASE_PATH), swaggerUrls }));
 }
 
 void bootstrap();
