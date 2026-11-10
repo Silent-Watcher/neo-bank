@@ -1,5 +1,6 @@
 import { ConfigService } from '@nestjs/config';
 import { Test } from '@nestjs/testing';
+import { I18nService } from '@nestjs/i18n';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Unit tests must not depend on ambient environment state, so the env
@@ -80,6 +81,15 @@ describe('EnrollmentsService', () => {
   const configService = {
     getOrThrow: vi.fn(),
   };
+  // Catalog-consistency tests guarantee the real messages; the stub returns
+  // the key's English message so the error details stay assertable here.
+  const i18n = {
+    t: vi.fn((key: string) =>
+      key === 'otp.rateLimited'
+        ? 'Too many OTP requests. Please try again later.'
+        : 'Phone number verification failed.',
+    ),
+  };
   let service: EnrollmentsService;
 
   beforeEach(async () => {
@@ -97,12 +107,14 @@ describe('EnrollmentsService', () => {
       lockoutTtlSeconds: 900,
       otpHmacSecret: TEST_SECRET,
     });
+    i18n.t.mockClear();
 
     const module = await Test.createTestingModule({
       providers: [
         EnrollmentsService,
         { provide: RedisService, useValue: redisService },
         { provide: ConfigService, useValue: configService },
+        { provide: I18nService, useValue: i18n },
       ],
     }).compile();
 
@@ -344,6 +356,41 @@ describe('EnrollmentsService', () => {
       await expect(service.verifyChallenge(TEST_PHONE, '999999')).rejects.toMatchObject({
         code: ErrorCode.OtpVerificationFailed,
       });
+    });
+
+    it('localizes the verification failure detail through the translation catalog', async () => {
+      // Arrange
+      redisService.resolveOtpVerification.mockResolvedValue(false);
+
+      // Act
+      const error: unknown = await service
+        .verifyChallenge(TEST_PHONE, '999999')
+        .catch((caught: unknown) => caught);
+
+      // Assert — the detail is whatever the catalog serves for the request's
+      // locale; the unit asserts the correct key is requested.
+      if (!(error instanceof AppHttpException)) throw new Error('Expected AppHttpException.');
+      expect(error.getResponse()).toMatchObject({
+        detail: 'Phone number verification failed.',
+      });
+      expect(i18n.t).toHaveBeenCalledWith('otp.verificationFailed');
+    });
+
+    it('localizes the OTP rate-limit detail through the translation catalog', async () => {
+      // Arrange
+      redisService.checkOtpRateLimit.mockResolvedValue(false);
+
+      // Act
+      const error: unknown = await service
+        .requestChallenge(TEST_PHONE)
+        .catch((caught: unknown) => caught);
+
+      // Assert
+      if (!(error instanceof AppHttpException)) throw new Error('Expected AppHttpException.');
+      expect(error.getResponse()).toMatchObject({
+        detail: 'Too many OTP requests. Please try again later.',
+      });
+      expect(i18n.t).toHaveBeenCalledWith('otp.rateLimited');
     });
 
     it('propagates Redis failures instead of converting them into verification failures', async () => {

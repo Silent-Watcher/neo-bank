@@ -1,6 +1,7 @@
 import { Global, Injectable, Module } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Test } from '@nestjs/testing';
+import { I18nService } from '@nestjs/i18n';
 import { Redis } from 'ioredis';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -59,8 +60,13 @@ const testRedisConfig = {
 
 @Global()
 @Module({
-  providers: [{ provide: ConfigService, useValue: { getOrThrow: () => testRedisConfig } }],
-  exports: [ConfigService],
+  // I18nService backs the Redis health indicator's localized fallback message
+  // (ADR-021); the stub keeps this spec independent of the catalog loader.
+  providers: [
+    { provide: ConfigService, useValue: { getOrThrow: () => testRedisConfig } },
+    { provide: I18nService, useValue: { t: (key: string) => key } },
+  ],
+  exports: [ConfigService, I18nService],
 })
 class TestConfigModule {}
 

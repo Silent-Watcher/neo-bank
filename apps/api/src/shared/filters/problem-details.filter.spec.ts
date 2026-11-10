@@ -4,6 +4,7 @@ import { HttpStatus } from '@nestjs/common';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { FastifyReply, FastifyRequest } from 'fastify';
+import { I18nService } from '@nestjs/i18n';
 import { PinoLogger } from 'nestjs-pino';
 
 import { AppHttpException } from '#errors/app-http.exception.js';
@@ -11,6 +12,17 @@ import { ErrorCode } from '#errors/error.code.js';
 import { ProblemDetailsFilter } from './problem-details.filter.js';
 
 const REQUEST_ID = '550e8400-e29b-41d4-a716-446655440000';
+
+// The catalog-consistency tests guarantee the real catalogs carry these
+// English messages; the stub keeps this spec independent of the loader.
+const ENGLISH_MESSAGES: Record<string, string> = {
+  'errors.titles.applicationError': 'Application Error',
+  'errors.titles.invalidRequestId': 'Invalid Request Id',
+  'errors.status.notFound': 'Not Found',
+  'errors.status.http': 'HTTP {status}',
+  'errors.details.unexpected': 'An unexpected error occurred.',
+  'errors.details.rateLimited': 'Too many requests. Retry later.',
+};
 
 function createFilterFixture(requestUrl = '/api/v1/hello') {
   const replySend = vi.fn();
@@ -32,9 +44,16 @@ function createFilterFixture(requestUrl = '/api/v1/hello') {
   } as unknown as ArgumentsHost;
 
   const logger = { error: vi.fn(), warn: vi.fn() } as unknown as PinoLogger;
+  const i18n = {
+    t: vi.fn(
+      (key: string, options?: { args?: Record<string, unknown> }) =>
+        ENGLISH_MESSAGES[key]?.replace(/\{(\w+)\}/g, (_, name: string) =>
+          String(options?.args?.[name]),
+        ) ?? key,
+    ),
+  } as unknown as I18nService;
 
-  // return { filter: new ProblemDetailsFilter(logger), reply, replySend, logger };
-  return { filter: new ProblemDetailsFilter(logger), reply, replySend, logger, host };
+  return { filter: new ProblemDetailsFilter(logger, i18n), reply, replySend, logger, host, i18n };
 }
 
 describe('ProblemDetailsFilter', () => {

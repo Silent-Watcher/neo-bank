@@ -91,9 +91,9 @@ repository (not a Turbo task), so formatting is repository-wide.
   package under `packages/` (none exists yet).
 - **API module boundaries:** feature code lives under
   `apps/api/src/modules/<feature>/`; cross-cutting infrastructure (config,
-  logging, Redis, errors, filters, interceptors, pipes, HTTP helpers) lives
-  under `apps/api/src/shared/` and is exposed through Node.js `#` subpath
-  import aliases. See `apps/api/AGENTS.md` for the details.
+  logging, Redis, errors, filters, interceptors, pipes, HTTP helpers, i18n)
+  lives under `apps/api/src/shared/` and is exposed through Node.js `#`
+  subpath import aliases. See `apps/api/AGENTS.md` for the details.
 - **Configuration boundary (API):** `process.env` may be read only once, in
   `apps/api/src/shared/config/env/env.config.ts` (ADR-004, enforced by the
   oxlint `no-process-env` rule with a single override). All other
@@ -105,7 +105,9 @@ repository (not a Turbo task), so formatting is repository-wide.
   response envelope (exclusions in [ADR-011](../DECISIONS.md)); errors use
   RFC 9457 Problem Details carrying the request ID
   ([ADR-010](../DECISIONS.md)). Both are application-global and covered by
-  contract tests.
+  contract tests; their machine-readable members are language-independent,
+  human-readable messages localize through the i18n module
+  ([ADR-021](../DECISIONS.md)).
 
 ## Communication
 

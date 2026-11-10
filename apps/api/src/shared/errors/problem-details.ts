@@ -1,4 +1,5 @@
 import { HttpStatus } from '@nestjs/common';
+import type { I18nKey } from '@nestjs/i18n';
 
 import type { ErrorCode } from './error.code.js';
 import { problemTypeForErrorCode, titleForErrorCode } from './error.code.js';
@@ -39,6 +40,34 @@ const STATUS_TITLES: ReadonlyMap<number, string> = new Map([
 
 function titleForStatus(status: number): string {
   return STATUS_TITLES.get(status) ?? `HTTP ${status}`;
+}
+
+// Catalog keys for the translated status titles (ADR-021); the unknown-status
+// fallback carries the status number as the `{status}` placeholder. The
+// exception filter replaces the English title built above with the message
+// for the request's locale.
+const STATUS_TITLE_KEYS: ReadonlyMap<number, I18nKey> = new Map([
+  [HttpStatus.BAD_REQUEST, 'errors.status.badRequest'],
+  [HttpStatus.UNAUTHORIZED, 'errors.status.unauthorized'],
+  [HttpStatus.FORBIDDEN, 'errors.status.forbidden'],
+  [HttpStatus.NOT_FOUND, 'errors.status.notFound'],
+  [HttpStatus.METHOD_NOT_ALLOWED, 'errors.status.methodNotAllowed'],
+  [HttpStatus.NOT_ACCEPTABLE, 'errors.status.notAcceptable'],
+  [HttpStatus.CONFLICT, 'errors.status.conflict'],
+  [HttpStatus.GONE, 'errors.status.gone'],
+  [HttpStatus.UNSUPPORTED_MEDIA_TYPE, 'errors.status.unsupportedMediaType'],
+  [HttpStatus.UNPROCESSABLE_ENTITY, 'errors.status.unprocessableEntity'],
+  [HttpStatus.TOO_MANY_REQUESTS, 'errors.status.tooManyRequests'],
+  [HttpStatus.INTERNAL_SERVER_ERROR, 'errors.status.internalServerError'],
+  [HttpStatus.BAD_GATEWAY, 'errors.status.badGateway'],
+  [HttpStatus.SERVICE_UNAVAILABLE, 'errors.status.serviceUnavailable'],
+  [HttpStatus.GATEWAY_TIMEOUT, 'errors.status.gatewayTimeout'],
+]);
+
+export const UNKNOWN_STATUS_TITLE_KEY: I18nKey = 'errors.status.http';
+
+export function titleKeyForStatus(status: number): I18nKey {
+  return STATUS_TITLE_KEYS.get(status) ?? UNKNOWN_STATUS_TITLE_KEY;
 }
 
 export function buildProblemDetails(params: {

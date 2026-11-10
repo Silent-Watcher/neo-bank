@@ -2,12 +2,12 @@ import { HttpStatus, Injectable, StreamableFile } from '@nestjs/common';
 import type { CallHandler, ExecutionContext, NestInterceptor } from '@nestjs/common';
 import { HEADERS_METADATA, SSE_METADATA } from '@nestjs/common/constants.js';
 import type { FastifyReply, FastifyRequest } from 'fastify';
+import { I18nService } from '@nestjs/i18n';
 import { map } from 'rxjs';
 import type { Observable } from 'rxjs';
 
 import { resolveApiVersion } from '#http/api-version.js';
 
-const SUCCESS_MESSAGE = 'Success';
 const NO_BODY_STATUSES = new Set<number>([HttpStatus.NO_CONTENT, HttpStatus.NOT_MODIFIED]);
 
 function isJsonContentType(contentType: unknown): boolean {
@@ -41,6 +41,8 @@ function declaredContentType(handler: object): string | undefined {
 // through untouched.
 @Injectable()
 export class ResponseEnvelopeInterceptor implements NestInterceptor {
+  constructor(private readonly i18n: I18nService) {}
+
   intercept(context: ExecutionContext, next: CallHandler): Observable<unknown> {
     const http = context.switchToHttp();
     const request = http.getRequest<FastifyRequest>();
@@ -63,7 +65,9 @@ export class ResponseEnvelopeInterceptor implements NestInterceptor {
           apiVersion: resolveApiVersion(request.url),
           requestId: String(request.id),
           status: reply.statusCode,
-          message: SUCCESS_MESSAGE,
+          // Only the human-readable envelope message is localized; `data`
+          // and every machine-readable member pass through untouched.
+          message: this.i18n.t('common.success'),
           data,
         };
       }),

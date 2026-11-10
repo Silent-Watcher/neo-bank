@@ -260,6 +260,69 @@ Treat this convention as the default project architecture. Inspect existing file
 - Keep all bootstrap-time application configuration — Fastify adapter options such as `trustProxy` and `bodyLimit`, the global API prefix, URI versioning, and CORS — directly inside the `bootstrap` function in `apps/api/src/main.ts`.
 - Do not extract bootstrap configuration into a separate file such as `app.setup.ts`.
 
+## Internationalization and Bilingual Development
+
+The API serves users in exactly two locales — English (`en`, default) and
+Persian (`fa`) — through the official `@nestjs/i18n` module (ADR-021).
+Bilingual delivery is a permanent development standard, not an i18n-task-only
+concern.
+
+### Mandatory bilingual development
+
+Every new user-facing feature must be developed with both supported locales
+from the start. A feature is not complete if it introduces a user-facing
+message in only one language. This applies to:
+
+- API success messages (the response envelope's `message`).
+- API error messages (Problem Details `title`/`detail`).
+- Validation messages (Zod schemas).
+- Custom exceptions.
+- User-facing notifications and any other human-readable response text.
+
+### Automatic localization responsibility
+
+Whenever you introduce or modify a user-facing message, you must, without
+being reminded:
+
+1. Identify or create the translation key.
+2. Add or update the English message in `apps/api/src/i18n/en/`.
+3. Add the equivalent Persian message in `apps/api/src/i18n/fa/` with natural,
+   formal Persian (correct grammar, correct نیم‌فاصله, consistent
+   terminology).
+4. Ensure placeholders match exactly between the locales.
+5. Add or update the relevant tests (including the catalog-consistency tests).
+6. Verify the catalog-consistency test suite passes.
+
+### Translation ambiguity
+
+When a Persian translation is genuinely ambiguous — terminology, tone,
+singular/plural, whether a technical term should stay English — ask the user
+with concrete alternatives and a recommendation before choosing. Never invent
+terminology or grammar silently.
+
+### What is never translated
+
+- JSON property names, Zod paths, and field identifiers.
+- Error codes (`ErrorCode`), HTTP statuses, and Problem Types.
+- Enum identifiers and internal identifiers.
+- Machine-readable API data and technical protocol values.
+- Logs, diagnostics, and operator-facing messages (including environment
+  validation messages).
+- Values that must stay in English digits (OTP values, IDs, technical codes)
+  must never be converted to Persian digits.
+
+### Existing features
+
+When modifying existing code that produces user-facing messages, apply the
+bilingual rule to what you touch. Do not use it as a mandate for an unrelated
+repository-wide localization migration.
+
+### Completion requirement
+
+Before declaring a feature complete, verify that its user-facing messages
+exist in both catalogs and that the catalog-consistency tests and relevant
+locale tests have been updated and pass.
+
 ## Frontend — Next.js and Vite
 
 - Follow the conventions of each framework and its installed version.

@@ -4,6 +4,13 @@
   "sourceRoot": "src",
   "compilerOptions": {
     "builder": "swc",
-    "deleteOutDir": true
+    "deleteOutDir": true,
+    "assets": [
+      {
+        "include": "i18n/**/*.json",
+        "outDir": "dist"
+      }
+    ],
+    "watchAssets": true
   }
 }

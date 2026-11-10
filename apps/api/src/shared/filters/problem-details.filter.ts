@@ -1,17 +1,15 @@
 import { Catch, HttpException, HttpStatus } from '@nestjs/common';
 import type { ArgumentsHost, ExceptionFilter } from '@nestjs/common';
 import type { FastifyReply, FastifyRequest } from 'fastify';
+import { I18nService } from '@nestjs/i18n';
 import { PinoLogger } from 'nestjs-pino';
 import { ThrottlerException } from '@nestjs/throttler';
 
 import { AppHttpException } from '#errors/app-http.exception.js';
-import { ErrorCode, errorCodeForStatus } from '#errors/error.code.js';
-import { buildProblemDetails } from '#errors/problem-details.js';
+import { ErrorCode, errorCodeForStatus, titleKeyForErrorCode } from '#errors/error.code.js';
+import { buildProblemDetails, titleKeyForStatus } from '#errors/problem-details.js';
 import { resolveApiVersion } from '#http/api-version.js';
 import { X_REQUEST_ID_HEADER } from '#http/request-id.js';
-
-const GENERIC_SERVER_ERROR_DETAIL = 'An unexpected error occurred.';
-const RATE_LIMITED_DETAIL = 'Too many requests. Retry later.';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
@@ -51,7 +49,10 @@ interface NormalizedException {
 export class ProblemDetailsFilter implements ExceptionFilter {
   // PinoLogger forwards arguments to Pino verbatim and carries the
   // request-scoped context, so error records keep the current request ID.
-  constructor(private readonly logger: PinoLogger) {}
+  constructor(
+    private readonly logger: PinoLogger,
+    private readonly i18n: I18nService,
+  ) {}
 
   catch(exception: unknown, host: ArgumentsHost): void {
     const http = host.switchToHttp();
@@ -66,6 +67,11 @@ export class ProblemDetailsFilter implements ExceptionFilter {
       requestId: String(request.id),
       apiVersion: resolveApiVersion(request.url),
     });
+    // `detail` is already localized at its throw site (service, pipe); the
+    // title is built in English by buildProblemDetails (also consumed by the
+    // pre-i18n request-id rejection) and localized here for the request's
+    // locale. `code`, `status`, `type` stay machine-readable (ADR-021).
+    problem.title = this.localizedTitle(normalized.code, normalized.status);
 
     reply
       .status(normalized.status)
@@ -80,6 +86,11 @@ export class ProblemDetailsFilter implements ExceptionFilter {
     } else {
       this.logger.warn(`HTTP ${normalized.status} ${normalized.code}`);
     }
+  }
+
+  private localizedTitle(code: ErrorCode, status: number): string {
+    const key = titleKeyForErrorCode(code) ?? titleKeyForStatus(status);
+    return this.i18n.t(key, { args: { status } });
   }
 
   private normalize(exception: unknown): NormalizedException {
@@ -98,7 +109,7 @@ export class ProblemDetailsFilter implements ExceptionFilter {
       return {
         status: HttpStatus.TOO_MANY_REQUESTS,
         code: ErrorCode.RateLimited,
-        detail: RATE_LIMITED_DETAIL,
+        detail: this.i18n.t('errors.details.rateLimited'),
       };
     }
 
@@ -115,7 +126,7 @@ export class ProblemDetailsFilter implements ExceptionFilter {
     return {
       status: HttpStatus.INTERNAL_SERVER_ERROR,
       code: ErrorCode.ApplicationError,
-      detail: GENERIC_SERVER_ERROR_DETAIL,
+      detail: this.i18n.t('errors.details.unexpected'),
       error: exception instanceof Error ? exception : undefined,
     };
   }

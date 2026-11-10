@@ -1,5 +1,6 @@
 import { HealthIndicatorService } from '@nestjs/terminus';
 import { Test } from '@nestjs/testing';
+import { I18nService } from '@nestjs/i18n';
 import { Redis } from 'ioredis';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -30,6 +31,16 @@ async function createIndicator(ping: () => Promise<void>) {
       HealthIndicatorService,
       { provide: RedisService, useValue: { ping } },
       { provide: REDIS_CLIENT, useValue: new Redis({ lazyConnect: true }) },
+      {
+        // Catalog-consistency tests guarantee the real message; the stub
+        // keeps this spec independent of the loader.
+        provide: I18nService,
+        useValue: {
+          t: vi.fn((key: string) =>
+            key === 'health.redisUnavailable' ? 'Redis is unavailable.' : key,
+          ),
+        },
+      },
     ],
   }).compile();
 

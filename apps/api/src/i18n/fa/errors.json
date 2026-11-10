@@ -1,0 +1,31 @@
+{
+  "titles": {
+    "applicationError": "خطای برنامه",
+    "invalidRequestId": "شناسه درخواست نامعتبر",
+    "otpRateLimitExceeded": "تعداد درخواست‌ها بیش از حد مجاز",
+    "otpVerificationFailed": "تأیید ناموفق بود",
+    "rateLimited": "تعداد درخواست‌ها بیش از حد مجاز"
+  },
+  "details": {
+    "unexpected": "خطای غیرمنتظره‌ای رخ داد.",
+    "rateLimited": "تعداد درخواست‌ها بیش از حد مجاز است. بعداً دوباره تلاش کنید."
+  },
+  "status": {
+    "badRequest": "درخواست نامعتبر",
+    "unauthorized": "غیرمجاز",
+    "forbidden": "دسترسی ممنوع",
+    "notFound": "یافت نشد",
+    "methodNotAllowed": "متد مجاز نیست",
+    "notAcceptable": "قابل پذیرش نیست",
+    "conflict": "تداخل",
+    "gone": "دیگر در دسترس نیست",
+    "unsupportedMediaType": "نوع محتوا پشتیبانی نمی‌شود",
+    "unprocessableEntity": "محتوا قابل پردازش نیست",
+    "tooManyRequests": "تعداد درخواست‌ها بیش از حد مجاز",
+    "internalServerError": "خطای داخلی سرور",
+    "badGateway": "خطای درگاه",
+    "serviceUnavailable": "سرویس در دسترس نیست",
+    "gatewayTimeout": "اتمام مهلت درگاه",
+    "http": "خطای HTTP {status}"
+  }
+}

@@ -39,7 +39,9 @@ neutral `/health` probe on Fastify, port 3001 in development/test.
   `interceptors/response-envelope.interceptor.ts` (success envelope),
   `pipes/zod-validation.pipe.ts`, `http/` (request IDs, API version),
   `throttler/` (global HTTP rate limiting: `@nestjs/throttler` + Redis
-  storage, named policies, `RedisThrottlerGuard`).
+  storage, named policies, `RedisThrottlerGuard`), `i18n/` (global i18n
+  registration: locale resolution, catalogs, missing-key policy — see
+  "Internationalization" below).
 - **Infrastructure provider tokens:** use `Symbol` tokens for infrastructure
   providers (e.g. `REDIS_CLIENT`), keep them defined inside the owning
   module's directory, and expose them to consumers only through the owning
@@ -59,6 +61,52 @@ neutral `/health` probe on Fastify, port 3001 in development/test.
   `/docs/json`. Request schemas come from Zod via `toJsonSchemaObject`;
   shared response schemas (envelope, Problem Details) live in
   `src/shared/swagger/openapi.schemas.ts`.
+
+## Internationalization
+
+The API is bilingual: `en` (default) and `fa`, via the official
+`@nestjs/i18n` (ADR-021). The repository-wide bilingual development rule lives
+in the root `AGENTS.md`; this section covers the API-specific mechanics.
+
+- **Registration:** `src/shared/i18n/i18n.module.ts` (`I18nModule.forRootAsync`)
+  owns `defaultLocale: 'en'`, `supportedLocales: ['en', 'fa']`, the
+  `AcceptLanguageLocaleResolver` (the only active resolver — the in-file
+  comment block documents how to add more), the missing-key policy
+  (`throw` in development/test, `fallback` in production), and catalog
+  loading/watching.
+- **Catalogs:** `src/i18n/{en,fa}/<namespace>.json`. Namespaces so far:
+  `common`, `errors`, `health`, `otp`, `validation`. The English catalog is
+  the key source of truth; `src/i18n/i18n.types.ts` registers its shape with
+  `I18nTypes`, making translation keys compile-time checked. Persian messages
+  use formal, natural Persian with correct نیم‌فاصله; genuinely ambiguous
+  wording goes to the user before being chosen.
+- **Producing localized messages:**
+  - Services/exceptions: inject `I18nService` and throw
+    `AppHttpException(code, i18n.t('<key>', { args }), status)` — `code` and
+    status never localize.
+  - Zod schemas: attach catalog keys with `i18nIssueMessage('<key>')`;
+    unkeyed issues fall back to `validation.<zod issue code>` catalog keys.
+    `ZodValidationPipe` translates issues for the request's locale before
+    formatting.
+  - Error titles: `titleKeyForErrorCode`/`titleKeyForStatus` map to
+    `errors.*` catalog keys; the Problem Details filter translates the title
+    at response time. The pre-i18n Fastify request-ID rejection stays English
+    by design.
+  - Envelope: only `message` is localized (`common.success`); response data
+    is never translated.
+- **Non-negotiables:** never translate JSON property names, Zod paths, error
+  codes, identifiers, logs, or machine-readable values; OTP values, IDs, and
+  technical codes stay English digits. `Content-Language`/`Vary` headers are
+  set by the i18n middleware (`responseHeaders: true`) and must not be
+  overwritten.
+- **Catalog delivery:** `nest-cli.json` copies `i18n/**/*.json` into `dist`
+  (assets + `watchAssets`); production reads them from `dist/i18n`. Adding a
+  locale means a new catalog directory plus a `supportedLocales` entry —
+  never a wider glob.
+- **Tests:** `src/i18n/i18n.catalog.spec.ts` enforces key/placeholder/plural
+  parity between locales; `test/i18n.e2e-spec.ts` covers resolution,
+  headers, localization, isolation, and health regression. Extend both when
+  touching messages.
 
 ## Mandatory API Documentation Rule
 
