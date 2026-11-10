@@ -1,0 +1,4 @@
+# Omit HTML from GitHub's language detection (linguist).
+# HTML here is app-entry boilerplate (e.g. apps/admin/index.html) or generated
+# build output, not part of the project's actual language mix.
+*.html linguist-generated
