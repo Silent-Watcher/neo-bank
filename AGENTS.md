@@ -383,6 +383,60 @@ locale tests have been updated and pass.
 - Include the feature's prompt record in its commit.
 - Do not amend, reset, or rewrite existing commits unless explicitly authorized.
 
+## Multi-Agent Development Workflow
+
+This repository ships a project-level multi-agent system (ADR-023) that works
+with ZCode and Claude Code. The canonical subagent definitions live in
+`.agents/definitions/` and are the single source of truth; platform files are
+generated from them by `node scripts/agents/sync.mjs` (`--check` verifies
+drift). Never edit generated files directly. Full workflow, setup, and
+extension rules: `.agents/README.md` and
+`.agents/workflows/development-workflow.md`; report templates in
+`.agents/schemas/`.
+
+Available subagents:
+
+- `project-explorer` — read-only; establishes session context and produces a
+  Project Context Report (structure in `.agents/schemas/`).
+- `code-reviewer` — read-only independent judge for implementation quality;
+  statuses `APPROVED` / `APPROVED_WITH_SUGGESTIONS` / `CHANGES_REQUIRED`.
+- `code-security-analyzer` — read-only independent security judge; statuses
+  `SECURITY_APPROVED` / `SECURITY_APPROVED_WITH_INFORMATIONAL_FINDINGS` /
+  `SECURITY_CHANGES_REQUIRED`.
+- `documentation-writer` — documentation-only writes (enforced by hook where
+  the platform supports it, otherwise returns ready-to-apply patches).
+
+Orchestration rules for the primary agent:
+
+- **Session initialization:** invoke `project-explorer` at the beginning of
+  every new development session, before substantive task analysis or
+  implementation. The SessionStart hook injects this instruction; this
+  explicit rule remains as the fallback and as the binding requirement.
+- **Review gates:** after implementation, run `code-reviewer`; only after it
+  passes, run `code-security-analyzer`. The two must never receive each
+  other's reports. The Mandatory Context-Blind AI Code Judgement section
+  below remains in force; `code-reviewer` fulfills that role when the
+  multi-agent workflow is used, and the findings tracker
+  (`docs/judge-findings.md`) applies to its findings the same way.
+- **Parallel phase:** invoke `documentation-writer` in parallel with the
+  testing stage; only the primary agent runs tests and only the primary
+  agent supplies verified test results to it.
+- **Context delivery:** never paste whole files or the whole repository into
+  a subagent dispatch. Provide task summary, implementation summary, changed
+  file paths (including untracked files), the relevant git diff, review
+  scope, and — for re-reviews — that same reviewer's own previous findings
+  with their status and a fix summary. Subagents have read access to inspect
+  surrounding code themselves. Redact secrets from all shared context.
+- **Iteration control:** maximum 3 fix/re-review iterations per review
+  phase; preserve finding IDs; track `OPEN`/`FIXED`/`DISPUTED`; never
+  downgrade a finding to obtain approval; escalate unresolved disagreements
+  to the developer.
+- **Platform setup:** Claude Code works from a fresh clone (project-level
+  agents and hooks). ZCode requires a one-time manual plugin install from
+  the local marketplace `.agents/plugins/` — see `.agents/README.md`. If
+  neither platform's delegation is available, perform the roles yourself in
+  sequence and say so explicitly in the final report.
+
 ## Agent Workflow
 
 ### Feature Records

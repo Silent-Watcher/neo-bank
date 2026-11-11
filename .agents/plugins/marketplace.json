@@ -1,0 +1,14 @@
+{
+  "name": "neo-bank-agents",
+  "description": "Project multi-agent development workflow: project-explorer, code-reviewer, code-security-analyzer and documentation-writer subagents, with session-start and documentation-write-guard hooks.",
+  "plugins": [
+    {
+      "name": "monorepo-workflow",
+      "source": "./monorepo-workflow",
+      "version": "0.1.0",
+      "description": "Project multi-agent development workflow: project-explorer, code-reviewer, code-security-analyzer and documentation-writer subagents, with session-start and documentation-write-guard hooks.",
+      "displayName": "Neo Bank Monorepo Workflow",
+      "category": "developer-tools"
+    }
+  ]
+}

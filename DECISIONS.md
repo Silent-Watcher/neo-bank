@@ -1053,3 +1053,60 @@ Introduce an independently managed **monitoring Compose stack** (`compose.monito
 - `compose.dev.yml` (`LOG_PRETTY`, log rotation anchors), `compose.prod.yml` (log rotation), `apps/api/src/shared/config/env/schema/log.env.ts`, `apps/api/src/shared/config/log.config.ts`
 - `docs/observability/README.md` (operations), `docs/observability/manual-testing.md` (verification scenarios), `docs/observability/learning-guide.fa.md` (Persian learning guide), `docs/docker.md` (ports, rotation)
 - Official documentation: https://grafana.com/docs/loki/latest/ · https://grafana.com/docs/alloy/latest/ · https://grafana.com/docs/grafana/latest/
+
+---
+
+---
+
+## ADR-023: Project-Level Multi-Agent Development Workflow (ZCode + Claude Code)
+
+- **Status:** Accepted
+- **Date:** 2026-11-11
+
+### Context
+
+Development sessions currently rely on a single agent performing exploration, code review, security analysis, and documentation serially. The repository's mandatory context-blind judge requirement (root `AGENTS.md`) is handled ad hoc per task, with no version-controlled review workflow. The project needs a repeatable, project-level multi-agent system that works natively with both ZCode (3.17.2) and Claude Code (2.1.316), enforces tool restrictions through platform mechanisms rather than prompt instructions alone, keeps agent behavior identical across platforms, and is fully version-controlled — while remaining extensible to future agent platforms and introducing no new dependencies or application-code changes.
+
+Verified platform facts driving the decision: ZCode supports subagents only through plugins (no workspace-scope custom subagents); its plugin manifest is `.zcode-plugin/plugin.json` with `.claude-plugin/plugin.json` recognized as a compatibility fallback; plugins are installed manually per developer from a local marketplace directory and are never auto-enabled from a repository clone. Claude Code discovers project-level subagents natively from `.claude/agents/*.md` (same markdown + YAML frontmatter format) and supports project-level hooks in `.claude/settings.json`; both platforms support SessionStart hooks that inject `additionalContext` into the conversation, and neither a hook nor any native mechanism is guaranteed to expose subagent identity to `PreToolUse` hooks.
+
+### Decision
+
+Adopt a **platform-neutral canonical agent-definition layer** as the single source of truth, synchronized by a dependency-free Node script into native platform artifacts:
+
+- **Canonical definitions** (`.agents/definitions/`): four subagents — `project-explorer`, `code-reviewer`, `code-security-analyzer`, `documentation-writer` — each with YAML frontmatter (identity, description, tool allowlist) and a structured body (responsibilities, input expectations, output contract, restrictions, review criteria). Reviewer independence and change-based context-delivery rules are embedded in the definitions so both platforms inherit them identically.
+- **Synchronization** (`scripts/agents/sync.mjs`): reads canonical definitions and generates (a) ZCode plugin agents under `.agents/plugins/monorepo-workflow/agents/` and (b) Claude Code project agents under `.claude/agents/`, applying per-platform frontmatter adaptations (ZCode `thoughtLevel`/`color`; `model` omitted on both so each platform uses its session model). Generated files are committed to Git; `sync.mjs --check` is a non-mutating drift check. No new dependency is introduced.
+- **ZCode integration**: a local plugin `.agents/plugins/monorepo-workflow/` with manifest `.claude-plugin/plugin.json` — the one manifest path both platforms recognize — plus both marketplace manifest locations (`.agents/plugins/marketplace.json` for ZCode, `.agents/plugins/.claude-plugin/marketplace.json` for Claude Code). Installation is a documented one-time manual step per developer (add marketplace directory in Settings → Plugin Management, install, enable).
+- **Claude Code integration**: native project-level `.claude/agents/` (works from a fresh clone with zero install) and `.claude/settings.json` hooks.
+- **Session initialization**: SessionStart hooks on both platforms (ZCode plugin `hooks/hooks.json`, Claude Code `.claude/settings.json`) run `session-start.mjs`, which emits `additionalContext` instructing the primary agent to invoke `project-explorer` before substantive work. A hook injects instruction only; the primary agent performs the actual delegation. The explicit root `AGENTS.md` instruction remains as documented fallback.
+- **Permission enforcement (native, not prompt-only)**: `project-explorer`, `code-reviewer`, and `code-security-analyzer` are strictly read-only via native tool allowlists (`Read`, `Grep`, `Glob`); no subagent receives `Bash`, so no subagent can execute tests. Documentation-writer write enforcement is verification-driven: if runtime verification confirms hook-input subagent identity, a `PreToolUse` path-guard hook enforces documentation-only writes; otherwise both platforms use the sanctioned fallback — a read-only Documentation Writer producing ready-to-apply patches that the primary agent applies. The verified outcome is recorded in the feature record.
+- **Workflow codification**: the mandatory development workflow (session init → implementation → code review → security review → parallel documentation/testing → reconciliation → final validation → completion) and review-loop controls (max 3 fix/re-review iterations per phase, finding-ID persistence, `OPEN`/`FIXED`/`DISPUTED` tracking, escalation to the developer) are codified in `.agents/workflows/development-workflow.md`; report contracts (Project Context, Code Review, Security Review, Documentation Change) live in `.agents/schemas/`. Root `AGENTS.md` carries a concise multi-agent section referencing the canonical definitions; root `CLAUDE.md` imports it via `@AGENTS.md`.
+
+### Alternatives Considered
+
+- _User-level ZCode subagents_ (`~/.zcode/agents/`): not project-distributable, contradicts the version-control requirement. Rejected.
+- _Two independently maintained prompt sets per platform_: guarantees drift and violates the single-source-of-truth requirement. Rejected in favor of generated adapters.
+- _Workspace `.zcode/config.json` hooks for SessionStart instead of a plugin_: configuration-file hooks require per-developer `hooks.enabled: true` and the configuration cannot carry the plugin agents; plugin hooks auto-enable the hook runner. Rejected for the primary mechanism.
+- _An agent-orchestration framework dependency_: YAGNI — both platforms provide native delegation; a framework adds supply-chain surface without concrete value. Rejected.
+- _Granting Documentation Writer unconditional write access_: violates the enforcement requirement; the verification-driven guard-or-fallback approach preserves safety at the cost of one verification step. Chosen.
+
+### Consequences and Trade-offs
+
+**Positive**
+
+- Identical agent behavior, review criteria, and report contracts across platforms from one canonical source.
+- Generated files are committed: Claude Code works from a fresh clone with zero setup; ZCode needs one documented manual install.
+- Reviewer independence and read-only restriction are enforced by platform tool allowlists, not prompts; no subagent can execute commands or tests.
+- Change-based context delivery (git diffs + targeted file lists) bounds token consumption; parallel documentation/testing shortens cycles.
+
+**Negative**
+
+- ZCode requires a one-time manual plugin install/enable per developer; the in-repo plugin is silently inert until then.
+- Generated agent files exist twice in Git (plugin + `.claude/`); drift is mitigated by `sync.mjs --check` but is a real duplication.
+- SessionStart hooks inject instructions only — delegation itself is enforced by instruction and convention, not by the platform.
+- Documentation-writer write enforcement may degrade to the patch-producer fallback if hook identity verification fails, making doc updates slightly more indirect.
+- Two marketplace manifest files are maintained for two platforms; contained by the sync script but an accepted duplication.
+
+### References
+
+- `.agents/definitions/` (canonical subagent definitions), `.agents/workflows/development-workflow.md`, `.agents/schemas/`, `.agents/plugins/` (ZCode plugin + marketplaces), `scripts/agents/sync.mjs`, `.claude/agents/`, `.claude/settings.json`, root `AGENTS.md`, root `CLAUDE.md`
+- Verified platform documentation: ZCode configuration-guide and plugin-creator skills (installed client 3.17.2), Claude Code 2.1.316 CLI (`claude plugin validate`, project agents, hooks)

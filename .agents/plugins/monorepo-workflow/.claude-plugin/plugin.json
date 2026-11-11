@@ -1,0 +1,15 @@
+{
+  "name": "monorepo-workflow",
+  "version": "0.1.0",
+  "description": "Project multi-agent development workflow: project-explorer, code-reviewer, code-security-analyzer and documentation-writer subagents, with session-start and documentation-write-guard hooks.",
+  "author": {
+    "name": "neo-bank"
+  },
+  "agents": [
+    "./agents/code-reviewer.md",
+    "./agents/code-security-analyzer.md",
+    "./agents/documentation-writer.md",
+    "./agents/project-explorer.md"
+  ],
+  "hooks": "./hooks/hooks.json"
+}

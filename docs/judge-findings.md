@@ -480,3 +480,271 @@ and the user can veto any of them before commit.
 - **Judge recommendation:** drop the `$` (or anchor consistently and explicitly everywhere).
 - **Investigation results:** valid; dropped in the two existing rules and not introduced in the new rules from F1/F5.
 - **Agreed resolution:** applied.
+
+---
+
+## Wave 4 — ADR-023 multi-agent tooling review (2026-11-11)
+
+- **Wave 4** — 2026-11-11 — context-blind judge review of the ADR-023
+  implementation tooling: `scripts/agents/sync.mjs`,
+  `.agents/plugins/monorepo-workflow/hooks/session-start.mjs`,
+  `.agents/plugins/monorepo-workflow/hooks/guard-documentation-write.mjs`.
+  0 Critical, 0 High, 2 Medium, 15 Low. No user approval was required for the
+  remediations below: all are minor implementation hardening inside the
+  accepted ADR-023 design; none changes behavior for the primary agent or
+  adds/removes a review gate.
+
+### W4-F1 — Guard covers only Write/Edit; other write-capable tools pass through
+
+- **Status:** Resolved (2026-11-11 — applied)
+- **Severity:** Medium
+- **Category:** Security
+- **Locations:** `.agents/plugins/monorepo-workflow/hooks/guard-documentation-write.mjs` (`GUARDED_TOOLS`, `decidePreToolUse`)
+- **Technical explanation:** enforcement keyed to exactly two tool names lets any other write-capable tool the platform may expose (e.g. `MultiEdit`, `NotebookEdit`) reach the pass-through branch for the guarded agent.
+- **Failure scenario:** `documentation-writer` calls `NotebookEdit` against `apps/api/src/…`; the hook passes through, source is modified while the session believes the policy is enforced.
+- **Judge recommendation:** enumerate the platforms' write-capable tools, or deny unrecognized tools for the guarded agent.
+- **Investigation results:** the subagent's native tool allowlist (`Write, Edit` only) is the first enforcement layer, so the gap requires the platform to inject extra tools beyond the frontmatter — undocumented behavior. Denying unknown tools risks blocking legitimate tools with no benefit. Adding the known write-capable tools (`MultiEdit`, `NotebookEdit`) to the guard closes the gap with zero behavioral risk; `notebook_path` added as a target path source (fail-closed when absent). Covered set documented in the script header.
+- **Agreed resolution:** applied — `GUARDED_TOOLS = {Write, Edit, MultiEdit, NotebookEdit}`; self-test extended.
+
+### W4-F2 — Lexical-only allow check; symlinks inside docs/ escape the boundary
+
+- **Status:** Resolved (2026-11-11 — applied)
+- **Severity:** Medium
+- **Category:** Security
+- **Locations:** `.agents/plugins/monorepo-workflow/hooks/guard-documentation-write.mjs` (`isDocumentationPath`, `decidePreToolUse`)
+- **Technical explanation:** the allow check inspects the path string only; a symlink planted inside `docs/`/`prompts/` pointing outside the repo passes the prefix check and the write lands at the target. Planting requires an unguarded channel (the guarded agent has no Bash and cannot create symlinks via Write), so this compounds W4-F1 rather than standing alone.
+- **Failure scenario:** symlink `docs/escape-link.md → /etc/…` exists; `Write docs/escape-link.md` writes outside the repository while the hook decision says "allowed, inside docs".
+- **Judge recommendation:** realpath the target (resolving the nearest existing ancestor) and re-verify containment.
+- **Investigation results:** valid as defense-in-depth and cheap (~15 lines, only paid for guarded-agent writes).
+- **Agreed resolution:** applied — `resolveRealPath` (nearest-existing-ancestor realpath) before containment check; verified live with a symlink planted in `docs/` → decision `deny`.
+
+### W4-F3 — Substring agent matching looser than identity matching
+
+- **Status:** Resolved (2026-11-11 — applied)
+- **Severity:** Low
+- **Category:** Correctness
+- **Locations:** `.agents/plugins/monorepo-workflow/hooks/guard-documentation-write.mjs` (`isGuardedAgent`)
+- **Technical explanation:** `agentType.includes('documentation-writer')` also captures hypothetical agents whose id merely contains the phrase.
+- **Failure scenario:** a future `documentation-writer-reviewer` agent is denied every non-documentation write and the denial looks like an unrelated platform error.
+- **Judge recommendation:** normalize to the id's last segment and compare for equality.
+- **Investigation results:** verified from platform evidence that plugin subagent ids are `plugin:agent` (ZCode wraps as `zcode-<agentType>`, Claude Code uses the bare name); last-segment equality covers both verified forms.
+- **Agreed resolution:** applied — last-segment equality (split on `:` / `/`); self-test extended with the lookalike agent.
+
+### W4-F4 — Silent fail-open on unparseable payload leaves the guard undetectably disabled
+
+- **Status:** Resolved (2026-11-11 — applied)
+- **Severity:** Low
+- **Category:** Edge Case
+- **Locations:** `.agents/plugins/monorepo-workflow/hooks/guard-documentation-write.mjs` (`main`)
+- **Technical explanation:** malformed JSON collapses into the same silent pass-through as a legitimate non-match; nothing distinguishes "not a match" from "could not parse".
+- **Failure scenario:** a platform update changes payload serialization; every decision becomes pass-through and the policy silently stops being enforced.
+- **Judge recommendation:** write a diagnostic to stderr (never stdout, which is schema-parsed).
+- **Investigation results:** valid; fail-open itself is correct (the agent cannot forge its payload, so this is not a bypass vector) but needs observability.
+- **Agreed resolution:** applied — stderr diagnostic on the parse-failure path only.
+
+### W4-F5 — Module has import-time side effects alongside exported functions
+
+- **Status:** Resolved (2026-11-11 — applied)
+- **Severity:** Low
+- **Category:** Syntax / Code Quality
+- **Locations:** `.agents/plugins/monorepo-workflow/hooks/guard-documentation-write.mjs`, `session-start.mjs` (top-level execution blocks)
+- **Technical explanation:** importing the module to reuse `decidePreToolUse`/`denyOutput` would execute the hook branch (blocking stdin read or stdout emission).
+- **Failure scenario:** a future test file importing the exported functions hangs or pollutes stdout.
+- **Judge recommendation:** gate execution on main-module detection.
+- **Investigation results:** valid; `pathToFileURL(path.resolve(argv[1]))` comparison applied to both hook scripts (the robust form, argv[1] may be relative). Enabled the live symlink verification to import the module cleanly.
+- **Agreed resolution:** applied.
+
+### W4-F6 — Self-test assertion total hardcoded; cases not normalized through helpers
+
+- **Status:** Resolved (2026-11-11 — applied)
+- **Severity:** Low
+- **Category:** Syntax / Code Quality
+- **Locations:** `.agents/plugins/monorepo-workflow/hooks/guard-documentation-write.mjs` (`runSelfTests`)
+- **Technical explanation:** printed total assumed a fixed number of assertions outside the case table; mixed inline case construction.
+- **Failure scenario:** adding one shape assertion makes the reported count lie while the test still passes.
+- **Judge recommendation:** count assertions dynamically; normalize cases through helpers.
+- **Investigation results:** valid, cosmetic but cheap.
+- **Agreed resolution:** applied — counter-based `check()` helper; `write()`/`edit()` helpers; total reported from the counter (29 assertions pass).
+
+### W4-F7 — Tool items rendered into YAML without character validation
+
+- **Status:** Resolved (2026-11-11 — applied)
+- **Severity:** Low
+- **Category:** Correctness
+- **Locations:** `scripts/agents/sync.mjs` (`renderZcodeAgent`, `renderClaudeAgent`, `validateDefinition`)
+- **Technical explanation:** tools items are joined raw into a YAML flow sequence and a comma-separated scalar; special characters could produce frontmatter the target parsers reject or truncate.
+- **Failure scenario:** a definition with `- tool[x,y]` generates an agent file that fails to load, surfacing far from the edit.
+- **Judge recommendation:** require each item to match `/^[A-Za-z0-9_-]+$/`.
+- **Investigation results:** valid and consistent with real tool identifiers.
+- **Agreed resolution:** applied in `validateDefinition`.
+
+### W4-F8 — Duplicate frontmatter keys silently last-win
+
+- **Status:** Resolved (2026-11-11 — applied)
+- **Severity:** Low
+- **Category:** Correctness
+- **Locations:** `scripts/agents/sync.mjs` (`parseFrontmatter`)
+- **Technical explanation:** a repeated key overwrites silently, so the generator's view and the platform YAML parser's view can diverge.
+- **Failure scenario:** `description:` authored twice; the second value wins and `--check` still passes.
+- **Judge recommendation:** throw on redefined keys.
+- **Investigation results:** valid; fail-loud is the generator's contract.
+- **Agreed resolution:** applied.
+
+### W4-F9 — BOM or leading whitespace yields a misleading "missing frontmatter" error
+
+- **Status:** Resolved (2026-11-11 — applied)
+- **Severity:** Low
+- **Category:** Edge Case
+- **Locations:** `scripts/agents/sync.mjs` (`parseFrontmatter`)
+- **Technical explanation:** a UTF-8 BOM before `---` defeats the anchored regex and the error claims the block is missing.
+- **Failure scenario:** editor-saved BOM file fails sync with a wrong-direction error.
+- **Judge recommendation:** strip the leading BOM before matching.
+- **Investigation results:** valid, one line.
+- **Agreed resolution:** applied.
+
+### W4-F10 — A directory named `*.md` in the definitions dir produces a raw EISDIR error
+
+- **Status:** Resolved (2026-11-11 — applied)
+- **Severity:** Low
+- **Category:** Edge Case
+- **Locations:** `scripts/agents/sync.mjs` (`listDefinitions`, `loadDefinitions`)
+- **Technical explanation:** `readdir` returns directories too; a `.md`-suffixed directory reaches `readFile` and dumps a stack trace.
+- **Failure scenario:** `mkdir .agents/definitions/tmp.md` breaks every sync run with an unactionable error.
+- **Judge recommendation:** `withFileTypes` filtering or a `SyncError` naming the entry.
+- **Investigation results:** valid; files-only filter plus a `skipped` stderr line for visibility.
+- **Agreed resolution:** applied.
+
+### W4-F11 — Write mode does not converge: orphaned generated files are never removed
+
+- **Status:** Resolved (2026-11-11 — applied)
+- **Severity:** Low
+- **Category:** Edge Case
+- **Locations:** `scripts/agents/sync.mjs` (write branch, `runCheck` unexpected-file scan)
+- **Technical explanation:** after a rename/delete of a definition, the stale generated agent remains and platforms keep loading it; write mode exits 1 with no cleanup.
+- **Failure scenario:** renaming `code-reviewer.md` leaves a dead `code-reviewer` agent discoverable alongside the new one.
+- **Judge recommendation:** delete known orphans or print explicit remediation.
+- **Investigation results:** the generated `*.md` files in the two agent directories are unambiguously the script's own output ("never edit generated files"); deleting orphans there is within the generator's remit and keeps platforms from loading dead agents. Scope is limited to exactly those two directories, `*.md`, non-expected names.
+- **Agreed resolution:** applied — write mode removes orphaned generated `*.md` agents and reports each removal; verified live with a planted orphan.
+
+### W4-F12 — Unknown CLI arguments silently ignored (typo can select mutating mode)
+
+- **Status:** Resolved (2026-11-11 — applied)
+- **Severity:** Low
+- **Category:** Edge Case
+- **Locations:** `scripts/agents/sync.mjs` (`main`)
+- **Technical explanation:** any argument other than `--check` is ignored, so `--chekc` silently performs a full write in a CI drift check.
+- **Failure scenario:** a typoed CI step masks drift with exit code 0.
+- **Judge recommendation:** reject unrecognized flags with a usage error.
+- **Investigation results:** valid.
+- **Agreed resolution:** applied — usage error, exit 1.
+
+### W4-F13 — `unquote` preserves escape sequences, which are then double-escaped into output
+
+- **Status:** Resolved (2026-11-11 — applied)
+- **Severity:** Low
+- **Category:** Syntax / Code Quality
+- **Locations:** `scripts/agents/sync.mjs` (`unquote` → `yamlScalar`, `validateDefinition`)
+- **Technical explanation:** quoted values keep literal backslash sequences; `JSON.stringify` then double-escapes them into the generated YAML, silently losing author intent.
+- **Failure scenario:** a description authored with an intended newline renders as a literal `\n` with no error anywhere.
+- **Judge recommendation:** document the plain-scalar contract and reject backslashes.
+- **Investigation results:** valid; loud rejection is consistent with the fail-loud generator contract.
+- **Agreed resolution:** applied — `validateDefinition` rejects backslash-containing frontmatter values with an explanatory message.
+
+### W4-F14 — Unbounded, timeout-less stdin read in session-start hook
+
+- **Status:** Resolved (2026-11-11 — applied)
+- **Severity:** Low
+- **Category:** Edge Case
+- **Locations:** `.agents/plugins/monorepo-workflow/hooks/session-start.mjs` (`readStdin`)
+- **Technical explanation:** the hook buffers all of stdin with no cap and no timeout; a host that keeps the pipe open blocks session start until the platform timeout.
+- **Failure scenario:** platform regression leaves stdin open; every session start stalls with no diagnostic.
+- **Judge recommendation:** byte cap plus a raced timer that fails open.
+- **Investigation results:** valid; the payload is discarded, so capping/timeout is free of functional risk.
+- **Agreed resolution:** applied — `drainStdin` with 64 KiB cap and 2.5 s timer, always resolving then emitting the instruction.
+
+### W4-F15 — Empty-string platform env vars select the wrong output shape
+
+- **Status:** Resolved (2026-11-11 — applied)
+- **Severity:** Low
+- **Category:** Edge Case
+- **Locations**: both hook scripts (`isZcode`)
+- **Technical explanation:** `!== undefined` treats `ZCODE_PROJECT_DIR=''` as a platform marker, emitting the ZCode shape into a Claude Code parser.
+- **Failure scenario:** a wrapper exports the variable empty; the injected instruction is dropped by strict-schema validation with no visible error.
+- **Judge recommendation:** treat only non-empty values as markers.
+- **Investigation results:** valid, one line per script.
+- **Agreed resolution:** applied — `.some((value) => value !== undefined && value !== '')` in both scripts.
+
+**Wave 4 review rounds:** the same isolated judge re-reviewed the revised
+scripts after each remediation batch. Round 2 found the six primary
+remediations correct but introduced-by-fix defects R1–R3 and a residual R4
+Medium; round 3 verified R1–R4 closed, confirmed `session-start.mjs` and
+`guard-documentation-write.mjs` clean with no actionable findings, and raised
+R5 (a verification request, resolved from existing validation evidence — see
+below). Final state: all findings closed.
+
+### W4-R1 — BOM strip fix was itself buggy (body slicing off by one)
+
+- **Status:** Resolved (2026-11-11 — applied, verified round 3)
+- **Severity:** Low
+- **Category:** Correctness
+- **Locations:** `scripts/agents/sync.mjs` (`parseFrontmatter`, `loadDefinitions`)
+- **Technical explanation:** round 2 stripped the BOM inside `parseFrontmatter` and computed `bodyStart` on the stripped string, but the body was sliced from the original source — a one-character offset error that `--check` could never detect because generator and checker share the same code.
+- **Failure scenario:** a BOM-saved definition generates agents whose body silently starts one character early.
+- **Judge recommendation:** strip the BOM in `loadDefinitions` so the offset indexes the string actually sliced.
+- **Investigation results:** valid.
+- **Agreed resolution:** applied — BOM stripped once in `loadDefinitions`; round-3 judge verified end-to-end consistency.
+
+### W4-R2 — duplicate-key check trips on inherited Object.prototype properties
+
+- **Status:** Resolved (2026-11-11 — applied, verified round 3)
+- **Severity:** Low
+- **Category:** Edge Case
+- **Locations:** `scripts/agents/sync.mjs` (`parseFrontmatter`)
+- **Technical explanation:** `key in fields` tests the prototype chain; a first occurrence of `toString:`/`constructor:` was falsely reported as a duplicate.
+- **Failure scenario:** `toString: x` in frontmatter aborts sync with a confusing false error.
+- **Judge recommendation:** use `Object.hasOwn`.
+- **Investigation results:** valid; `__proto__` remains unreachable through the key regex (leading letter required), so no prototype-pollution vector.
+- **Agreed resolution:** applied.
+
+### W4-R3 — main-module gating silently disables hooks under symlinked invocation
+
+- **Status:** Resolved (2026-11-11 — applied, verified round 3)
+- **Severity:** Low
+- **Category:** Edge Case
+- **Locations:** both hook scripts (`isMainModule` / top-level execution)
+- **Technical explanation:** Node realpaths the ESM entry module, so symlinked hook invocation (plugin cache installs) made `import.meta.url` differ from the link path in `argv[1]`; the gated hook exited 0 with no output.
+- **Failure scenario:** every session starts without the workflow instruction, with no error.
+- **Judge recommendation:** remove the gating (session-start has no exports — pure downside) or realpath-normalize `argv[1]` (guard keeps gating for its exports).
+- **Investigation results:** valid; both options applied per file.
+- **Agreed resolution:** applied — gating removed entirely in `session-start.mjs`; `isMainModule()` in the guard normalizes `argv[1]` through `realpathSync` (resolved-path fallback, fail-open direction).
+
+### W4-R4 — dangling symlinks inside documentation directories bypass the containment check
+
+- **Status:** Resolved (2026-11-11 — applied, verified round 3)
+- **Severity:** Medium
+- **Category:** Security
+- **Locations:** `.agents/plugins/monorepo-workflow/hooks/guard-documentation-write.mjs` (`resolveRealPath` → replaced by `containsSymlinkComponent`)
+- **Technical explanation:** the round-2 nearest-existing-ancestor realpath re-appended the unresolved link name for dangling symlinks, resurrecting the lexical docs path and allowing a write the platform would follow outside the repository.
+- **Failure scenario:** a dangling `docs/report.md → /etc/cron.d/job` symlink (planted via an unguarded channel — the guarded agent has no Bash) turns into an out-of-repo file creation through a "allowed, inside docs" decision.
+- **Judge recommendation:** `lstat` the target and each tail segment; deny any symlinked component outright.
+- **Investigation results:** valid; the component-scan approach also closes the resolvable/broken-link cases and is simpler than link re-resolution. Policy tightening (benign intra-repo symlinks now deny) is documented in the script header.
+- **Agreed resolution:** applied — `containsSymlinkComponent` lstat-scans every component below the repo root; any symlinked component (resolvable, dangling, broken) denies. Live temp-dir self-tests cover all three link kinds plus a regular-file allow (33 assertions). Round-3 judge probed the semantics (nonexistent components, traversal, root boundary, TOCTOU) and found no actionable issues.
+
+### W4-R5 — plugin manifest contract change needs out-of-isolation verification
+
+- **Status:** Resolved (2026-11-11 — verified from existing evidence, no code change)
+- **Severity:** Low
+- **Category:** Correctness (platform-schema dependent)
+- **Locations:** `scripts/agents/sync.mjs` (`pluginManifest`, marketplaces), `.agents/plugins/monorepo-workflow/.claude-plugin/plugin.json`
+- **Technical explanation:** the round-2 → round-3 manifest change (`agents`/`hooks` as `./`-prefixed paths, marketplace `description`) was flagged by the isolated judge as unverifiable within its evidence scope (it could not read the validator output or the hooks file).
+- **Failure scenario:** if the schema expected plain directory strings, plugin loading could break and `--check` would preserve the wrong output.
+- **Judge recommendation:** confirm `hooks/hooks.json` exists and the `./`-prefix schema claim before shipping.
+- **Investigation results:** both verifications already existed: (1) `claude plugin validate` read and validated `hooks/hooks.json` directly and the whole plugin **passes**; (2) the schema claim is empirical, not assumed — the round-2 shape (`agents: 'agents'`, `hooks: 'hooks'`) produced four hard validator errors ("must start with ./", "must end with .json"/".md") and the changed shape passes. Residual uncertainty is only ZCode's runtime acceptance, which is the documented pending install-verification item (ZCode's configuration guide allows arrays for component fields and ZCode reads this manifest as its Claude-compat format).
+- **Agreed resolution:** no code change; evidence recorded here and in the prompt record.
+
+**Wave 4 summary:** 21 findings across three review rounds — 3 Medium
+(W4-F1, W4-F2, W4-R4), 18 Low — all investigated and closed: applied as
+in-scope hardening (no design change, no separate approval needed) or
+resolved from existing validation evidence (W4-R5). Round-3 verdict:
+`session-start.mjs` and `guard-documentation-write.mjs` clean with no
+actionable findings; `sync.mjs` clean apart from the evidence-resolved R5.

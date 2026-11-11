@@ -95,23 +95,32 @@ Core contracts:
 - One user prompt = one feature = one record in `prompts/`; ADR-first
   workflow for significant decisions (`DECISIONS.md`); context-blind judge
   review after each atomic implementation unit (`docs/judge-findings.md`).
+- Multi-agent development workflow (ADR-023): four subagents (`project-explorer`,
+  `code-reviewer`, `code-security-analyzer`, `documentation-writer`) defined in
+  `.agents/definitions/` and generated for ZCode + Claude Code by
+  `node scripts/agents/sync.mjs`; review gates, context-delivery, and session
+  initialization rules in root `AGENTS.md` and
+  `.agents/workflows/development-workflow.md`.
 - Documentation Update Triggers table in root `AGENTS.md` governs doc updates.
 
 ## Documentation Index
 
-| Document                               | Purpose                                                    |
-| -------------------------------------- | ---------------------------------------------------------- |
-| `AGENTS.md` (root + per app)           | Agent instructions and conventions                         |
-| `apps/*/ONBOARDING.md`                 | Developer onboarding, stack tables, env vars, commands     |
-| `docs/architecture.md`                 | Detailed architecture, boundaries, workspace relationships |
-| `docs/current-state.md`                | Feature/state snapshot (verified per feature)              |
-| `DECISIONS.md`                         | ADR-001…ADR-022, all Accepted                              |
-| `docs/docker.md`                       | Docker stacks: setup, env files, commands                  |
-| `docs/observability/README.md`         | Monitoring stack operations                                |
-| `docs/observability/manual-testing.md` | Reproducible monitoring verification scenarios             |
-| `docs/observability/roadmap.md`        | Observability roadmap (metrics/tracing/alerting)           |
-| `docs/security-otp-enrollment.md`      | Security assessment of the OTP enrollment flow             |
-| `docs/judge-findings.md`               | AI code-review findings tracker                            |
-| `DEFERRED.md`                          | Mandated deferred work registry                            |
-| `prompts/`                             | Sequential per-feature request + implementation records    |
-| `.agents/rules/`, `.agents/skills/`    | Agent rules and skills (tooling)                           |
+| Document                                    | Purpose                                                    |
+| ------------------------------------------- | ---------------------------------------------------------- |
+| `AGENTS.md` (root + per app)                | Agent instructions and conventions                         |
+| `apps/*/ONBOARDING.md`                      | Developer onboarding, stack tables, env vars, commands     |
+| `docs/architecture.md`                      | Detailed architecture, boundaries, workspace relationships |
+| `docs/current-state.md`                     | Feature/state snapshot (verified per feature)              |
+| `DECISIONS.md`                              | ADR-001…ADR-022, all Accepted                              |
+| `docs/docker.md`                            | Docker stacks: setup, env files, commands                  |
+| `docs/observability/README.md`              | Monitoring stack operations                                |
+| `docs/observability/manual-testing.md`      | Reproducible monitoring verification scenarios             |
+| `docs/observability/roadmap.md`             | Observability roadmap (metrics/tracing/alerting)           |
+| `docs/security-otp-enrollment.md`           | Security assessment of the OTP enrollment flow             |
+| `docs/judge-findings.md`                    | AI code-review findings tracker                            |
+| `DEFERRED.md`                               | Mandated deferred work registry                            |
+| `prompts/`                                  | Sequential per-feature request + implementation records    |
+| `.agents/rules/`, `.agents/skills/`         | Agent rules and skills (tooling)                           |
+| `.agents/README.md`                         | Multi-agent system: setup, platform integration, extension |
+| `.agents/workflows/development-workflow.md` | Mandatory multi-agent development workflow (ADR-023)       |
+| `.agents/schemas/`                          | Canonical subagent report templates                        |
