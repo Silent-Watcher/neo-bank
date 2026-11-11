@@ -13,6 +13,10 @@ This is a TypeScript monorepo managed with pnpm and Turborepo.
 ## Documentation and Context Management
 
 - Read this root file first; it applies to every task in the repository.
+- At the start of every session, read `PROJECT_CONTEXT.md` after this file. It
+  is the initial architectural reference and documentation index: use it to
+  understand the repository and decide which further documentation or source
+  files a task needs, instead of exploring the repository broadly.
 - Identify the application or package the task concerns before exploring the
   codebase, then read that workspace's nested `AGENTS.md` (for example
   `apps/api/AGENTS.md`) before changing its code.
@@ -20,10 +24,20 @@ This is a TypeScript monorepo managed with pnpm and Turborepo.
   architecture or workspace boundaries.
 - Consult `docs/current-state.md` before implementing functionality that
   might already exist, partially exist, or depend on an unfinished feature.
+- Load context progressively: read only the documentation and source files
+  the current task requires; specialized documents (`docs/docker.md`,
+  `docs/observability/`, `docs/security-otp-enrollment.md`, ADRs) are read
+  only when relevant. Prefer targeted searches over broad repository
+  exploration, and do not re-read files whose contents are already available
+  in the session unless they may have changed.
 - Inspect only the source files relevant to the current task; do not read the
   entire repository unnecessarily.
 - Never assume documentation is more accurate than the actual implementation;
   when they conflict, trust the code and flag the discrepancy.
+- Update `PROJECT_CONTEXT.md` only when meaningful project-level information
+  changes (architecture, boundaries, module responsibilities, major
+  dependencies, infrastructure, the documentation set) — not for minor
+  implementation or documentation edits.
 
 ### Documentation Update Triggers
 
@@ -49,6 +63,7 @@ silently wrong.
 | Changes a naming, coding, or testing convention                                                               | The affected workspace's `AGENTS.md`                                                                                                                     |
 | Adds a new `#` import alias (API)                                                                             | No doc change needed (rule is documented generically), but keep `apps/api/package.json` and `apps/api/test/subpath-import-aliases.ts` in sync            |
 | Makes any statement in `docs/architecture.md` or `docs/current-state.md` inaccurate                           | That file, immediately                                                                                                                                   |
+| Changes project-level architecture facts, boundaries, major dependencies, or the repository documentation set | `PROJECT_CONTEXT.md` (only the affected section)                                                                                                         |
 
 When a change matches no trigger, no documentation update is required — but
 if you are unsure whether a change is "material", update rather than skip.

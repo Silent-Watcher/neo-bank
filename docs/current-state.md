@@ -181,8 +181,8 @@ containers through the Docker socket, derives low-cardinality labels
 (`env`, `service`, `container`, `level`), parses pino JSON, and ships to
 Loki; Grafana provisions the Loki data source and an investigation
 dashboard as code. All Compose services (dev, prod, monitoring) use bounded
-json-file log rotation (10 MB × 3). Operations and the Persian learning
-guide: `docs/observability/`. Beyond that, only the build/test toolchain
+json-file log rotation (10 MB × 3). Operations: `docs/observability/`.
+Beyond that, only the build/test toolchain
 itself: Turborepo local caching (`.turbo/`), Husky hooks, commitlint,
 lint-staged.
 

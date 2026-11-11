@@ -12,7 +12,7 @@ When working on NestJS environment variables, configuration modules, environment
 - Validate `process.env` using Zod `safeParse()`.
 - On validation failure, use `fromZodError` and the project's shared custom environment-validation error.
 - Export the validated and parsed environment object as `_env`; use `result.data`, not the entire `safeParse` result.
-- Define domain-specific configuration factories under `src/config/` using `registerAs()` and symbol namespace tokens.
+- Define domain-specific configuration factories under `src/shared/config/` using `registerAs()` and symbol namespace tokens.
 - Read environment values from `_env` inside configuration factories, never directly from `process.env`.
 - Register the configuration factories in the `load` array of the central ConfigModule setup.
 - Reuse existing schemas, errors, configuration factories, and project conventions whenever possible.

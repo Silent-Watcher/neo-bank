@@ -11,7 +11,6 @@ Helper shorthand used below:
 
 ```sh
 DM='docker compose --env-file .env.monitoring -f compose.monitoring.yml'
-DD='docker compose --env-file .env.docker.dev -f compose.dev.yml'
 ```
 
 ## S1 — Full pipeline: container → Alloy → Loki → Grafana

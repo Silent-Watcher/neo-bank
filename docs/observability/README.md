@@ -115,7 +115,7 @@ other per-request values live in the log body only — never as labels.
   real auth in front of Grafana, Loki object storage (S3/GCS) or replicated
   volumes, resource limits, alerting, and backup automation.
 
-## Roadmap (not installed — see learning guide, Chapter 9)
+## Roadmap (not installed)
 
 1. **Metrics:** Prometheus + the API's own metrics endpoint; cAdvisor and
    Node Exporter for container/host metrics.

@@ -8,25 +8,27 @@ as infrastructure services.
 Testcontainers (`apps/api/test/testcontainers.ts`) to start isolated
 `redis:8.2-alpine` (and future `postgres:17.6-alpine`) containers per test
 file with dynamic ports — no manual `docker compose up` required. The
-development Compose stack (`compose.dev.yml`) remains for local development
+development Compose stack remains for local development
 (hot reloading, persistent volumes, multi-service stack).
 
 ## Files
 
-| File                                   | Purpose                                                                                    |
-| -------------------------------------- | ------------------------------------------------------------------------------------------ |
-| `apps/<app>/Dockerfile.dev`            | Development image (dependencies only; source is bind-mounted)                              |
-| `apps/<app>/Dockerfile.prod`           | Production image (multi-stage, non-root, minimal)                                          |
-| `apps/<app>/Dockerfile.*.dockerignore` | Per-Dockerfile build-context ignores (used _instead of_ the root file, not merged with it) |
-| `compose.dev.yml`                      | Development stack (`neo-bank-dev` project)                                                 |
-| `compose.prod.yml`                     | Production stack (`neo-bank-prod` project)                                                 |
-| `compose.monitoring.yml`               | Monitoring stack: Grafana, Loki, Alloy (`neo-bank-monitoring` project)                     |
-| `monitoring/`                          | Config as code for the monitoring stack (Alloy pipeline, Loki, Grafana provisioning)       |
-| `.dockerignore`                        | Root build-context ignore                                                                  |
-| `.env.docker.example`                  | Template for the interpolation files below                                                 |
-| `.env.docker.dev`                      | Interpolation values for `compose.dev.yml` (gitignored)                                    |
-| `.env.docker.prod`                     | Interpolation values for `compose.prod.yml` (gitignored)                                   |
-| `.env.monitoring.example`              | Template for `.env.monitoring`, the monitoring stack's interpolation file (gitignored)     |
+| File                                   | Purpose                                                                                                         |
+| -------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `apps/<app>/Dockerfile.dev`            | Development image (dependencies only; source is bind-mounted)                                                   |
+| `apps/<app>/Dockerfile.prod`           | Production image (multi-stage, non-root, minimal)                                                               |
+| `apps/<app>/Dockerfile.*.dockerignore` | Per-Dockerfile build-context ignores (used _instead of_ the root file, not merged with it)                      |
+| `compose.yml`                          | Development orchestrator: `include:` of the dev app stack and the monitoring stack into one `docker compose up` |
+| `compose.app.dev.yml`                  | Development app stack: all three apps with hot reloading plus PostgreSQL and Redis (`neo-bank-dev` project)     |
+| `compose.app.prod.yml`                 | Production app stack: hardened images, internal networks (`neo-bank-prod` project)                              |
+| `compose.prod.all.yml`                 | Production orchestrator: `include:` of the production app stack and the monitoring stack                        |
+| `compose.monitoring.yml`               | Monitoring stack: Grafana, Loki, Alloy (`neo-bank-monitoring` project)                                          |
+| `monitoring/`                          | Config as code for the monitoring stack (Alloy pipeline, Loki, Grafana provisioning)                            |
+| `.dockerignore`                        | Root build-context ignore                                                                                       |
+| `.env.docker.example`                  | Template for the interpolation files below                                                                      |
+| `.env.docker.dev`                      | Interpolation values for the development Compose files (gitignored)                                             |
+| `.env.docker.prod`                     | Interpolation values for the production Compose files (gitignored)                                              |
+| `.env.monitoring.example`              | Template for `.env.monitoring`, the monitoring stack's interpolation file (gitignored)                          |
 
 ## Environment Files
 
@@ -60,7 +62,7 @@ Run from the repository root.
 
 ```sh
 cp .env.docker.example .env.docker.dev      # adjust ports/credentials
-pnpm docker:dev                             # = docker compose --env-file .env.docker.dev -f compose.dev.yml up --build -d
+pnpm docker:dev                             # = docker compose --env-file .env.docker.dev --env-file .env.monitoring up --build -d
 ```
 
 **Production:**
@@ -68,14 +70,14 @@ pnpm docker:dev                             # = docker compose --env-file .env.d
 ```sh
 cp .env.docker.example .env.docker.prod     # set POSTGRES_PASSWORD + REDIS_PASSWORD
 cp apps/api/env/.env.example apps/api/env/.env.production
-pnpm docker:prod                            # = docker compose --env-file .env.docker.prod -f compose.prod.yml up --build -d
+pnpm docker:prod                            # = docker compose --env-file .env.docker.prod --env-file .env.monitoring -f compose.prod.all.yml up --build -d
 ```
 
 **Rebuild after dependency changes:**
 
 ```sh
-docker compose --env-file .env.docker.dev -f compose.dev.yml build
-docker compose --env-file .env.docker.prod -f compose.prod.yml build
+docker compose --env-file .env.docker.dev -f compose.app.dev.yml build
+docker compose --env-file .env.docker.prod -f compose.app.prod.yml build
 ```
 
 **Stop / inspect:**
@@ -83,8 +85,8 @@ docker compose --env-file .env.docker.prod -f compose.prod.yml build
 ```sh
 pnpm docker:dev:down
 pnpm docker:prod:down
-docker compose --env-file .env.docker.prod -f compose.prod.yml logs -f api
-docker compose --env-file .env.docker.prod -f compose.prod.yml ps
+docker compose --env-file .env.docker.prod -f compose.app.prod.yml logs -f api
+docker compose --env-file .env.docker.prod -f compose.app.prod.yml ps
 ```
 
 Add `-v` to `down` to remove the PostgreSQL data volume (development data
@@ -100,7 +102,7 @@ pnpm docker:monitoring:down
 ```
 
 See [`docs/observability/README.md`](./observability/README.md) for the full
-operational guide and the Persian learning guide for how the pipeline works.
+operational guide.
 
 ## Ports
 
@@ -136,8 +138,8 @@ application stacks: Grafana Alloy collects the dev/prod containers' logs
 through the Docker socket, Loki stores them (7-day retention, named volume),
 and Grafana serves the provisioned dashboard at
 `http://localhost:${GRAFANA_PORT:-3002}`. Details, operations, and
-troubleshooting: [`docs/observability/README.md`](./observability/README.md);
-the Persian learning guide explains the whole pipeline. The stack requires
+troubleshooting: [`docs/observability/README.md`](./observability/README.md).
+The stack requires
 `DOCKER_GID` in `.env.monitoring` (the host docker group id — find it with
 `stat -c %g /var/run/docker.sock`) so Alloy can read the socket without
 running as root. Because Alloy tails the dev/prod containers through the

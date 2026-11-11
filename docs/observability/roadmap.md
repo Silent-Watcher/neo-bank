@@ -2,9 +2,7 @@
 
 Learning-and-implementation roadmap for the observability stack. Implemented
 state and next stages; dependencies between stages; expected learning
-outcomes per stage. The deep version of everything below — concepts, configs,
-exercises — is the Persian handbook:
-[`learning-guide.fa.md`](./learning-guide.fa.md) (chapters 14–16).
+outcomes per stage.
 
 ## Implemented (Stage 1 — Centralized Logging, ADR-022)
 
