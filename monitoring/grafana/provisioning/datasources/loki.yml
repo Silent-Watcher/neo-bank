@@ -1,0 +1,16 @@
+# Grafana data source provisioning: registers Loki so the monitoring stack
+# works immediately after `up` with no manual UI configuration.
+apiVersion: 1
+
+datasources:
+  - name: Loki
+    # Stable uid: dashboard panels reference the data source by this value,
+    # so renaming the data source cannot break provisioned dashboards.
+    uid: loki
+    type: loki
+    access: proxy
+    # Service name inside the monitoring Compose network.
+    url: http://loki:3100
+    isDefault: true
+    # Provisioned config is managed as code; change it here, not in the UI.
+    editable: false

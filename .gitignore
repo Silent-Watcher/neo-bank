@@ -8,5 +8,8 @@ coverage/
 .env.*
 !.env.example
 !.env.docker.example
+!.env.monitoring.example
 # pnpm store
 /.pnpm-store/
+# Vitest
+**/.vitest/

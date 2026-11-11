@@ -32,7 +32,7 @@ auth, no deployment setup.
   `REDIS_MAX_RETRIES_PER_REQUEST`, `REDIS_SHUTDOWN_TIMEOUT_MS`,
   `RATE_LIMIT_SHORT_LIMIT`, `RATE_LIMIT_SHORT_TTL_SECONDS`,
   `RATE_LIMIT_LONG_LIMIT`, `RATE_LIMIT_LONG_TTL_MINUTES`,
-  `ENROLLMENTS_MAX_VERIFY_ATTEMPTS`, `REDIS_INSIGHT_URL`.
+  `ENROLLMENTS_MAX_VERIFY_ATTEMPTS`, `REDIS_INSIGHT_URL`, `LOG_PRETTY`.
 - Redis integration (ADR-012/013): global `RedisModule` in
   `src/shared/redis/` with a single lazy ioredis 6 client (symbol token,
   `@InjectRedis()` escape hatch), `RedisService` application abstraction
@@ -53,7 +53,10 @@ auth, no deployment setup.
   integration tests (atomicity, block regression, multi-instance sharing,
   proxy/IPv6 behavior, Redis failure).
 - Logging: Pino via nestjs-pino (ADR-008/009), header redaction,
-  `pino-pretty` in development only.
+  `pino-pretty` in development only (an optional `LOG_PRETTY` env override
+  forces either format; the dev Compose stack sets it to `false` so the
+  containerized API logs structured JSON for centralized collection,
+  ADR-022).
 - Request IDs: UUIDv4, inbound `x-request-id` strictly validated (ADR-010).
 - Response contracts: success envelope interceptor (ADR-011) and RFC 9457
   Problem Details error filter; `/problems/application-error` documentation
@@ -169,12 +172,23 @@ starts its own container with dynamic ports in `beforeAll`/`afterAll`, enabling
 parallel execution and true isolation without manual Docker Compose. Docker
 infrastructure (`docs/docker.md`): dev and prod Compose stacks with PostgreSQL
 and Redis, per-app dev/prod images (`turbo prune`, non-root, hot reloading in
-dev; Redis intentionally has no persistence volume). Beyond that, only the
-build/test toolchain itself: Turborepo local caching (`.turbo/`), Husky hooks,
-commitlint, lint-staged.
+dev; Redis intentionally has no persistence volume). Centralized log
+monitoring (ADR-022): an independent Compose stack (`compose.monitoring.yml`,
+project `neo-bank-monitoring`) runs version-pinned Grafana (loopback :3002),
+Loki 3.7.9 (filesystem storage on a named volume, 7-day retention,
+loopback :3100), and Grafana Alloy 1.21.0 — Alloy discovers the dev/prod
+containers through the Docker socket, derives low-cardinality labels
+(`env`, `service`, `container`, `level`), parses pino JSON, and ships to
+Loki; Grafana provisions the Loki data source and an investigation
+dashboard as code. All Compose services (dev, prod, monitoring) use bounded
+json-file log rotation (10 MB × 3). Operations and the Persian learning
+guide: `docs/observability/`. Beyond that, only the build/test toolchain
+itself: Turborepo local caching (`.turbo/`), Husky hooks, commitlint,
+lint-staged.
 
 **Planned / Not started:** database, SMS provider, remote Turborepo cache,
-CI pipeline, deployment targets.
+CI pipeline, deployment targets, metrics (Prometheus), tracing (Tempo /
+OpenTelemetry), alerting — see `docs/observability/README.md` roadmap.
 
 ## Commands
 
@@ -192,6 +206,9 @@ pnpm test                        # unit tests (api only) + e2e via turbo
 pnpm test:e2e                    # api e2e only
 pnpm docker:dev                  # full Docker dev stack in the background
 pnpm docker:prod                 # full Docker production stack in the background
+pnpm docker:monitoring           # Grafana + Loki + Alloy (centralized logs)
+pnpm docker:monitoring:down      # stop the monitoring stack
+pnpm docker:monitoring:logs      # follow monitoring container logs
 pnpm clean
 pnpm cm                          # Commitizen (Conventional Commits)
 ```
@@ -213,6 +230,6 @@ Per-app commands are listed in each `apps/<app>/ONBOARDING.md`.
 
 All ADRs live in [DECISIONS.md](../DECISIONS.md). Status as of this snapshot:
 
-- **Accepted:** ADR-001 (Turborepo), ADR-002 (Fastify), ADR-003 (SWC), ADR-004 (@nestjs/config + Zod), ADR-005 (URI versioning), ADR-006 (1 MiB body limit), ADR-007 (`api` prefix), ADR-008/009 (Pino / nestjs-pino), ADR-010 (UUIDv4 request IDs), ADR-011 (envelope exclusions), ADR-012 (ioredis without a wrapper), ADR-013 (Redis module architecture), ADR-014 (Swagger/OpenAPI, development-only), ADR-015 (Global HTTP rate limiting with Redis-backed @nestjs/throttler), ADR-016 (Testcontainers for integration and e2e testing), ADR-017 (OTP verification attempt lockout for enrollment security), ADR-018 (HMAC-SHA-256 digest storage for enrollment OTPs), ADR-019 (OTP verification hardening — conditional attempt counting and challenge identity), ADR-020 (development Redis service migrated to Redis Stack with bundled Redis Insight), ADR-021 (bilingual internationalization en/fa via the official @nestjs/i18n).
+- **Accepted:** ADR-001 (Turborepo), ADR-002 (Fastify), ADR-003 (SWC), ADR-004 (@nestjs/config + Zod), ADR-005 (URI versioning), ADR-006 (1 MiB body limit), ADR-007 (`api` prefix), ADR-008/009 (Pino / nestjs-pino), ADR-010 (UUIDv4 request IDs), ADR-011 (envelope exclusions), ADR-012 (ioredis without a wrapper), ADR-013 (Redis module architecture), ADR-014 (Swagger/OpenAPI, development-only), ADR-015 (Global HTTP rate limiting with Redis-backed @nestjs/throttler), ADR-016 (Testcontainers for integration and e2e testing), ADR-017 (OTP verification attempt lockout for enrollment security), ADR-018 (HMAC-SHA-256 digest storage for enrollment OTPs), ADR-019 (OTP verification hardening — conditional attempt counting and challenge identity), ADR-020 (development Redis service migrated to Redis Stack with bundled Redis Insight), ADR-021 (bilingual internationalization en/fa via the official @nestjs/i18n), ADR-022 (centralized logging with Grafana Alloy, Loki, and Grafana).
 
 All architectural decisions are accepted and implemented. Do not build on rejected alternatives (e.g. do not introduce header versioning or a second logger).

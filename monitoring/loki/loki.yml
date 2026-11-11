@@ -1,0 +1,57 @@
+# Grafana Loki — single-binary configuration for the local monitoring stack.
+#
+# Topology: one process runs every Loki component (ingester, distributor,
+# querier, compactor) — the "single binary" monolithic target, the right
+# shape for a local learning environment. Logs are stored on a Docker named
+# volume at /loki (chunks + TSDB index + WAL + compactor state).
+#
+# Not production-grade: single replica, local filesystem, no HA. What a real
+# deployment would add is described in docs/observability/README.md.
+
+auth_enabled: false
+
+# Opt out of anonymous usage reporting: this stack is network-isolated by
+# design and sends nothing to Grafana Labs.
+analytics: {}
+
+server:
+  http_listen_port: 3100
+
+common:
+  path_prefix: /loki
+  # One replica: ring membership can live in memory instead of a shared
+  # store. Multiple replicas would REQUIRE an external ring store (Redis,
+  # etcd, ...) — do not remove this with more than one Loki instance.
+  replication_factor: 1
+  ring:
+    kvstore:
+      store: inmemory
+  storage:
+    filesystem:
+      chunks_directory: /loki/chunks
+      rules_directory: /loki/rules
+
+schema_config:
+  configs:
+    # Current recommended layout: TSDB index, schema v13. The `from` date
+    # only decides which layout applies to data indexed from that day on.
+    - from: 2024-01-01
+      store: tsdb
+      object_store: filesystem
+      schema: v13
+      index:
+        prefix: index_
+        period: 24h
+
+# Retention for a local learning environment: 7 days. The compactor below
+# enforces it by deleting expired data; without retention_enabled Loki would
+# keep everything until the volume fills up.
+limits_config:
+  retention_period: 168h
+
+compactor:
+  working_directory: /loki/compactor
+  retention_enabled: true
+  # Required when retention is enabled in Loki 3.x: where delete requests
+  # are stored.
+  delete_request_store: filesystem

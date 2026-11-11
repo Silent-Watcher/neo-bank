@@ -1001,3 +1001,55 @@ Introduce the official **`@nestjs/i18n`** (NestJS org, first-party, zero runtime
 - Official documentation: `https://docs.nestjs.com/application/i18n`
 
 ---
+
+---
+
+## ADR-022: Centralized Logging with Grafana Alloy, Loki, and Grafana
+
+- **Status:** Accepted
+- **Date:** 2026-11-11
+
+### Context
+
+The API logs structured JSON through the existing Pino pipeline (ADR-008/009) to stdout, and every other container logs to stdout/stderr as well. Investigating behavior across containers today means `docker logs` per container: no cross-service search, no persistence beyond the Docker json-file rotation, no level filtering, no request-ID correlation across services, and nothing survives container recreation. The project needs a beginner-friendly, self-hosted centralized logging environment that (a) integrates into the existing Docker infrastructure without redesigning it, (b) preserves the existing application logger untouched, and (c) doubles as a practical learning environment for the observability ecosystem (metrics and tracing are explicitly out of scope for this phase).
+
+### Decision
+
+Introduce an independently managed **monitoring Compose stack** (`compose.monitoring.yml`, project `neo-bank-monitoring`) with three version-pinned services on an isolated network, alongside a documentation set (`docs/observability/`) including a Persian learning guide:
+
+- **Grafana Alloy** (`monitoring/alloy/config.alloy`) collects logs through the Docker daemon socket: `discovery.docker` discovers only running containers of the `neo-bank-dev`/`neo-bank-prod` Compose projects, `discovery.relabel` derives low-cardinality labels (`env`, `service`, `container`) from the container name (guarded by a `keep` rule), `loki.source.docker` tails container stdout/stderr with a persisted positions file, `loki.process` parses pino JSON (numeric `level` → label, `time` → timestamp), and `loki.relabel` maps pino level numbers to names. High-cardinality values (request IDs, user IDs) stay in the log body and are never labels.
+- **Grafana Loki** (`monitoring/loki/loki.yml`) runs as a single binary with filesystem storage on a named volume, TSDB schema v13, and 7-day retention enforced by the compactor — sized for a local learning environment.
+- **Grafana** (`monitoring/grafana/`) provisions the Loki data source and one practical investigation dashboard as code (loopback-only port, admin credentials via the monitoring env file, no self-signup, telemetry disabled).
+- **Independence:** the monitoring stack has its own project name and network; no application service joins it and no application depends on it. Stopping monitoring never stops the applications; Alloy buffers and retries pushes while Loki is unavailable. The socket mount is the single privileged surface (`:ro` mount, `no-new-privileges`, supplemental docker GID instead of root) and is documented as local-only.
+- **Logger preservation:** the existing Pino logger and its contract are unchanged. One optional env variable, `LOG_PRETTY` (exact strings `true`/`false`), overrides the pretty-print default; the development Compose stack sets `LOG_PRETTY: 'false'` so the containerized API emits structured JSON for collection, while host-side development keeps `pino-pretty`. Unset behavior is exactly as before.
+- **Log rotation:** all Compose services (dev, prod, monitoring) get bounded json-file logging (`max-size: 10m`, `max-file: 3`) so host-side container logs can no longer grow without limit.
+
+### Alternatives Considered
+
+- _Promtail instead of Alloy:_ the legacy collector is in maintenance mode (LTS only until 2026-03-01); its successor Alloy implements the same `loki.*` pipeline stages in the River language. Rejected to avoid adopting a deprecated component on day one.
+- _OpenTelemetry Collector:_ the general-purpose telemetry collector would require application instrumentation changes (the task forbids replacing the logger) and adds concept overhead before the basics are learned. Deferred to the observability roadmap (tracing phase).
+- _Collection via mounted json-file log directories:_ binds Alloy to the host filesystem layout and Docker's log format, and breaks where `local` or journald drivers apply. Docker API tailing is format-stable and container-dynamic. Rejected.
+- _Embedding monitoring services into `compose.dev.yml`/`compose.prod.yml`:_ couples application startup to monitoring, contradicts the independence requirement, and makes `down` of one stack affect the other. Rejected in favor of a separate file.
+- _Keeping dev on pino-pretty and parsing pretty lines in Alloy:_ fragile (ANSI color codes, level names embedded in prose) and defeats the structured pipeline. Rejected in favor of the `LOG_PRETTY` override.
+
+### Consequences and Trade-offs
+
+**Positive**
+
+- Every container's logs are searchable in one place within minutes of starting the stack: filter by service/env, find errors, correlate by request ID — with zero application-code change beyond the optional `LOG_PRETTY`.
+- The learning objective is served by a deliberately small, fully documented pipeline where each configuration line maps to a guide chapter.
+- Log collection, storage, and visualization can be stopped, restarted, and upgraded independently of the applications.
+
+**Negative**
+
+- The Alloy container holds full Docker daemon control through the socket (mount read-only, `no-new-privileges`, non-root + supplemental GID). Acceptable locally; a production deployment must front the socket with a restricted read-only API proxy or move collection into the platform.
+- Single-replica Loki on local disk: no high availability, no backup — a learning configuration, explicitly not production-grade.
+- Loki's index model (label-based) rewards low cardinality; adding per-request labels would degrade it. The guide and comments teach the boundary.
+- Three additional pinned images on the machine (Loki 211 MB, Grafana ~2 GB, Alloy 945 MB uncompressed).
+
+### References
+
+- `compose.monitoring.yml`, `.env.monitoring.example`, `monitoring/alloy/config.alloy`, `monitoring/loki/loki.yml`, `monitoring/grafana/provisioning/`, `monitoring/grafana/dashboards/api-logs.json`
+- `compose.dev.yml` (`LOG_PRETTY`, log rotation anchors), `compose.prod.yml` (log rotation), `apps/api/src/shared/config/env/schema/log.env.ts`, `apps/api/src/shared/config/log.config.ts`
+- `docs/observability/README.md` (operations), `docs/observability/manual-testing.md` (verification scenarios), `docs/observability/learning-guide.fa.md` (Persian learning guide), `docs/docker.md` (ports, rotation)
+- Official documentation: https://grafana.com/docs/loki/latest/ · https://grafana.com/docs/alloy/latest/ · https://grafana.com/docs/grafana/latest/

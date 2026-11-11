@@ -1,0 +1,12 @@
+# Grafana dashboard provisioning: loads every dashboard JSON file from the
+# mounted dashboards directory on startup and refreshes periodically.
+apiVersion: 1
+
+providers:
+  - name: neo-bank
+    folder: Neo Bank
+    type: file
+    updateIntervalSeconds: 30
+    allowUiUpdates: true
+    options:
+      path: /var/lib/grafana/dashboards

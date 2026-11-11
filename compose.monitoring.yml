@@ -1,0 +1,150 @@
+# Centralized log monitoring stack: Grafana (visualization), Loki (log
+# storage), and Grafana Alloy (log collection).
+#
+# Fully independent of the application stacks: this file has its own Compose
+# project and its own network, and no application service ever joins it.
+# Alloy reaches containers through the Docker daemon socket — not through
+# any application network — so starting or stopping monitoring never affects
+# the applications, and vice versa.
+#
+# Compose variable interpolation values come from an explicit env file
+# (copy .env.monitoring.example to .env.monitoring and adjust):
+#   docker compose --env-file .env.monitoring -f compose.monitoring.yml up -d
+# or the repository scripts: pnpm docker:monitoring / pnpm docker:monitoring:down.
+#
+# Images are version-pinned (repository convention). Versions verified
+# against the official docs; upgrade deliberately, one component at a time.
+
+name: neo-bank-monitoring
+
+# Keep host-side json-file logs bounded for every monitoring container too.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: '10m'
+    max-file: '3'
+
+services:
+  loki:
+    image: grafana/loki:3.7.9
+    command: -config.file=/etc/loki/config.yml
+    volumes:
+      # Configuration is mounted read-only; all writable state lives in the
+      # named volume below, so data survives container recreation.
+      - ./monitoring/loki/loki.yml:/etc/loki/config.yml:ro
+      - loki_data:/loki
+    ports:
+      # Loopback-only: handy for learning (LogQL via curl) and for verifying
+      # ingestion without Grafana. Not reachable from the network.
+      - '127.0.0.1:${LOKI_PORT:-3100}:3100'
+    restart: unless-stopped
+    networks:
+      - monitoring
+    # No healthcheck on purpose: the official Loki image is distroless (no
+    # shell or HTTP client), so a probe cannot run inside the container.
+    # Check readiness from the host instead:
+    #   curl -fsS http://127.0.0.1:3100/ready
+    # Grafana and Alloy are deliberately not gated on Loki health either.
+    logging: *default-logging
+
+  grafana:
+    image: grafana/grafana:13.2.5
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?GRAFANA_ADMIN_PASSWORD is required in .env.monitoring}
+      # Local learning stack: the admin account is enough; no self-signup.
+      GF_USERS_ALLOW_SIGN_UP: 'false'
+      # No telemetry egress: the stack is otherwise network-isolated by
+      # design; keep it that way.
+      GF_ANALYTICS_REPORTING_ENABLED: 'false'
+      GF_ANALYTICS_CHECK_FOR_UPDATES: 'false'
+    volumes:
+      # Provisioned data source + dashboard providers, managed as code.
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      # Persists dashboards/users created in the UI across restarts.
+      - grafana_data:/var/lib/grafana
+    ports:
+      # Loopback-only: the admin UI is a local learning surface, not a
+      # LAN service. (Production would front this with TLS and a real
+      # identity setup; the env-var password is a local convenience.)
+      - '127.0.0.1:${GRAFANA_PORT:-3002}:3000'
+    restart: unless-stopped
+    networks:
+      - monitoring
+    # Ordered after loki on `up`, but NOT gated on its health: Grafana is
+    # usable (and shows the data source error) even while Loki is down.
+    depends_on:
+      - loki
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -q -O /dev/null http://127.0.0.1:3000/api/health || exit 1']
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    logging: *default-logging
+
+  alloy:
+    image: grafana/alloy:v1.21.0
+    command: [
+        'run',
+        # Exposes Alloy's own debug UI/metrics INSIDE the monitoring network
+        # only (no host port): useful for pipeline debugging, not reachable
+        # from the host.
+        '--server.http.listen-addr=0.0.0.0:12345',
+        # Positions file location: records how far each container log was
+        # read so restarts resume instead of re-ingesting old lines. Do not
+        # delete this volume while containers are running.
+        '--storage.path=/var/lib/alloy/data',
+        '/etc/alloy/config.alloy',
+      ]
+    volumes:
+      - ./monitoring/alloy/config.alloy:/etc/alloy/config.alloy:ro
+      - alloy_data:/var/lib/alloy/data
+      # Docker socket for container discovery and log tailing. Read-only
+      # limits the mount, NOT the API: any process that can talk to the
+      # socket can drive the whole Docker daemon (equivalent to root on the
+      # host). Keep this stack local; never expose the socket over TCP. The
+      # supplemental group below avoids running Alloy as root while still
+      # granting the socket's owning group access.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    # The image's default `alloy` user (uid 473) plus the host's docker GID
+    # (set DOCKER_GID in .env.monitoring — `stat -c %g /var/run/docker.sock`).
+    group_add:
+      - '${DOCKER_GID:?DOCKER_GID is required in .env.monitoring — see .env.monitoring.example}'
+    # Hardening: the socket mount is the stack's one privileged surface;
+    # prevent any process inside from gaining additional capabilities.
+    # (A production deployment must go further and front the socket with a
+    # restricted read-only-API proxy — see docs/observability/README.md.)
+    security_opt:
+      - 'no-new-privileges:true'
+    restart: unless-stopped
+    networks:
+      - monitoring
+    # Ordered after loki on `up`, but NOT gated on its health: Alloy keeps
+    # tailing and retries pushes while Loki is unavailable.
+    depends_on:
+      - loki
+    healthcheck:
+      # The Alloy image ships no curl/wget; this minimal HTTP request uses
+      # the bundled perl's core IO module. /-/ready answers 200 only when
+      # the configuration loaded successfully.
+      test:
+        - CMD-SHELL
+        - >-
+          perl -MIO::Socket::INET -e '$$s=IO::Socket::INET->new(PeerAddr=>"127.0.0.1:12345",Proto=>"tcp",Timeout=>3) or exit 2;
+          print $$s "GET /-/ready HTTP/1.0\r\n\r\n"; $$r=<$$s>; exit($$r=~/200/?0:1);'
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    logging: *default-logging
+
+volumes:
+  loki_data:
+  grafana_data:
+  alloy_data:
+
+networks:
+  # Isolated monitoring network: only loki, grafana, and alloy join it.
+  monitoring:

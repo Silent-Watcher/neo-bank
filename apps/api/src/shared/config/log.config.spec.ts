@@ -48,4 +48,36 @@ describe('logConfig factory', () => {
     // Assert
     expect(logConfig()).toEqual({ level: 'info', pretty: false });
   });
+
+  it('lets LOG_PRETTY=false force structured JSON in development', async () => {
+    // Arrange
+    vi.stubEnv('APP_ENV', 'development');
+    vi.stubEnv('LOG_LEVEL', 'debug');
+    vi.stubEnv('LOG_PRETTY', 'false');
+    stubBaseEnv();
+    vi.resetModules();
+
+    // Act
+    const logConfig = await loadFactory();
+
+    // Assert
+    expect(logConfig()).toEqual({ level: 'debug', pretty: false });
+  });
+
+  it('lets LOG_PRETTY=true force pretty printing outside development', async () => {
+    // Arrange
+    vi.stubEnv('APP_ENV', 'production');
+    vi.stubEnv('LOG_LEVEL', 'info');
+    vi.stubEnv('LOG_PRETTY', 'true');
+    // CORS_ORIGIN is mandatory in production.
+    vi.stubEnv('CORS_ORIGIN', 'https://app.example.com');
+    stubBaseEnv();
+    vi.resetModules();
+
+    // Act
+    const logConfig = await loadFactory();
+
+    // Assert
+    expect(logConfig()).toEqual({ level: 'info', pretty: true });
+  });
 });

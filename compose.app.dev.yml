@@ -12,6 +12,14 @@
 
 name: neo-bank-dev
 
+# Keep host-side json-file logs bounded: rotated per container instead of
+# growing without limit. Applies to every service in this file.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: '10m'
+    max-file: '3'
+
 services:
   api:
     build:
@@ -31,6 +39,10 @@ services:
       # Set only here: the API never advertises an address it cannot know
       # exists, so local non-Docker development and production log nothing.
       REDIS_INSIGHT_URL: http://localhost:${REDIS_INSIGHT_PORT:-8001}
+      # Structured JSON in the container even though APP_ENV=development:
+      # the centralized logging pipeline (compose.monitoring.yml) collects
+      # and parses these logs. Host-side development keeps pino-pretty.
+      LOG_PRETTY: 'false'
     volumes:
       # Source bind mount for hot reloading; the named volumes keep the
       # container-installed node_modules from being shadowed by the host's.
@@ -58,6 +70,7 @@ services:
       timeout: 5s
       retries: 5
       start_period: 30s
+    logging: *default-logging
 
   web:
     build:
@@ -83,6 +96,7 @@ services:
       timeout: 5s
       retries: 5
       start_period: 30s
+    logging: *default-logging
 
   admin:
     build:
@@ -113,6 +127,7 @@ services:
       timeout: 5s
       retries: 5
       start_period: 30s
+    logging: *default-logging
 
   postgres:
     image: postgres:17.6-alpine
@@ -129,6 +144,7 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+    logging: *default-logging
 
   redis:
     image: redis/redis-stack:latest
@@ -151,6 +167,7 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+    logging: *default-logging
 
 volumes:
   postgres_dev_data:

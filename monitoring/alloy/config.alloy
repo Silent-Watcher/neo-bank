@@ -1,0 +1,190 @@
+// Grafana Alloy — Docker log collection for the neo-bank Compose stacks.
+//
+// Pipeline (a log entry flows top to bottom):
+//
+//   discovery.docker "containers"
+//     Discovers running containers of the neo-bank dev/prod Compose
+//     projects through the Docker daemon API (socket mount).
+//       |
+//   discovery.relabel "containers"
+//     Promotes stable, low-cardinality container metadata to Loki labels:
+//     `env` (dev|prod), `service` (api|web|admin|postgres|redis), and
+//     `container` (service-index, one stream per container).
+//       |
+//   loki.source.docker "containers"
+//     Tails the containers' stdout/stderr. A positions file under
+//     --storage.path records how far each container was read, so an Alloy
+//     restart resumes instead of re-ingesting old lines.
+//       |
+//   loki.process "pino"
+//     Parses the API's structured JSON (pino) lines: extracts the numeric
+//     `level` into a label and the `time` field as the authoritative
+//     timestamp. Non-JSON lines (frontends, PostgreSQL) skip these stages
+//     untouched.
+//       |
+//   loki.relabel "pino_levels"
+//     Maps pino's numeric levels to their names (30 -> "info", 50 ->
+//     "error", ...) so queries and dashboards can filter readably.
+//       |
+//   loki.write "loki"
+//     Pushes to Loki. When Loki is down, Alloy keeps tailing and retries
+//     pushes; the application is never involved and never blocks.
+//
+// The monitoring stack's own containers are never collected: the discovery
+// filter matches only the neo-bank-dev/neo-bank-prod Compose projects, and
+// containers without a Compose project label (e.g. Testcontainers) are
+// invisible to it. High-cardinality values (request IDs, user IDs) stay in
+// the log body — they are never labels.
+
+discovery.docker "containers" {
+  host = "unix:///var/run/docker.sock"
+
+  // Docker Engine API filter semantics: values within one block are OR'd,
+  // separate blocks are ANDed. Two blocks: (project is dev OR prod) AND
+  // (status is running).
+  filter {
+    name = "label"
+    values = [
+      "com.docker.compose.project=neo-bank-dev",
+      "com.docker.compose.project=neo-bank-prod",
+    ]
+  }
+
+  filter {
+    name = "status"
+    values = ["running"]
+  }
+}
+
+discovery.relabel "containers" {
+  targets = discovery.docker.containers.targets
+
+  // Relabel regexes are fully anchored by convention; the rules below
+  // derive env, service, and container from names like /neo-bank-dev-api-1.
+  // The keep guard drops entries from any discovered container whose name
+  // does not match the pattern (e.g. an explicit container_name:) instead
+  // of storing it unlabeled and invisible.
+  rule {
+    action        = "keep"
+    source_labels = ["__meta_docker_container_name"]
+    regex         = "/neo-bank-(dev|prod)-"
+  }
+
+  rule {
+    source_labels = ["__meta_docker_container_name"]
+    regex         = "/neo-bank-(dev|prod)-(.*)-([0-9]+)"
+    target_label  = "env"
+    replacement   = "$1"
+  }
+
+  rule {
+    source_labels = ["__meta_docker_container_name"]
+    regex         = "/neo-bank-(dev|prod)-(.*)-([0-9]+)"
+    target_label  = "service"
+    replacement   = "$2"
+  }
+
+  // Per-container stream identity: keeps replicas of one service (e.g.
+  // `--scale api=2`) in separate Loki streams, so interleaved per-process
+  // timestamps can never be rejected as out-of-order.
+  rule {
+    source_labels = ["__meta_docker_container_name"]
+    regex         = "/neo-bank-(dev|prod)-(.*)-([0-9]+)"
+    target_label  = "container"
+    replacement   = "$2-$3"
+  }
+}
+
+loki.source.docker "containers" {
+  host          = "unix:///var/run/docker.sock"
+  targets       = discovery.relabel.containers.output
+  relabel_rules = discovery.relabel.containers.rules
+  forward_to    = [loki.process.pino.receiver]
+}
+
+loki.process "pino" {
+  forward_to = [loki.relabel.pino_levels.receiver]
+
+  // Extract pino fields from JSON lines. Pino logs carry the level as a
+  // number (10=trace .. 60=fatal) and an epoch-millisecond "time".
+  stage.json {
+    expressions = {
+      level = "level",
+      time  = "time",
+    }
+  }
+
+  // Trust the application's own timestamp instead of the read time. On
+  // non-JSON lines nothing was extracted, so the stage keeps the upstream
+  // (collection) timestamp — no log line is ever lost to a failed parse.
+  stage.timestamp {
+    source = "time"
+    format = "UnixMs"
+  }
+
+  // `level` becomes a Loki label — low cardinality (at most six values).
+  stage.labels {
+    values = {
+      level = "",
+    }
+  }
+}
+
+loki.relabel "pino_levels" {
+  forward_to = [loki.write.loki.receiver]
+
+  rule {
+    action        = "replace"
+    source_labels = ["level"]
+    regex         = "10"
+    replacement   = "trace"
+    target_label  = "level"
+  }
+
+  rule {
+    action        = "replace"
+    source_labels = ["level"]
+    regex         = "20"
+    replacement   = "debug"
+    target_label  = "level"
+  }
+
+  rule {
+    action        = "replace"
+    source_labels = ["level"]
+    regex         = "30"
+    replacement   = "info"
+    target_label  = "level"
+  }
+
+  rule {
+    action        = "replace"
+    source_labels = ["level"]
+    regex         = "40"
+    replacement   = "warn"
+    target_label  = "level"
+  }
+
+  rule {
+    action        = "replace"
+    source_labels = ["level"]
+    regex         = "50"
+    replacement   = "error"
+    target_label  = "level"
+  }
+
+  rule {
+    action        = "replace"
+    source_labels = ["level"]
+    regex         = "60"
+    replacement   = "fatal"
+    target_label  = "level"
+  }
+}
+
+loki.write "loki" {
+  endpoint {
+    // Service name inside the monitoring Compose network.
+    url = "http://loki:3100/loki/api/v1/push"
+  }
+}

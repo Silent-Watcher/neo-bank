@@ -22,6 +22,10 @@ with their technical justification and the status `Won't Fix`.
   (batched pipe translation, title-key comment, array-excluding catalog
   guard). 0 Critical/High; 1 contingent Medium invalidated, 1 Low and
   1 Medium accepted and fixed; findings below.
+- **Wave 3** — 2026-11-11 — judge review of the centralized logging
+  infrastructure (compose.monitoring.yml, Alloy/Loki/Grafana configs,
+  provisioned dashboard). 0 Critical, 2 High, 2 Medium, 6 Low; findings
+  below.
 
 ---
 
@@ -343,3 +347,136 @@ with its technical justification.
   en/fa plural-key parity plus every `Intl.PluralRules('fa')` category per
   Persian plural message. No plural messages exist today, so the parity
   assertion is what keeps a one-locale plural addition visible.
+
+---
+
+## Wave 3 — Centralized logging infrastructure review (2026-11-11)
+
+Judge review of the monitoring stack configs (`compose.monitoring.yml`,
+`monitoring/alloy/config.alloy`, `monitoring/loki/loki.yml`,
+`monitoring/grafana/provisioning/**`, `monitoring/grafana/dashboards/api-logs.json`,
+`.env.monitoring.example`). 0 Critical, 2 High, 2 Medium, 6 Low — 10 findings.
+Remediation note: all resolutions below are implementation-level refinements
+inside the already-authorized architecture (no behavioral or architectural
+decision); per the root AGENTS.md approval rule these were handled directly,
+and the user can veto any of them before commit.
+
+### F1 — Missing per-container label enables out-of-order rejection at replica scale
+
+- **Status:** Resolved (2026-11-11 — applied: `container` label rule added)
+- **Severity:** High
+- **Category:** Correctness / Edge Case
+- **Locations:** `monitoring/alloy/config.alloy` (discovery.relabel "containers", loki.process "pino"); `monitoring/loki/loki.yml` (limits_config)
+- **Technical explanation:** the stream label set is `{env, service, level}`; two replicas of one service (e.g. `--scale api=2`) share one stream while entry timestamps come from each process's own pino clock via `stage.timestamp` (UnixMs). Loki 3.x rejects entries older than a stream's newest timestamp (`out_of_order_time_window` defaults to 0), and the push client drops the whole batch on 4xx.
+- **Failure scenario:** replica B's older-timestamped line pushed after replica A's newer line returns 400 "entry out of order"; the batch, including unrelated valid lines, is discarded — chronic silent loss exactly when scaling is used. A clock-skewed replica poisons the shared stream.
+- **Judge recommendation:** add a bounded per-container label (e.g. `container` = service-index), or set `out_of_order_time_window`.
+- **Investigation results:** valid. A `container` label keeps cardinality tiny (one per running container) and gives per-replica granularity, which also improves request-ID investigation (which replica served the request). The time-window alternative trades correctness for silent reordering — rejected.
+- **Agreed resolution:** applied — third relabel rule `container = "$2-$3"` (service-index from the container name).
+
+### F2 — Docker socket grants the Alloy container full daemon control
+
+- **Status:** Resolved (2026-11-11 — applied: `no-new-privileges`; proxy documented as production work)
+- **Severity:** High
+- **Category:** Security
+- **Locations:** `compose.monitoring.yml` (alloy service, docker.sock mount)
+- **Technical explanation:** `:ro` restricts the mount, not the Docker API; code execution inside the alloy container equals host-root control. Pinning, loopback-only ports, and the non-root user reduce exposure but do not reduce the privilege of a compromise.
+- **Failure scenario:** a compromised image or a malicious `config.alloy` edit creates a privileged container binding `/` — host takeover through the "read-only" socket.
+- **Judge recommendation:** accept as a documented local-only risk but reduce blast radius: a restricted read-only-API socket proxy, and `security_opt: ["no-new-privileges:true"]`; replace socket tailing entirely beyond a personal machine.
+- **Investigation results:** valid as a risk statement. A socket proxy (e.g. tecnativa/docker-socket-proxy) adds a required infrastructure component with its own maintenance and failure modes for a single-user learning stack — rejected now under YAGNI/KISS, recorded as a production requirement in the observability docs and learning guide (Chapter 8). `no-new-privileges` is free hardening.
+- **Agreed resolution:** applied — `security_opt: ['no-new-privileges:true']` on alloy; socket-proxy + alternatives documented as mandatory production work, not implemented.
+
+### F3 — Healthchecks assume tooling the images may not ship
+
+- **Status:** Resolved (2026-11-11 — superseded by empirical fixes; evidence recorded)
+- **Severity:** Medium
+- **Category:** Correctness
+- **Locations:** `compose.monitoring.yml` (healthchecks of loki, grafana, alloy)
+- **Technical explanation:** the judge assumed `grafana/loki` is Alpine-based with busybox `wget`, `grafana/grafana` ships `curl` not `wget`, and `grafana/alloy` may lack `wget` — permanent `unhealthy` status if absent.
+- **Failure scenario:** probes failing with "executable file not found" forever while services are fine; misleading status that defeats the probes' purpose.
+- **Judge recommendation:** verify per image; use curl for Grafana; keep wget only for loki.
+- **Investigation results:** premise partially incorrect — verified empirically in this environment: `grafana/loki:3.7.9` is distroless (no shell at all, so the judge's "keep wget for loki" is impossible); `grafana/grafana:13.2.5` DOES ship busybox `wget` and reported `healthy`; `grafana/alloy:v1.21.0` has no wget/curl (the judge's concern was correct here and had already been observed live — health stayed `starting`).
+- **Agreed resolution:** applied — alloy probe rewritten as a perl `IO::Socket::INET` HTTP request against `/-/ready` (perl is bundled); loki healthcheck removed with an explanatory comment (distroless; readiness checked from the host: `curl http://127.0.0.1:3100/ready`); grafana wget verified working and kept.
+
+### F4 — Service variable uses an undocumented `label_values` form
+
+- **Status:** Resolved (2026-11-11 — applied: brace form)
+- **Severity:** Medium
+- **Category:** Correctness
+- **Locations:** `monitoring/grafana/dashboards/api-logs.json` (templating `service` variable)
+- **Technical explanation:** `label_values(env=~"$env", service)` is not one of the documented Loki variable query forms (`label_values(label)` or `label_values({stream selector}, label)`); behavior on the brace-less matcher form is undocumented and may 400.
+- **Failure scenario:** the Service dropdown never populates; every panel query interpolating `$service` degrades or shows no data.
+- **Judge recommendation:** use the documented form `label_values({env=~"$env"}, service)` and verify the dropdown populates.
+- **Investigation results:** valid — the brace form is the documented variant and reads unambiguously.
+- **Agreed resolution:** applied — `definition`/`query` switched to `label_values({env=~"$env"}, service)`; dropdown population is part of the verification checklist in `docs/observability/manual-testing.md`.
+
+### F5 — Containers with an explicit `container_name` would be ingested unlabeled and invisible
+
+- **Status:** Resolved (2026-11-11 — applied: `keep` guard rule)
+- **Severity:** Low
+- **Category:** Edge Case
+- **Locations:** `monitoring/alloy/config.alloy` (discovery.relabel "containers")
+- **Technical explanation:** `env`/`service` derive solely from the `<project>-<service>-<index>` name regex; a container with an explicit `container_name:` (still matching the project filter) matches no rule and is ingested without labels — invisible to every positive-matcher panel and to `label_values(env)`.
+- **Failure scenario:** someone adds `container_name: api` to an app service; its logs silently vanish from all dashboards.
+- **Judge recommendation:** fallback relabel rule, or document that `container_name` must not be used in the app compose files.
+- **Investigation results:** a true fallback is not expressible in relabel (a later `replace` would overwrite the primary rule's result); the consistent alternative is a `keep` guard: entries whose container name does not match the expected pattern are dropped at ingestion instead of being stored unlabeled. The repo's compose files set no `container_name`, so nothing is dropped today.
+- **Agreed resolution:** applied — leading `keep` rule on `__meta_docker_container_name` (regex `/neo-bank-(dev|prod)-.*`), making the failure mode consistent and observable in Alloy's dropped-entries metrics; naming constraint documented in the guide's Alloy chapter.
+
+### F6 — "Errors and fatals" panel structurally excludes plain-text error lines
+
+- **Status:** Resolved (2026-11-11 — applied: panel retitled and description scoped)
+- **Severity:** Low
+- **Category:** Edge Case
+- **Locations:** `monitoring/grafana/dashboards/api-logs.json` (panel 3; panel 1 legend)
+- **Technical explanation:** only pino-parsed API lines carry the `level` label; PostgreSQL/Redis/frontends log plain text. Panel 3 (`level=~"error|fatal"`) can never show their fatal lines, and `sum by (level)` renders an empty legend series for level-less streams.
+- **Failure scenario:** PostgreSQL fails loudly with plain-text fatal lines; the errors panel shows nothing from it while panel 1 grows an anonymous series — misleading triage.
+- **Judge recommendation:** qualify the panel title/description, or add per-service level parsing (`stage.match`).
+- **Investigation results:** per-service parsing rules add pipeline complexity for logs outside the API's structured contract — rejected (KISS/YAGNI). Honest labeling is the right fix for the initial dashboard; per-service parsing is listed as a learning exercise in the guide (Chapter 10, advanced).
+- **Agreed resolution:** applied — panel 3 retitled "API errors and fatals (structured `level` label)" with an explicit description; panel 1 description notes level-less services appear under an empty legend entry.
+
+### F7 — Discovered Compose project names are hard-coded in two places
+
+- **Status:** Won't Fix (justification) — documented instead
+- **Severity:** Low
+- **Category:** Edge Case
+- **Locations:** `monitoring/alloy/config.alloy` (discovery.docker filter + relabel regex)
+- **Technical explanation:** `neo-bank-dev`/`neo-bank-prod` appear as literals in the discovery filter and the relabel regex; starting a stack under a different project name yields zero discovered containers and a silent no-data state.
+- **Failure scenario:** `docker compose -p local up` → Loki stays empty, dashboards show "No data", Alloy logs nothing alarming.
+- **Judge recommendation:** document the constraint next to the start scripts and/or derive the names from environment variables (`std.getenv`).
+- **Investigation results:** the project names are fixed repo-wide constants (`name:` in compose.dev/prod.yml and the documented scripts); deriving them through Alloy env plumbing adds indirection for a configuration that is not actually variable (YAGNI). The residual risk is a renamed/extra stack, covered by documentation of the failure mode in the ops README troubleshooting section and the learning guide's Alloy debugging section (which also covers the Alloy debug UI on the internal :12345).
+- **Agreed resolution:** Won't Fix — constraint and diagnosis path documented; literals stay.
+
+### F8 — Anonymous usage telemetry is enabled by default in Loki and Grafana
+
+- **Status:** Resolved (2026-11-11 — applied: reporting disabled)
+- **Severity:** Low
+- **Category:** Security (privacy)
+- **Locations:** `monitoring/loki/loki.yml` (no analytics block); `compose.monitoring.yml` (grafana environment)
+- **Technical explanation:** Loki 3.x reports anonymous usage stats by default (`analytics.report_enabled: true`); Grafana phones home (usage reporting, update checks) by default — the stack's only built-in egress despite its otherwise isolated design.
+- **Failure scenario:** a deliberately network-isolated local stack periodically sends machine/version/usage telemetry to third-party endpoints.
+- **Judge recommendation:** `analytics: { report_enabled: false }` in loki.yml; `GF_ANALYTICS_REPORTING_ENABLED: 'false'` (plus the update-check equivalent) in the grafana environment.
+- **Investigation results:** valid; zero-cost change consistent with the isolation intent.
+- **Agreed resolution:** applied — `analytics.report_enabled: false` in loki.yml; `GF_ANALYTICS_REPORTING_ENABLED: 'false'` and `GF_ANALYTICS_CHECK_FOR_UPDATES: 'false'` on grafana (verified warning-free at startup in verification).
+
+### F9 — Grafana port binds all interfaces; admin password readable via docker inspect
+
+- **Status:** Resolved (2026-11-11 — applied: loopback bind; `__FILE` documented)
+- **Severity:** Low
+- **Category:** Security
+- **Locations:** `compose.monitoring.yml` (grafana.ports); `.env.monitoring.example` (GRAFANA_ADMIN_PASSWORD)
+- **Technical explanation:** `'${GRAFANA_PORT:-3002}:3000'` binds 0.0.0.0, making the admin UI LAN-reachable; the admin password travels as a plain env var readable via `docker inspect`.
+- **Failure scenario:** on a shared network, anyone reaching :3002 faces only the (unthrottled) Grafana login; anyone with Docker access reads the password from inspect — largely moot locally (socket access already equals root) but free to reduce.
+- **Judge recommendation:** bind loopback; switch to `GF_SECURITY_ADMIN_PASSWORD__FILE` beyond a personal laptop.
+- **Investigation results:** loopback binding is consistent with the Loki port decision and costs nothing locally. The `__FILE` variant is a deployment-topology concern — documented as production work.
+- **Agreed resolution:** applied — `'127.0.0.1:${GRAFANA_PORT:-3002}:3000'`; file-based secret noted in docs as a production requirement.
+
+### F10 — Redundant trailing `$` in anchored relabel regexes
+
+- **Status:** Resolved (2026-11-11 — applied)
+- **Severity:** Low
+- **Category:** Syntax / Code Quality
+- **Locations:** `monitoring/alloy/config.alloy` (both relabel rules)
+- **Technical explanation:** Prometheus-style relabel regexes are compiled fully anchored; the trailing `$` implies anchoring behaves differently than it does.
+- **Failure scenario:** none — readability only.
+- **Judge recommendation:** drop the `$` (or anchor consistently and explicitly everywhere).
+- **Investigation results:** valid; dropped in the two existing rules and not introduced in the new rules from F1/F5.
+- **Agreed resolution:** applied.

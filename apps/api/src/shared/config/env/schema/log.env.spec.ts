@@ -33,6 +33,30 @@ describe('logEnvSchema', () => {
 
     expect(result.success).toBe(false);
   });
+
+  it('leaves LOG_PRETTY undefined when unset so the default pretty behavior applies', () => {
+    const result = logEnvSchema.safeParse({ LOG_LEVEL: 'info' });
+
+    expect(result.success).toBe(true);
+    expect(result.success && result.data.LOG_PRETTY).toBeUndefined();
+  });
+
+  it('transforms the exact strings "true" and "false" into booleans', () => {
+    const truthy = logEnvSchema.parse({ LOG_PRETTY: 'true' });
+    const falsy = logEnvSchema.parse({ LOG_PRETTY: 'false' });
+
+    expect(truthy.LOG_PRETTY).toBe(true);
+    expect(falsy.LOG_PRETTY).toBe(false);
+  });
+
+  it('rejects values other than the exact strings "true" and "false"', () => {
+    const result = logEnvSchema.safeParse({ LOG_PRETTY: '1' });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(zodMessage(result.error)).toContain('LOG_PRETTY must be exactly "true" or "false".');
+    }
+  });
 });
 
 function zodMessage(error: { issues: { message: string }[] }): string {

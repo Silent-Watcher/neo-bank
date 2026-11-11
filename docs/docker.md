@@ -20,10 +20,13 @@ development Compose stack (`compose.dev.yml`) remains for local development
 | `apps/<app>/Dockerfile.*.dockerignore` | Per-Dockerfile build-context ignores (used _instead of_ the root file, not merged with it) |
 | `compose.dev.yml`                      | Development stack (`neo-bank-dev` project)                                                 |
 | `compose.prod.yml`                     | Production stack (`neo-bank-prod` project)                                                 |
+| `compose.monitoring.yml`               | Monitoring stack: Grafana, Loki, Alloy (`neo-bank-monitoring` project)                     |
+| `monitoring/`                          | Config as code for the monitoring stack (Alloy pipeline, Loki, Grafana provisioning)       |
 | `.dockerignore`                        | Root build-context ignore                                                                  |
 | `.env.docker.example`                  | Template for the interpolation files below                                                 |
 | `.env.docker.dev`                      | Interpolation values for `compose.dev.yml` (gitignored)                                    |
 | `.env.docker.prod`                     | Interpolation values for `compose.prod.yml` (gitignored)                                   |
+| `.env.monitoring.example`              | Template for `.env.monitoring`, the monitoring stack's interpolation file (gitignored)     |
 
 ## Environment Files
 
@@ -35,7 +38,10 @@ environments:
   (production), each copied from `.env.docker.example`, provide values for
   `${VARIABLE}` placeholders in the Compose files themselves: host ports,
   PostgreSQL credentials, and the Redis password. Pass them explicitly with
-  `--env-file .env.docker.dev` or `--env-file .env.docker.prod`.
+  `--env-file .env.docker.dev` or `--env-file .env.docker.prod`. The
+  monitoring stack uses its own file, `.env.monitoring` (copied from
+  `.env.monitoring.example`): the Grafana admin password, the Grafana host
+  port, and the host's Docker-socket group ID (see the monitoring section).
 - **Container configuration** — `env_file:` injects the applications' own env
   files into their containers: `apps/api/env/.env.development` (dev) and
   `apps/api/env/.env.production` (prod, create it from `apps/api/env/.env.example`).
@@ -84,16 +90,68 @@ docker compose --env-file .env.docker.prod -f compose.prod.yml ps
 Add `-v` to `down` to remove the PostgreSQL data volume (development data
 lives in the named `postgres_dev_data` / `postgres_prod_data` volumes).
 
+**Monitoring (independent of both application stacks):**
+
+```sh
+cp .env.monitoring.example .env.monitoring   # set GRAFANA_ADMIN_PASSWORD + DOCKER_GID
+pnpm docker:monitoring                       # Grafana, Loki, Alloy in the background
+pnpm docker:monitoring:logs                  # follow monitoring container logs
+pnpm docker:monitoring:down
+```
+
+See [`docs/observability/README.md`](./observability/README.md) for the full
+operational guide and the Persian learning guide for how the pipeline works.
+
 ## Ports
 
-| Service       | Container            | Host (interpolation variable)          | Exposed in production          |
-| ------------- | -------------------- | -------------------------------------- | ------------------------------ |
-| API           | 3001                 | `${API_PORT}` (default 3001)           | yes                            |
-| Web           | 3000                 | `${WEB_PORT}` (default 3000)           | yes                            |
-| Admin         | 5173 dev / 8080 prod | `${ADMIN_PORT}` (default 5173/8080)    | yes                            |
-| PostgreSQL    | 5432                 | `${POSTGRES_PORT}` (default 5432)      | **no** (internal network only) |
-| Redis         | 6379                 | `${REDIS_PORT}` (default 6379)         | **no** (internal network only) |
-| Redis Insight | 8001                 | `${REDIS_INSIGHT_PORT}` (default 8001) | **no** (development only)      |
+| Service       | Container            | Host (interpolation variable)              | Exposed in production                    |
+| ------------- | -------------------- | ------------------------------------------ | ---------------------------------------- |
+| API           | 3001                 | `${API_PORT}` (default 3001)               | yes                                      |
+| Web           | 3000                 | `${WEB_PORT}` (default 3000)               | yes                                      |
+| Admin         | 5173 dev / 8080 prod | `${ADMIN_PORT}` (default 5173/8080)        | yes                                      |
+| PostgreSQL    | 5432                 | `${POSTGRES_PORT}` (default 5432)          | **no** (internal network only)           |
+| Redis         | 6379                 | `${REDIS_PORT}` (default 6379)             | **no** (internal network only)           |
+| Redis Insight | 8001                 | `${REDIS_INSIGHT_PORT}` (default 8001)     | **no** (development only)                |
+| Grafana       | 3000                 | `127.0.0.1:${GRAFANA_PORT}` (default 3002) | **no** (monitoring stack; loopback only) |
+| Loki          | 3100                 | `127.0.0.1:${LOKI_PORT}` (default 3100)    | **no** (monitoring stack; loopback only) |
+
+The monitoring ports are bound to `127.0.0.1` explicitly: Grafana (UI) and
+Loki (for LogQL exercises via curl) are reachable from the host only, never
+from the network. Alloy has no port on the host at all — its debug UI is
+reachable only inside the monitoring network.
+
+## Container Log Rotation
+
+Every service in all three Compose files sets bounded json-file logging
+(`max-size: 10m`, `max-file: 3`) through the shared `x-logging` anchor, so a
+noisy container cannot grow the host disk without limit (each container
+holds at most ~30 MB of log files; rotation applies per file, so up to three
+files per container). Without this, the Docker default keeps logs forever.
+
+## Monitoring Stack
+
+The monitoring stack (`compose.monitoring.yml`, ADR-022) runs three
+version-pinned services on an isolated network, fully independent of the
+application stacks: Grafana Alloy collects the dev/prod containers' logs
+through the Docker socket, Loki stores them (7-day retention, named volume),
+and Grafana serves the provisioned dashboard at
+`http://localhost:${GRAFANA_PORT:-3002}`. Details, operations, and
+troubleshooting: [`docs/observability/README.md`](./observability/README.md);
+the Persian learning guide explains the whole pipeline. The stack requires
+`DOCKER_GID` in `.env.monitoring` (the host docker group id — find it with
+`stat -c %g /var/run/docker.sock`) so Alloy can read the socket without
+running as root. Because Alloy tails the dev/prod containers through the
+Docker API, the monitoring stack works regardless of which application
+stacks are up, and stopping monitoring never affects the applications.
+
+## Structured Logs in Dev Containers
+
+The API emits `pino-pretty` (human-formatted) logs whenever `APP_ENV=development` — except when `LOG_PRETTY=false` is set. The development
+Compose stack sets `LOG_PRETTY: 'false'` for the `api` service only, so the
+containerized API logs structured JSON that the centralized pipeline parses
+(level labels, timestamps), while host-side `pnpm dev` keeps the pretty
+format. The variable is optional and documented in `apps/api/env/.env.example`
+(ADR-022).
 
 ## Redis Insight
 

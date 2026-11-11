@@ -98,6 +98,10 @@ repository (not a Turbo task), so formatting is repository-wide.
   `apps/api/src/shared/config/env/env.config.ts` (ADR-004, enforced by the
   oxlint `no-process-env` rule with a single override). All other
   configuration access goes through `ConfigService` and namespaced factories.
+- **Logging boundary:** the Pino logger (ADR-008/009) is the only logging
+  architecture. The centralized pipeline (ADR-022) collects container
+  stdout as-is — it never replaces the application logger, and the optional
+  `LOG_PRETTY` env override is the single compatibility knob.
 - **Bootstrap boundary (API):** all bootstrap-time HTTP configuration (Fastify
   adapter options, global prefix, URI versioning, CORS) lives in the
   `bootstrap` function in `apps/api/src/main.ts` and must not be extracted.
@@ -122,6 +126,11 @@ repository (not a Turbo task), so formatting is repository-wide.
   Consumers: the enrollments challenge (OTP storage) and global HTTP rate
   limiting (ADR-015) — both use the shared connection and the standardized
   key naming convention.
+- **Applications ↔ observability:** none at runtime. The monitoring stack
+  (`compose.monitoring.yml`, ADR-022) is a separate Compose project with its
+  own network; Grafana Alloy collects container stdout/stderr through the
+  Docker daemon socket and ships it to Loki, so applications neither know
+  about monitoring nor depend on it. Details: `docs/observability/README.md`.
 
 ## Current Architectural Limitations
 
