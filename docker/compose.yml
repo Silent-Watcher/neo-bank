@@ -1,8 +1,8 @@
-# Development environment orchestrator: runs app stack (compose.dev.yml) and
+# Development environment orchestrator: runs app stack (compose.app.dev.yml) and
 # monitoring stack (compose.monitoring.yml) together in Docker Desktop.
 #
 # Usage:
-#   docker compose --env-file .env.docker.dev --env-file .env.monitoring up --build
+#   docker compose --env-file docker/env/.env.docker.dev --env-file docker/env/.env.monitoring up --build
 #
 # This file uses `include` to compose both stacks into a single project.
 # Services are grouped by their compose file origin, visible in Docker Desktop

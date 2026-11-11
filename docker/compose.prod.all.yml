@@ -1,8 +1,8 @@
-# Production environment orchestrator: runs app stack (compose.prod.yml) and
+# Production environment orchestrator: runs app stack (compose.app.prod.yml) and
 # monitoring stack (compose.monitoring.yml) together.
 #
 # Usage:
-#   docker compose --env-file .env.docker.prod --env-file .env.monitoring -f compose.prod.all.yml up -d
+#   docker compose --env-file docker/env/.env.docker.prod --env-file docker/env/.env.monitoring -f docker/compose.prod.all.yml up -d
 #
 # This file uses `include` to compose both stacks into a single project.
 # Unlike development, both stacks run with production hardening and network

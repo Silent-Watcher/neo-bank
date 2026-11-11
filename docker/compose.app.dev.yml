@@ -2,8 +2,8 @@
 # PostgreSQL and Redis for local development tools.
 #
 # Compose variable interpolation values come from an explicit env file
-# (copy .env.docker.example to .env.docker.dev and adjust):
-#   docker compose --env-file .env.docker.dev -f compose.dev.yml up --build
+# (copy docker/env/.env.docker.example to docker/env/.env.docker.dev and adjust):
+#   docker compose --env-file docker/env/.env.docker.dev -f docker/compose.app.dev.yml up --build
 #
 # Application-internal configuration is injected via `env_file` (the apps'
 # own env files), not duplicated here. Only values that must differ from the
@@ -23,18 +23,18 @@ x-logging: &default-logging
 services:
   api:
     build:
-      context: .
+      context: ..
       dockerfile: apps/api/Dockerfile.dev
     env_file:
-      - apps/api/env/.env.development
+      - ../apps/api/env/.env.development
     environment:
       # Containers reach each other by service name, never localhost. The
-      # Redis credentials come from .env.docker.dev so the container topology is
+      # Redis credentials come from docker/env/.env.docker.dev so the container topology is
       # independent of host-local values in the app env file (compose
       # `environment` takes precedence over `env_file`).
       REDIS_URL: redis://redis:6379
       REDIS_USERNAME: default
-      REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD is required in .env.docker.dev}
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD is required in docker/env/.env.docker.dev}
       # Host-accessible Redis Insight URL (ADR-020), logged at API startup.
       # Set only here: the API never advertises an address it cannot know
       # exists, so local non-Docker development and production log nothing.
@@ -46,7 +46,7 @@ services:
     volumes:
       # Source bind mount for hot reloading; the named volumes keep the
       # container-installed node_modules from being shadowed by the host's.
-      - .:/repo
+      - ..:/repo
       - root_node_modules:/repo/node_modules
       - api_node_modules:/repo/apps/api/node_modules
       - web_node_modules:/repo/apps/web/node_modules
@@ -74,10 +74,10 @@ services:
 
   web:
     build:
-      context: .
+      context: ..
       dockerfile: apps/web/Dockerfile.dev
     volumes:
-      - .:/repo
+      - ..:/repo
       - root_node_modules:/repo/node_modules
       - api_node_modules:/repo/apps/api/node_modules
       - web_node_modules:/repo/apps/web/node_modules
@@ -100,7 +100,7 @@ services:
 
   admin:
     build:
-      context: .
+      context: ..
       dockerfile: apps/admin/Dockerfile.dev
     # Vite must listen on all interfaces inside the container.
     # Vite must listen on all interfaces inside the container; pnpm forwards
@@ -108,7 +108,7 @@ services:
     # and Vite would stop flag parsing at it).
     command: ['pnpm', 'dev', '--host', '0.0.0.0']
     volumes:
-      - .:/repo
+      - ..:/repo
       - root_node_modules:/repo/node_modules
       - api_node_modules:/repo/apps/api/node_modules
       - web_node_modules:/repo/apps/web/node_modules
@@ -133,7 +133,7 @@ services:
     image: postgres:17.6-alpine
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-neo_bank}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required in .env.docker.dev}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required in docker/env/.env.docker.dev}
       POSTGRES_DB: ${POSTGRES_DB:-neo_bank}
     volumes:
       - postgres_dev_data:/var/lib/postgresql/data
@@ -153,11 +153,11 @@ services:
     # The Stack entrypoint starts redis-server plus the bundled modules and
     # Redis Insight; server args are passed through REDIS_ARGS (ADR-020).
     environment:
-      REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD is required in .env.docker.dev}
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD is required in docker/env/.env.docker.dev}
       REDIS_ARGS: >-
         --save ''
         --appendonly no
-        --requirepass ${REDIS_PASSWORD:?REDIS_PASSWORD is required in .env.docker.dev}
+        --requirepass ${REDIS_PASSWORD:?REDIS_PASSWORD is required in docker/env/.env.docker.dev}
     ports:
       - '${REDIS_PORT:-6379}:6379'
       # Redis Insight, bundled in the Stack image (ADR-020): development only.

@@ -1,0 +1,14 @@
+{
+  "name": "@caveman/skill-caveman-explore",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Read-only FastContext exploration skill with parallel repository search and citation-only output.",
+  "license": "Apache-2.0",
+  "files": [
+    "SKILL.md"
+  ],
+  "type": "module",
+  "scripts": {
+    "test": "node --test --test-force-exit tests/*.mjs"
+  }
+}
