@@ -16,8 +16,7 @@
 !**/.env.example
 *.log
 logs/
-compose.dev.yml
-compose.prod.yml
+docker/
 docs/
 prompts/
 .agents/

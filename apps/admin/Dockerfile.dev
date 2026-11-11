@@ -1,5 +1,5 @@
 # Development image for the Vite admin app. Dependencies are baked into the
-# image; source is bind-mounted by compose.dev.yml, so edits hot-reload
+# image; source is bind-mounted by docker/compose.app.dev.yml, so edits hot-reload
 # through the existing `pnpm dev` script without rebuilding the image.
 FROM node:24.20.0-slim
 
@@ -15,5 +15,5 @@ RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
     pnpm install --frozen-lockfile
 
 WORKDIR /repo/apps/admin
-# The host flag is added by compose.dev.yml so Vite listens on 0.0.0.0.
+# The host flag is added by docker/compose.app.dev.yml so Vite listens on 0.0.0.0.
 CMD ["pnpm", "dev"]

@@ -5,12 +5,12 @@ Each scenario states the steps and the expected result. The "Verification
 log" at the bottom records what was actually executed, when, and with what
 outcome — keep it updated when scenarios are re-run.
 
-Prerequisites: `.env.monitoring` created (see README), Docker running.
+Prerequisites: `docker/env/.env.monitoring` created (see README), Docker running.
 
 Helper shorthand used below:
 
 ```sh
-DM='docker compose --env-file .env.monitoring -f compose.monitoring.yml'
+DM='docker compose --env-file docker/env/.env.monitoring -f docker/compose.monitoring.yml'
 ```
 
 ## S1 — Full pipeline: container → Alloy → Loki → Grafana
@@ -73,7 +73,7 @@ the body.
 
 ## S4 — Monitoring outage does not affect the API; recovery is lossless
 
-1. With traffic flowing, `docker compose --env-file .env.monitoring -f compose.monitoring.yml stop loki`.
+1. With traffic flowing, `docker compose --env-file docker/env/.env.monitoring -f docker/compose.monitoring.yml stop loki`.
 2. `curl -fsS http://localhost:3001/health` repeatedly; hit the API with
    requests for ~1 minute; check `pnpm docker:monitoring:logs` (Alloy shows
    push errors/retries, API unaffected).

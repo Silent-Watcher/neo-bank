@@ -247,7 +247,7 @@ Docker Compose is orchestrated from the repository root, not from this workspace
 
 **Prerequisites:**
 
-- Copy `.env.docker.example` to `.env.docker.dev` (development) or `.env.docker.prod` (production) at repo root and set `POSTGRES_PASSWORD` and `REDIS_PASSWORD`
+- Copy `docker/env/.env.docker.example` to `docker/env/.env.docker.dev` (development) or `docker/env/.env.docker.prod` (production) and set `POSTGRES_PASSWORD` and `REDIS_PASSWORD`
 - For production, create `apps/api/env/.env.production` from `apps/api/env/.env.example`
 
 From the repo root, `pnpm test` runs unit + e2e for all workspaces through

@@ -1,6 +1,6 @@
 # Observability: Centralized Logging (Grafana + Loki + Alloy)
 
-Operations guide for the monitoring stack defined in `compose.monitoring.yml`
+Operations guide for the monitoring stack defined in `docker/compose.monitoring.yml`
 (ADR-022). Reproducible verification scenarios:
 [`manual-testing.md`](./manual-testing.md). Future stages: the observability
 roadmap — [`roadmap.md`](./roadmap.md).
@@ -20,8 +20,8 @@ dependency on monitoring.
 ## Setup
 
 ```sh
-cp .env.monitoring.example .env.monitoring
-# then edit .env.monitoring:
+cp docker/env/.env.monitoring.example docker/env/.env.monitoring
+# then edit docker/env/.env.monitoring:
 #   GRAFANA_ADMIN_PASSWORD  — required, no default
 #   DOCKER_GID              — required: stat -c %g /var/run/docker.sock
 ```
@@ -36,8 +36,8 @@ read the socket without running as root.
 pnpm docker:monitoring          # start (docker compose ... up -d)
 pnpm docker:monitoring:logs     # follow monitoring container logs
 pnpm docker:monitoring:down     # stop (volumes are kept)
-docker compose --env-file .env.monitoring -f compose.monitoring.yml ps
-docker compose --env-file .env.monitoring -f compose.monitoring.yml restart alloy
+docker compose --env-file docker/env/.env.monitoring -f docker/compose.monitoring.yml ps
+docker compose --env-file docker/env/.env.monitoring -f docker/compose.monitoring.yml restart alloy
 ```
 
 Volumes (all named, all survive `down`; never run `down -v` on this stack):
@@ -50,7 +50,7 @@ that prevents re-ingestion after restarts).
 1. Start any application stack (e.g. `pnpm docker:dev`) and the monitoring
    stack.
 2. Open <http://localhost:3002> and sign in with `GRAFANA_ADMIN_USER` /
-   `GRAFANA_ADMIN_PASSWORD` from `.env.monitoring`.
+   `GRAFANA_ADMIN_PASSWORD` from `docker/env/.env.monitoring`.
 3. The `Neo Bank API Logs` dashboard (folder "Neo Bank") is provisioned
    automatically; the Loki data source is preconfigured (uid `loki`).
 4. Generate traffic (`curl http://localhost:3001/health`, the enrollments
@@ -75,14 +75,14 @@ other per-request values live in the log body only — never as labels.
 
 ## Troubleshooting
 
-| Symptom                          | Check                                                                                                                                                                                                                                           |
-| -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Dashboard shows "No data"        | `docker compose --env-file .env.monitoring -f compose.monitoring.yml ps`; is Alloy up? Is the app stack running under its standard project name (`neo-bank-dev`/`neo-bank-prod` — Alloy discovers exactly these)?                               |
-| Alloy not collecting a container | Alloy debug UI (internal): `docker compose --env-file .env.monitoring -f compose.monitoring.yml exec alloy wget -qO- http://127.0.0.1:12345/metrics \| grep loki_source_docker` — or check `docker logs neo-bank-monitoring-alloy-1`            |
-| Loki unreachable                 | Loki has no in-container healthcheck (distroless image): verify from the host with `curl -fsS http://127.0.0.1:3100/ready`; check `docker logs neo-bank-monitoring-loki-1`                                                                      |
-| Logs stop after Loki downtime    | They resume: Alloy keeps tailing and retries pushes. Verify with `curl -fsS 'http://127.0.0.1:3100/loki/api/v1/labels'` after recovery                                                                                                          |
-| Grafana login rejected           | `GRAFANA_ADMIN_USER`/`PASSWORD` changed in `.env.monitoring` but Grafana volume already holds the old admin user — the env credentials only seed the first start; reset via Grafana CLI or recreate the volume (destroys UI-created dashboards) |
-| Duplicate-looking entries        | Loki rejects exact duplicates (same stream + timestamp + line); apparent repeats are usually genuinely repeated log emissions (e.g. nest restart) — compare `time` and `reqId` in the JSON body                                                 |
+| Symptom                          | Check                                                                                                                                                                                                                                                      |
+| -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Dashboard shows "No data"        | `docker compose --env-file docker/env/.env.monitoring -f docker/compose.monitoring.yml ps`; is Alloy up? Is the app stack running under its standard project name (`neo-bank-dev`/`neo-bank-prod` — Alloy discovers exactly these)?                        |
+| Alloy not collecting a container | Alloy debug UI (internal): `docker compose --env-file docker/env/.env.monitoring -f docker/compose.monitoring.yml exec alloy wget -qO- http://127.0.0.1:12345/metrics \| grep loki_source_docker` — or check `docker logs neo-bank-monitoring-alloy-1`     |
+| Loki unreachable                 | Loki has no in-container healthcheck (distroless image): verify from the host with `curl -fsS http://127.0.0.1:3100/ready`; check `docker logs neo-bank-monitoring-loki-1`                                                                                 |
+| Logs stop after Loki downtime    | They resume: Alloy keeps tailing and retries pushes. Verify with `curl -fsS 'http://127.0.0.1:3100/loki/api/v1/labels'` after recovery                                                                                                                     |
+| Grafana login rejected           | `GRAFANA_ADMIN_USER`/`PASSWORD` changed in `docker/env/.env.monitoring` but Grafana volume already holds the old admin user — the env credentials only seed the first start; reset via Grafana CLI or recreate the volume (destroys UI-created dashboards) |
+| Duplicate-looking entries        | Loki rejects exact duplicates (same stream + timestamp + line); apparent repeats are usually genuinely repeated log emissions (e.g. nest restart) — compare `time` and `reqId` in the JSON body                                                            |
 
 ## Security notes (local environment)
 
@@ -93,7 +93,7 @@ other per-request values live in the log body only — never as labels.
 - Grafana and Loki are bound to `127.0.0.1` only. Alloy has no host port.
 - No telemetry egress: Loki `analytics.report_enabled: false`, Grafana
   usage reporting and update checks disabled.
-- Admin credentials live in `.env.monitoring` (gitignored). A deployment
+- Admin credentials live in `docker/env/.env.monitoring` (gitignored). A deployment
   beyond a laptop should use file-based secrets
   (`GF_SECURITY_ADMIN_PASSWORD__FILE`) and TLS in front of Grafana.
 - The API's log redaction (authorization/cookie headers) happens in the

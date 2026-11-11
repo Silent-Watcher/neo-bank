@@ -78,8 +78,9 @@ Core contracts:
 
 ## Infrastructure
 
-- **Docker:** dev/prod Compose stacks (base `compose.yml` +
-  `compose.app.dev.yml` / `compose.app.prod.yml` / `compose.prod.all.yml`,
+- **Docker:** dev/prod Compose stacks in `docker/` (base `docker/compose.yml` +
+  `docker/compose.app.dev.yml` / `docker/compose.app.prod.yml` /
+  `docker/compose.prod.all.yml`, interpolation env files in `docker/env/`,
   per-app images via `turbo prune`), PostgreSQL + Redis; dev Redis is Redis
   Stack with bundled Redis Insight :8001 (ADR-020). Ops: `docs/docker.md`.
 - **Monitoring:** independent Compose stack (ADR-022) — Grafana :3002 (loopback),

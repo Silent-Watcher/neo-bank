@@ -127,7 +127,7 @@ repository (not a Turbo task), so formatting is repository-wide.
   limiting (ADR-015) — both use the shared connection and the standardized
   key naming convention.
 - **Applications ↔ observability:** none at runtime. The monitoring stack
-  (`compose.monitoring.yml`, ADR-022) is a separate Compose project with its
+  (`docker/compose.monitoring.yml`, ADR-022) is a separate Compose project with its
   own network; Grafana Alloy collects container stdout/stderr through the
   Docker daemon socket and ships it to Loki, so applications neither know
   about monitoring nor depend on it. Details: `docs/observability/README.md`.

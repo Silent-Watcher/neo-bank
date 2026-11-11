@@ -18,17 +18,20 @@ development Compose stack remains for local development
 | `apps/<app>/Dockerfile.dev`            | Development image (dependencies only; source is bind-mounted)                                                   |
 | `apps/<app>/Dockerfile.prod`           | Production image (multi-stage, non-root, minimal)                                                               |
 | `apps/<app>/Dockerfile.*.dockerignore` | Per-Dockerfile build-context ignores (used _instead of_ the root file, not merged with it)                      |
-| `compose.yml`                          | Development orchestrator: `include:` of the dev app stack and the monitoring stack into one `docker compose up` |
-| `compose.app.dev.yml`                  | Development app stack: all three apps with hot reloading plus PostgreSQL and Redis (`neo-bank-dev` project)     |
-| `compose.app.prod.yml`                 | Production app stack: hardened images, internal networks (`neo-bank-prod` project)                              |
-| `compose.prod.all.yml`                 | Production orchestrator: `include:` of the production app stack and the monitoring stack                        |
-| `compose.monitoring.yml`               | Monitoring stack: Grafana, Loki, Alloy (`neo-bank-monitoring` project)                                          |
+| `docker/compose.yml`                   | Development orchestrator: `include:` of the dev app stack and the monitoring stack into one `docker compose up` |
+| `docker/compose.app.dev.yml`           | Development app stack: all three apps with hot reloading plus PostgreSQL and Redis (`neo-bank-dev` project)     |
+| `docker/compose.app.prod.yml`          | Production app stack: hardened images, internal networks (`neo-bank-prod` project)                              |
+| `docker/compose.prod.all.yml`          | Production orchestrator: `include:` of the production app stack and the monitoring stack                        |
+| `docker/compose.monitoring.yml`        | Monitoring stack: Grafana, Loki, Alloy (`neo-bank-monitoring` project)                                          |
 | `monitoring/`                          | Config as code for the monitoring stack (Alloy pipeline, Loki, Grafana provisioning)                            |
 | `.dockerignore`                        | Root build-context ignore                                                                                       |
-| `.env.docker.example`                  | Template for the interpolation files below                                                                      |
-| `.env.docker.dev`                      | Interpolation values for the development Compose files (gitignored)                                             |
-| `.env.docker.prod`                     | Interpolation values for the production Compose files (gitignored)                                              |
-| `.env.monitoring.example`              | Template for `.env.monitoring`, the monitoring stack's interpolation file (gitignored)                          |
+| `docker/env/.env.docker.example`       | Template for the interpolation files below                                                                      |
+| `docker/env/.env.docker.dev`           | Interpolation values for the development Compose files (gitignored)                                             |
+| `docker/env/.env.docker.prod`          | Interpolation values for the production Compose files (gitignored)                                              |
+| `docker/env/.env.monitoring.example`   | Template for `docker/env/.env.monitoring`, the monitoring stack's interpolation file (gitignored)               |
+
+All Compose files live in `docker/`; the interpolation env files they consume
+live in `docker/env/`.
 
 ## Environment Files
 
@@ -36,14 +39,17 @@ Two distinct mechanisms, deliberately kept separate — and development and
 production use separate interpolation files so credentials never leak across
 environments:
 
-- **Interpolation** — `.env.docker.dev` (development) and `.env.docker.prod`
-  (production), each copied from `.env.docker.example`, provide values for
-  `${VARIABLE}` placeholders in the Compose files themselves: host ports,
-  PostgreSQL credentials, and the Redis password. Pass them explicitly with
-  `--env-file .env.docker.dev` or `--env-file .env.docker.prod`. The
-  monitoring stack uses its own file, `.env.monitoring` (copied from
-  `.env.monitoring.example`): the Grafana admin password, the Grafana host
-  port, and the host's Docker-socket group ID (see the monitoring section).
+- **Interpolation** — `docker/env/.env.docker.dev` (development) and
+  `docker/env/.env.docker.prod` (production), each copied from
+  `docker/env/.env.docker.example`, provide values for `${VARIABLE}`
+  placeholders in the Compose files themselves: host ports, PostgreSQL
+  credentials, and the Redis password. Pass them explicitly with
+  `--env-file docker/env/.env.docker.dev` or
+  `--env-file docker/env/.env.docker.prod`. The monitoring stack uses its own
+  file, `docker/env/.env.monitoring` (copied from
+  `docker/env/.env.monitoring.example`): the Grafana admin password, the
+  Grafana host port, and the host's Docker-socket group ID (see the
+  monitoring section).
 - **Container configuration** — `env_file:` injects the applications' own env
   files into their containers: `apps/api/env/.env.development` (dev) and
   `apps/api/env/.env.production` (prod, create it from `apps/api/env/.env.example`).
@@ -61,23 +67,23 @@ Run from the repository root.
 **Development (hot reloading):**
 
 ```sh
-cp .env.docker.example .env.docker.dev      # adjust ports/credentials
-pnpm docker:dev                             # = docker compose --env-file .env.docker.dev --env-file .env.monitoring up --build -d
+cp docker/env/.env.docker.example docker/env/.env.docker.dev   # adjust ports/credentials
+pnpm docker:dev                             # = docker compose --env-file docker/env/.env.docker.dev --env-file docker/env/.env.monitoring -f docker/compose.yml up --build -d
 ```
 
 **Production:**
 
 ```sh
-cp .env.docker.example .env.docker.prod     # set POSTGRES_PASSWORD + REDIS_PASSWORD
+cp docker/env/.env.docker.example docker/env/.env.docker.prod   # set POSTGRES_PASSWORD + REDIS_PASSWORD
 cp apps/api/env/.env.example apps/api/env/.env.production
-pnpm docker:prod                            # = docker compose --env-file .env.docker.prod --env-file .env.monitoring -f compose.prod.all.yml up --build -d
+pnpm docker:prod                            # = docker compose --env-file docker/env/.env.docker.prod --env-file docker/env/.env.monitoring -f docker/compose.prod.all.yml up --build -d
 ```
 
 **Rebuild after dependency changes:**
 
 ```sh
-docker compose --env-file .env.docker.dev -f compose.app.dev.yml build
-docker compose --env-file .env.docker.prod -f compose.app.prod.yml build
+docker compose --env-file docker/env/.env.docker.dev -f docker/compose.app.dev.yml build
+docker compose --env-file docker/env/.env.docker.prod -f docker/compose.app.prod.yml build
 ```
 
 **Stop / inspect:**
@@ -85,8 +91,8 @@ docker compose --env-file .env.docker.prod -f compose.app.prod.yml build
 ```sh
 pnpm docker:dev:down
 pnpm docker:prod:down
-docker compose --env-file .env.docker.prod -f compose.app.prod.yml logs -f api
-docker compose --env-file .env.docker.prod -f compose.app.prod.yml ps
+docker compose --env-file docker/env/.env.docker.prod -f docker/compose.app.prod.yml logs -f api
+docker compose --env-file docker/env/.env.docker.prod -f docker/compose.app.prod.yml ps
 ```
 
 Add `-v` to `down` to remove the PostgreSQL data volume (development data
@@ -95,7 +101,7 @@ lives in the named `postgres_dev_data` / `postgres_prod_data` volumes).
 **Monitoring (independent of both application stacks):**
 
 ```sh
-cp .env.monitoring.example .env.monitoring   # set GRAFANA_ADMIN_PASSWORD + DOCKER_GID
+cp docker/env/.env.monitoring.example docker/env/.env.monitoring   # set GRAFANA_ADMIN_PASSWORD + DOCKER_GID
 pnpm docker:monitoring                       # Grafana, Loki, Alloy in the background
 pnpm docker:monitoring:logs                  # follow monitoring container logs
 pnpm docker:monitoring:down
@@ -132,7 +138,7 @@ files per container). Without this, the Docker default keeps logs forever.
 
 ## Monitoring Stack
 
-The monitoring stack (`compose.monitoring.yml`, ADR-022) runs three
+The monitoring stack (`docker/compose.monitoring.yml`, ADR-022) runs three
 version-pinned services on an isolated network, fully independent of the
 application stacks: Grafana Alloy collects the dev/prod containers' logs
 through the Docker socket, Loki stores them (7-day retention, named volume),
@@ -140,7 +146,7 @@ and Grafana serves the provisioned dashboard at
 `http://localhost:${GRAFANA_PORT:-3002}`. Details, operations, and
 troubleshooting: [`docs/observability/README.md`](./observability/README.md).
 The stack requires
-`DOCKER_GID` in `.env.monitoring` (the host docker group id — find it with
+`DOCKER_GID` in `docker/env/.env.monitoring` (the host docker group id — find it with
 `stat -c %g /var/run/docker.sock`) so Alloy can read the socket without
 running as root. Because Alloy tails the dev/prod containers through the
 Docker API, the monitoring stack works regardless of which application

@@ -27,9 +27,7 @@
 logs/
 
 # Docker and repository documentation not needed inside images
-compose.dev.yml
-compose.prod.yml
-compose.monitoring.yml
+docker/
 monitoring/
 docs/
 prompts/

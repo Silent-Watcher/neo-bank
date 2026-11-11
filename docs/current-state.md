@@ -173,7 +173,7 @@ parallel execution and true isolation without manual Docker Compose. Docker
 infrastructure (`docs/docker.md`): dev and prod Compose stacks with PostgreSQL
 and Redis, per-app dev/prod images (`turbo prune`, non-root, hot reloading in
 dev; Redis intentionally has no persistence volume). Centralized log
-monitoring (ADR-022): an independent Compose stack (`compose.monitoring.yml`,
+monitoring (ADR-022): an independent Compose stack (`docker/compose.monitoring.yml`,
 project `neo-bank-monitoring`) runs version-pinned Grafana (loopback :3002),
 Loki 3.7.9 (filesystem storage on a named volume, 7-day retention,
 loopback :3100), and Grafana Alloy 1.21.0 — Alloy discovers the dev/prod

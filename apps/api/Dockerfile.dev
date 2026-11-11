@@ -1,5 +1,5 @@
 # Development image for the NestJS API. Dependencies are baked into the image;
-# source code is bind-mounted by compose.dev.yml, so edits hot-reload through
+# source code is bind-mounted by docker/compose.app.dev.yml, so edits hot-reload through
 # the existing `pnpm dev` watch script without rebuilding the image.
 FROM node:24.20.0-slim
 
