@@ -26,6 +26,11 @@ with their technical justification and the status `Won't Fix`.
   infrastructure (compose.monitoring.yml, Alloy/Loki/Grafana configs,
   provisioned dashboard). 0 Critical, 2 High, 2 Medium, 6 Low; findings
   below.
+- **Wave 4** — 2026-11-11 — judge review of the ADR-023 multi-agent tooling
+  (hook scripts, sync.mjs). 0 Critical, 3 Medium, 18 Low; findings below.
+- **Wave 5** — 2026-11-12 — judge review of the ADR-024 MockServer
+  integration (dev-only Compose service, optional MockServer URL env schema,
+  startup-log section). 0 Critical, 0 High, 0 Medium, 2 Low; findings below.
 
 ---
 
@@ -748,3 +753,80 @@ in-scope hardening (no design change, no separate approval needed) or
 resolved from existing validation evidence (W4-R5). Round-3 verdict:
 `session-start.mjs` and `guard-documentation-write.mjs` clean with no
 actionable findings; `sync.mjs` clean apart from the evidence-resolved R5.
+
+---
+
+## Wave 5 — ADR-024 MockServer integration review (2026-11-12)
+
+### W5-F1 — Empty MockServer section can be rendered for a both-null address pair
+
+- **Status:** Resolved (2026-11-12 — applied in-scope hardening, re-review passed)
+- **Severity:** Low
+- **Category:** Edge Case
+- **Locations:** `buildStartupLogMessage` (`apps/api/src/shared/http/startup-url.ts`); `MockServerStartupUrls` type contract
+- **Technical explanation:** the section guard only checked `mockserverUrls !== null`, but the type permits `{ host: null, docker: null }`, which would render a bare `MockServer:` header with no addresses. The only current caller (`main.ts`) cannot produce that shape (a non-null section requires at least one defined URL), so there was no runtime failure; the gap was latent for future callers.
+- **Failure scenario:** a future caller generalizing the config passes `{ host: null, docker: null }` and the startup log advertises a MockServer section the operator cannot use.
+- **Judge recommendation:** normalize inside `buildStartupLogMessage` (treat both-null as "no section") or narrow the type.
+- **Investigation results:** valid. Normalizing inside the renderer is the safer option: it protects every future caller at one point instead of encoding the invariant in a type that no static analysis enforces at construction sites.
+- **Agreed resolution:** applied — the section now renders only when at least one address is non-null; regression test extended to cover `{ host: null, docker: null }`.
+
+### W5-F2 — Username-only URL rejection is untested in the shared URL helper
+
+- **Status:** Resolved (2026-11-12 — regression test added, re-review passed)
+- **Severity:** Low
+- **Category:** Edge Case (test completeness)
+- **Locations:** credential-rejection refine in `optionalHttpUrlEnv` (`apps/api/src/shared/config/env/schema/validation-helpers.ts`); `apps/api/src/shared/config/env/schema/server.env.spec.ts`
+- **Technical explanation:** the refine also rejects username-only URLs (`http://admin@host`, no password), a load-bearing branch now shared by three variables through the helper but pinned by no test; a future refactor checking only `password` would silently allow username-bearing values into the startup log.
+- **Failure scenario:** a regression in the credential check goes unnoticed by the suite.
+- **Judge recommendation:** add a username-only rejection case to the env-schema spec.
+- **Investigation results:** valid; the shared helper backs `REDIS_INSIGHT_URL` and both `MOCKSERVER_*` variables, so one explicit case pins the branch for all three.
+- **Agreed resolution:** applied — username-only rejection case added to the `MOCKSERVER_HOST_URL` describe block.
+
+**Wave 5 summary:** 2 findings, both Low — both valid, both applied as
+in-scope hardening (renderer normalization + regression test; no design
+change, no separate approval needed per the Wave 4 precedent). Re-review
+verdict: APPROVED, no remaining findings.
+
+---
+
+## Wave 6 — ADR-024 MockServer integration security review (2026-11-13)
+
+### SEC-01 — Unauthenticated MockServer control port published on all host interfaces
+
+- **Status:** Resolved (2026-11-13 — loopback binding applied, security re-review passed)
+- **Severity:** Low (CWE-668; secondary CWE-918)
+- **Category:** Security
+- **Locations:** `mockserver` service port mapping (`docker/compose.app.dev.yml`)
+- **Technical explanation:** the bare `'${MOCKSERVER_PORT:-1080}:1080'` mapping publishes on `0.0.0.0`. MockServer has no authentication, and its control API supports arbitrary `httpForward` targets, so a network-adjacent attacker could reach the developer's port 1080, inject forward expectations, and pivot requests at internal HTTP endpoints (SSRF-style) or silently poison resilience-test expectations.
+- **Failure scenario:** dev stack running on a laptop/VM on a shared network; an adjacent attacker scripts `PUT /mockserver/expectation` with an `httpForward` action against an internal endpoint and reads responses through the mock port.
+- **Judge recommendation:** bind the published port to loopback (`127.0.0.1:${MOCKSERVER_PORT:-1080}:1080`). Nothing is lost: host developers use `http://localhost:<port>`, containers use the internal Compose network and never the published port.
+- **Investigation results:** valid and actionable — the only service in the dev stack that cannot be authenticated at all, and the monitoring stack already established the explicit-loopback precedent for dev tooling (Grafana/Loki). Consistent with ADR-020's requirement that developer tooling interfaces stay restricted to the local environment.
+- **Agreed resolution:** applied — port mapping bound to `127.0.0.1`; compose comment, ports table, and ADR-024 wording updated to match.
+
+### SEC-02 — Residual C0/ANSI control characters can reach the pretty startup log (informational)
+
+- **Status:** Won't Fix (operator-only vector, no realistic attacker path; technically justified)
+- **Severity:** Informational (CWE-117)
+- **Category:** Security
+- **Locations:** `optionalHttpUrlEnv` (`apps/api/src/shared/config/env/schema/validation-helpers.ts`), consumed by the startup log
+- **Technical explanation:** zod's URL output strips tab/LF/CR (closing newline log forging) but can pass other C0 control characters through, so an env value containing terminal escape sequences could reach `pino-pretty` console output. Reaching it requires write access to the API's environment — operator-equivalent privileges — and in containerized (JSON) mode Pino escapes the sequences anyway.
+- **Failure scenario:** an operator writes an ANSI-escaped value into an env file and observes cosmetic terminal disruption on their own console; no confidentiality or integrity impact.
+- **Judge recommendation (optional):** normalize the logged value to `new URL(url).href` or reject remaining C0 controls in the helper. Not required for approval.
+- **Investigation results:** not applied. The `href` normalization variant would change documented `REDIS_INSIGHT_URL` output (e.g. trailing-slash canonicalization) and its exact-value tests; the C0-rejection variant adds validation logic guarding only operator-self-inflicted cosmetic output — excessive defensiveness for a dev-only diagnostics line (AGENTS.md: avoid defensive programming when the contract already guarantees behavior). Newline forging is already closed by zod stripping.
+- **Agreed resolution:** Won't Fix with the justification above; revisit only if these values ever gain a consumer beyond the startup log.
+
+### SEC-03 — Redis Insight URL lacks the development gate applied to the MockServer section (informational)
+
+- **Status:** Won't Fix (out-of-scope behavior change to pre-existing ADR-020 behavior; documented as intentional)
+- **Severity:** Informational (CWE-532, defense-in-depth asymmetry only)
+- **Category:** Security
+- **Locations:** `main.ts` startup-log wiring (`redisInsightUrl` passed presence-gated only, while `mockserverUrls` is additionally `APP_ENV=Development`-gated)
+- **Technical explanation:** the MockServer section carries a double gate (presence + development environment); the pre-existing Redis Insight line is presence-gated only, so a stray value in a non-development environment would be logged. The helper guarantees a credential-free URL, and the documented convention is set-only-where-exposed, so there is no realistic leak path.
+- **Failure scenario:** an operator sets `REDIS_INSIGHT_URL` in a non-development environment; a non-functional URL appears in that startup log. No secret disclosure.
+- **Judge recommendation (optional):** apply the same development gate to the Redis Insight URL for symmetry.
+- **Investigation results:** not applied: it would change the logging behavior of an existing, separately reviewed ADR-020 feature outside this task's scope ("do not modify unrelated startup behavior"). The asymmetry is documented as intentional hardening in the `main.ts` comment and ADR-024; the underlying invariant (never advertise an address that does not exist) is preserved by the presence gate for both.
+- **Agreed resolution:** Won't Fix with the justification above.
+
+**Wave 6 summary:** 3 findings — 1 actionable Low (SEC-01, fixed and
+re-reviewed), 2 informational (SEC-02/SEC-03, Won't Fix with technical
+justification). No Critical/High/Medium findings.

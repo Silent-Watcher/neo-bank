@@ -82,7 +82,9 @@ Core contracts:
   `docker/compose.app.dev.yml` / `docker/compose.app.prod.yml` /
   `docker/compose.prod.all.yml`, interpolation env files in `docker/env/`,
   per-app images via `turbo prune`), PostgreSQL + Redis; dev Redis is Redis
-  Stack with bundled Redis Insight :8001 (ADR-020). Ops: `docs/docker.md`.
+  Stack with bundled Redis Insight :8001 (ADR-020); dev-only MockServer :1080
+  for resilience testing against simulated downstream failures (ADR-024).
+  Ops: `docs/docker.md`.
 - **Monitoring:** independent Compose stack (ADR-022) — Grafana :3002 (loopback),
   Loki 3.7.9, Grafana Alloy 1.21.0 collecting container stdout → Loki.
   Ops: `docs/observability/README.md`; roadmap: `docs/observability/roadmap.md`.
@@ -112,7 +114,7 @@ Core contracts:
 | `apps/*/ONBOARDING.md`                      | Developer onboarding, stack tables, env vars, commands     |
 | `docs/architecture.md`                      | Detailed architecture, boundaries, workspace relationships |
 | `docs/current-state.md`                     | Feature/state snapshot (verified per feature)              |
-| `DECISIONS.md`                              | ADR-001…ADR-022, all Accepted                              |
+| `DECISIONS.md`                              | ADR-001…ADR-024, all Accepted                              |
 | `docs/docker.md`                            | Docker stacks: setup, env files, commands                  |
 | `docs/observability/README.md`              | Monitoring stack operations                                |
 | `docs/observability/manual-testing.md`      | Reproducible monitoring verification scenarios             |

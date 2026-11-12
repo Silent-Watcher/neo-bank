@@ -497,6 +497,181 @@ describe('serverEnvSchema', () => {
     });
   });
 
+  describe('MOCKSERVER_HOST_URL', () => {
+    it('resolves to undefined when the variable is unset', () => {
+      // Arrange
+      const input = { ...validBaseEnv };
+
+      // Act
+      const result = serverEnvSchema.parse(input);
+
+      // Assert
+      expect(result.MOCKSERVER_HOST_URL).toBeUndefined();
+    });
+
+    it('resolves to undefined when the variable is empty', () => {
+      // Arrange
+      const input = { ...validBaseEnv, MOCKSERVER_HOST_URL: '' };
+
+      // Act
+      const result = serverEnvSchema.parse(input);
+
+      // Assert
+      expect(result.MOCKSERVER_HOST_URL).toBeUndefined();
+    });
+
+    it('resolves to undefined when the variable is whitespace-only', () => {
+      // Arrange
+      const input = { ...validBaseEnv, MOCKSERVER_HOST_URL: '   ' };
+
+      // Act
+      const result = serverEnvSchema.parse(input);
+
+      // Assert
+      expect(result.MOCKSERVER_HOST_URL).toBeUndefined();
+    });
+
+    it('accepts an http URL', () => {
+      // Arrange
+      const input = { ...validBaseEnv, MOCKSERVER_HOST_URL: 'http://localhost:1080' };
+
+      // Act
+      const result = serverEnvSchema.parse(input);
+
+      // Assert
+      expect(result.MOCKSERVER_HOST_URL).toBe('http://localhost:1080');
+    });
+
+    it('accepts an https URL with a path', () => {
+      // Arrange
+      const input = {
+        ...validBaseEnv,
+        MOCKSERVER_HOST_URL: 'https://mock.example.com/mockserver/',
+      };
+
+      // Act
+      const result = serverEnvSchema.parse(input);
+
+      // Assert
+      expect(result.MOCKSERVER_HOST_URL).toBe('https://mock.example.com/mockserver/');
+    });
+
+    it('trims whitespace around the URL', () => {
+      // Arrange
+      const input = { ...validBaseEnv, MOCKSERVER_HOST_URL: '  http://localhost:1080  ' };
+
+      // Act
+      const result = serverEnvSchema.parse(input);
+
+      // Assert
+      expect(result.MOCKSERVER_HOST_URL).toBe('http://localhost:1080');
+    });
+
+    it('rejects a non-http(s) protocol', () => {
+      // Arrange
+      const input = { ...validBaseEnv, MOCKSERVER_HOST_URL: 'redis://localhost:1080' };
+
+      // Act
+      const result = serverEnvSchema.safeParse(input);
+
+      // Assert
+      expect(result.success).toBe(false);
+    });
+
+    it('rejects a value without a scheme', () => {
+      // Arrange
+      const input = { ...validBaseEnv, MOCKSERVER_HOST_URL: 'localhost:1080' };
+
+      // Act
+      const result = serverEnvSchema.safeParse(input);
+
+      // Assert
+      expect(result.success).toBe(false);
+    });
+
+    it('rejects a URL containing credentials', () => {
+      // Arrange
+      const input = { ...validBaseEnv, MOCKSERVER_HOST_URL: 'http://admin:secret@localhost:1080' };
+
+      // Act
+      const result = serverEnvSchema.safeParse(input);
+
+      // Assert
+      expect(result.success).toBe(false);
+    });
+
+    it('rejects a URL containing a username without a password', () => {
+      // Arrange
+      const input = { ...validBaseEnv, MOCKSERVER_HOST_URL: 'http://admin@localhost:1080' };
+
+      // Act
+      const result = serverEnvSchema.safeParse(input);
+
+      // Assert
+      expect(result.success).toBe(false);
+    });
+  });
+
+  describe('MOCKSERVER_DOCKER_URL', () => {
+    it('resolves to undefined when the variable is unset', () => {
+      // Arrange
+      const input = { ...validBaseEnv };
+
+      // Act
+      const result = serverEnvSchema.parse(input);
+
+      // Assert
+      expect(result.MOCKSERVER_DOCKER_URL).toBeUndefined();
+    });
+
+    it('resolves to undefined when the variable is empty', () => {
+      // Arrange
+      const input = { ...validBaseEnv, MOCKSERVER_DOCKER_URL: '' };
+
+      // Act
+      const result = serverEnvSchema.parse(input);
+
+      // Assert
+      expect(result.MOCKSERVER_DOCKER_URL).toBeUndefined();
+    });
+
+    it('accepts a compose-network hostname URL', () => {
+      // Arrange
+      const input = { ...validBaseEnv, MOCKSERVER_DOCKER_URL: 'http://mockserver:1080' };
+
+      // Act
+      const result = serverEnvSchema.parse(input);
+
+      // Assert
+      expect(result.MOCKSERVER_DOCKER_URL).toBe('http://mockserver:1080');
+    });
+
+    it('rejects a non-http(s) protocol', () => {
+      // Arrange
+      const input = { ...validBaseEnv, MOCKSERVER_DOCKER_URL: 'tcp://mockserver:1080' };
+
+      // Act
+      const result = serverEnvSchema.safeParse(input);
+
+      // Assert
+      expect(result.success).toBe(false);
+    });
+
+    it('rejects a URL containing credentials', () => {
+      // Arrange
+      const input = {
+        ...validBaseEnv,
+        MOCKSERVER_DOCKER_URL: 'http://admin:secret@mockserver:1080',
+      };
+
+      // Act
+      const result = serverEnvSchema.safeParse(input);
+
+      // Assert
+      expect(result.success).toBe(false);
+    });
+  });
+
   describe('isCorsOriginRequiredInProduction', () => {
     it('requires CORS origins in production when they are missing', () => {
       // Arrange

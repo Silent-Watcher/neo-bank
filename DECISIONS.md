@@ -1110,3 +1110,54 @@ Adopt a **platform-neutral canonical agent-definition layer** as the single sour
 
 - `.agents/definitions/` (canonical subagent definitions), `.agents/workflows/development-workflow.md`, `.agents/schemas/`, `.agents/plugins/` (ZCode plugin + marketplaces), `scripts/agents/sync.mjs`, `.claude/agents/`, `.claude/settings.json`, root `AGENTS.md`, root `CLAUDE.md`
 - Verified platform documentation: ZCode configuration-guide and plugin-creator skills (installed client 3.17.2), Claude Code 2.1.316 CLI (`claude plugin validate`, project agents, hooks)
+
+---
+
+## ADR-024: Use MockServer for Development-Time Resilience Testing
+
+- **Status:** Accepted
+- **Date:** 2026-11-12
+
+### Context
+
+The API is about to gain outbound HTTP integrations (the SMS provider is the first planned dependency), and resilience patterns around those integrations — bounded timeouts, capped retries, failure handling, recovery — only prove their value under abnormal downstream conditions: timeouts, HTTP 5xx responses, delayed responses, consecutive failures followed by success, and recovery after temporary outages. Ordinary successful responses cannot exercise any of these paths, and there is currently no repeatable way to simulate a misbehaving downstream service. No outbound HTTP client exists yet, so this infrastructure must be in place before the first integration lands — without it becoming a production dependency or leaking into any non-development environment.
+
+### Decision
+
+Adopt **MockServer** (`mockserver/mockserver:9.2.0`, version-pinned) as the development-time HTTP mocking service for simulating downstream HTTP service behavior:
+
+- **Development stack only:** the service is defined exclusively in `docker/compose.app.dev.yml` (`mockserver` service); the production Compose files cannot inherit it. It maps host port `${MOCKSERVER_PORT:-1080}` — explicitly bound to `127.0.0.1`, since the control API is unauthenticated and capable of forwarding requests — to the image default port 1080 and uses the shared `x-logging` anchor. No volumes: expectations are ephemeral, so every container restart starts from a clean state.
+- **Image-native healthchecking:** the 9.2.0 default image is distroless (no shell, no curl/wget) and ships a built-in `HEALTHCHECK` probing `PUT /mockserver/status`; no custom healthcheck is added.
+- **No startup coupling:** no `depends_on` relationship with the API. MockServer must never be a mandatory startup dependency; the API merely logs its addresses.
+- **Startup visibility through the existing pattern:** the dev Compose stack injects two optional environment variables — `MOCKSERVER_HOST_URL` (host access) and `MOCKSERVER_DOCKER_URL` (compose network) — and the API startup log prints them in development only, following the `REDIS_INSIGHT_URL` precedent (ADR-020): unset everywhere else, nothing logged, no fabricated addresses.
+- **Single-port control surface:** the control API, mocked endpoints, and dashboard share port 1080 (`PUT /mockserver/expectation`, `PUT /mockserver/clear`, `PUT /mockserver/reset`, `PUT /mockserver/status`, `/mockserver/dashboard`).
+- **Not a test dependency:** Testcontainers-based tests (ADR-016) never use the dev Compose stack; MockServer exists for manual and interactive resilience verification. Running MockServer does not redirect any API traffic — an application dependency must be explicitly configured to target it.
+
+### Alternatives Considered
+
+- _WireMock:_ equally capable JVM-based HTTP mock, but its primary distribution and tooling are Java-centric, while MockServer offers a language-neutral REST control API, a live dashboard, and built-in chaos features out of the box; the Docker-first workflow fits this repository better. Rejected.
+- _Toxiproxy:_ operates at the network layer (latency, bandwidth, connection drops) but cannot shape HTTP responses (status codes, bodies, sequences). It complements rather than replaces an HTTP mock; network-level fault testing is a separate future concern. Rejected for this purpose.
+- _Custom mock HTTP service:_ a small home-grown mock would need continuous maintenance to cover matching, sequencing, and delays — a solved problem in MockServer. Rejected (YAGNI).
+- _Manually simulating failures (unreachable hosts, ad-hoc scripts):_ not repeatable, not observable, and cannot produce precise 5xx/delay/sequence scenarios. Rejected.
+
+### Consequences and Trade-offs
+
+**Positive**
+
+- Repeatable, observable resilience scenarios (timeouts, 5xx bursts, delays, failure-then-recovery) against a real HTTP endpoint.
+- The live dashboard and request log make downstream interaction visible during development.
+- Strictly development-only: production startup, configuration, and logs are unchanged; the image runs as non-root and carries no credentials.
+- Alloy (ADR-022) collects the container's stdout automatically — no extra wiring.
+
+**Negative**
+
+- One additional development container consuming memory (~JVM footprint).
+- Application dependencies must be explicitly configured to target MockServer; nothing is redirected implicitly, so resilience tests require deliberate wiring.
+- Application-level HTTP mocking does not replace network-level fault testing (connection resets, bandwidth starvation) — Toxiproxy or similar remains a possible future addition.
+- Expectations are stateful: scenarios must reset (`PUT /mockserver/reset`) between tests to stay isolated.
+
+### References
+
+- `docker/compose.app.dev.yml` (mockserver service, api environment), `docker/env/.env.docker.example` (MOCKSERVER_PORT), `apps/api/src/shared/http/startup-url.ts`, `apps/api/src/main.ts`, `apps/api/src/shared/config/env/schema/server.env.ts` (optional MockServer URLs)
+- `docs/docker.md` (MockServer section, ports table)
+- Official documentation: https://www.mock-server.com/, image: https://hub.docker.com/r/mockserver/mockserver

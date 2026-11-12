@@ -13,6 +13,8 @@ const serverConfig = registerAs(SERVER_CONFIG, () => ({
   trustProxy: _env.TRUST_PROXY,
   bodyLimit: _env.BODY_LIMIT,
   redisInsightUrl: _env.REDIS_INSIGHT_URL,
+  mockserverHostUrl: _env.MOCKSERVER_HOST_URL,
+  mockserverDockerUrl: _env.MOCKSERVER_DOCKER_URL,
 }));
 
 export default serverConfig;

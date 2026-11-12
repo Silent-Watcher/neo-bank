@@ -1,5 +1,5 @@
 # Development environment: all three applications with hot reloading plus
-# PostgreSQL and Redis for local development tools.
+# PostgreSQL, Redis, and MockServer for local development tools.
 #
 # Compose variable interpolation values come from an explicit env file
 # (copy docker/env/.env.docker.example to docker/env/.env.docker.dev and adjust):
@@ -39,6 +39,12 @@ services:
       # Set only here: the API never advertises an address it cannot know
       # exists, so local non-Docker development and production log nothing.
       REDIS_INSIGHT_URL: http://localhost:${REDIS_INSIGHT_PORT:-8001}
+      # MockServer addresses (ADR-024), logged at API startup in development:
+      # the host URL for developers on the machine, the Docker URL for
+      # containers. Set only here — local non-Docker development and
+      # production log neither address.
+      MOCKSERVER_HOST_URL: http://localhost:${MOCKSERVER_PORT:-1080}
+      MOCKSERVER_DOCKER_URL: http://mockserver:1080
       # Structured JSON in the container even though APP_ENV=development:
       # the centralized logging pipeline (compose.monitoring.yml) collects
       # and parses these logs. Host-side development keeps pino-pretty.
@@ -167,6 +173,24 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+    logging: *default-logging
+
+  # MockServer (ADR-024): development-only HTTP mock for resilience testing.
+  # Simulates downstream service behavior — timeouts, 5xx responses, delays,
+  # failure-then-recovery sequences — so the API's resilience patterns can be
+  # exercised repeatably. Expectations are ephemeral (no volume): every
+  # container restart starts from a clean state. The image is distroless (no
+  # shell, no curl/wget) and ships a built-in HEALTHCHECK probing
+  # PUT /mockserver/status, so no healthcheck override is defined here.
+  # Nothing depends on this service: the API only logs its address.
+  mockserver:
+    image: mockserver/mockserver:9.2.0
+    ports:
+      # Control API, mocked endpoints, and dashboard all on one port. Bound
+      # to loopback explicitly: the control API is unauthenticated and can
+      # forward requests to arbitrary targets, so it must never be reachable
+      # from other network peers (containers use the internal network).
+      - '127.0.0.1:${MOCKSERVER_PORT:-1080}:1080'
     logging: *default-logging
 
 volumes:

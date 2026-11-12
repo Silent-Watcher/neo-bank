@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 import { AppEnv } from '#enums/app-env.enum.js';
-import { positiveSafeInteger } from './validation-helpers.js';
+import { optionalHttpUrlEnv, positiveSafeInteger } from './validation-helpers.js';
 
 function isOrigin(value: string): boolean {
   try {
@@ -61,29 +61,15 @@ export const serverEnvSchema = z.object({
   // Host-accessible Redis Insight URL (ADR-020). Optional and set only where
   // Redis Insight is actually exposed (the development Compose stack): the
   // startup log prints the URL only when this is configured, so environments
-  // without Insight never advertise an address that does not exist. Blank
-  // values are treated as unset, and credentials in the URL are rejected so
-  // no secret can reach the startup log.
-  REDIS_INSIGHT_URL: z
-    .string()
-    .transform((value) => {
-      const trimmed = value.trim();
-      return trimmed === '' ? undefined : trimmed;
-    })
-    .pipe(
-      z
-        .url({ protocol: /^https?$/, error: 'REDIS_INSIGHT_URL must be a valid http(s) URL.' })
-        .optional(),
-    )
-    .refine(
-      (url) => {
-        if (url === undefined) return true;
-        const parsed = new URL(url);
-        return parsed.username === '' && parsed.password === '';
-      },
-      { error: 'REDIS_INSIGHT_URL must not contain credentials.' },
-    )
-    .optional(),
+  // without Insight never advertise an address that does not exist.
+  REDIS_INSIGHT_URL: optionalHttpUrlEnv('REDIS_INSIGHT_URL'),
+  // MockServer addresses (ADR-024). Optional and set only by the development
+  // Compose stack: the host URL for developers on the machine, the Docker URL
+  // for containers on the Compose network. The startup log prints each
+  // address only when configured, so environments without MockServer never
+  // advertise an address that does not exist.
+  MOCKSERVER_HOST_URL: optionalHttpUrlEnv('MOCKSERVER_HOST_URL'),
+  MOCKSERVER_DOCKER_URL: optionalHttpUrlEnv('MOCKSERVER_DOCKER_URL'),
 });
 
 export type ServerEnv = z.infer<typeof serverEnvSchema>;

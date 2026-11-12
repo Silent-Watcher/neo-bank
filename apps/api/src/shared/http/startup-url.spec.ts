@@ -114,6 +114,7 @@ describe('buildStartupLogMessage', () => {
     const message = buildStartupLogMessage({
       apiUrls: ['http://127.0.0.1:3001/api/v1', 'http://192.168.1.10:3001/api/v1'],
       swaggerUrls: ['http://127.0.0.1:3001/docs', 'http://192.168.1.10:3001/docs'],
+      mockserverUrls: null,
       redisInsightUrl: null,
     });
 
@@ -136,6 +137,7 @@ describe('buildStartupLogMessage', () => {
     const message = buildStartupLogMessage({
       apiUrls: ['http://127.0.0.1:3001/api/v1'],
       swaggerUrls: null,
+      mockserverUrls: null,
       redisInsightUrl: null,
     });
 
@@ -154,6 +156,7 @@ describe('buildStartupLogMessage', () => {
     const message = buildStartupLogMessage({
       apiUrls: ['http://127.0.0.1:3001/api/v1'],
       swaggerUrls: null,
+      mockserverUrls: null,
       redisInsightUrl: 'http://localhost:8001',
     });
 
@@ -164,9 +167,77 @@ describe('buildStartupLogMessage', () => {
     const message = buildStartupLogMessage({
       apiUrls: ['http://127.0.0.1:3001/api/v1'],
       swaggerUrls: null,
+      mockserverUrls: null,
       redisInsightUrl: null,
     });
 
     expect(message).not.toContain('Redis Insight');
+  });
+
+  it('renders the MockServer section with host and Docker addresses between Swagger and Redis Insight', () => {
+    const message = buildStartupLogMessage({
+      apiUrls: ['http://127.0.0.1:3001/api/v1'],
+      swaggerUrls: ['http://127.0.0.1:3001/docs'],
+      mockserverUrls: { host: 'http://localhost:1080', docker: 'http://mockserver:1080' },
+      redisInsightUrl: 'http://localhost:8001',
+    });
+
+    expect(message).toBe(
+      [
+        'Application successfully started',
+        '',
+        'API:',
+        '  Local:   http://127.0.0.1:3001/api/v1',
+        '',
+        'Swagger:',
+        '  Local:   http://127.0.0.1:3001/docs',
+        '',
+        'MockServer:',
+        '  Host:    http://localhost:1080',
+        '  Docker:  http://mockserver:1080',
+        '',
+        'Redis Insight: http://localhost:8001',
+      ].join('\n'),
+    );
+  });
+
+  it('renders only the MockServer lines that are configured', () => {
+    const hostOnly = buildStartupLogMessage({
+      apiUrls: ['http://127.0.0.1:3001/api/v1'],
+      swaggerUrls: null,
+      mockserverUrls: { host: 'http://localhost:1080', docker: null },
+      redisInsightUrl: null,
+    });
+    expect(hostOnly).toContain('MockServer:');
+    expect(hostOnly).toContain('  Host:    http://localhost:1080');
+    expect(hostOnly).not.toContain('Docker:');
+
+    const dockerOnly = buildStartupLogMessage({
+      apiUrls: ['http://127.0.0.1:3001/api/v1'],
+      swaggerUrls: null,
+      mockserverUrls: { host: null, docker: 'http://mockserver:1080' },
+      redisInsightUrl: null,
+    });
+    expect(dockerOnly).toContain('MockServer:');
+    expect(dockerOnly).toContain('  Docker:  http://mockserver:1080');
+    expect(dockerOnly).not.toContain('Host:');
+  });
+
+  it('omits the MockServer section where no address is exposed', () => {
+    const withoutSection = buildStartupLogMessage({
+      apiUrls: ['http://127.0.0.1:3001/api/v1'],
+      swaggerUrls: null,
+      mockserverUrls: null,
+      redisInsightUrl: null,
+    });
+    const withEmptyAddresses = buildStartupLogMessage({
+      apiUrls: ['http://127.0.0.1:3001/api/v1'],
+      swaggerUrls: null,
+      mockserverUrls: { host: null, docker: null },
+      redisInsightUrl: null,
+    });
+
+    expect(withoutSection).not.toContain('MockServer');
+    expect(withEmptyAddresses).not.toContain('MockServer');
   });
 });

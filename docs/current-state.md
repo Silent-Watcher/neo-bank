@@ -21,8 +21,9 @@ auth, no deployment setup.
   CORS from validated config. After a successful listen, the API logs its
   address (`http://<address>:<port>/api/v1`, loopback plus non-internal
   interface addresses for the wildcard host) and, in development only, the
-  Swagger UI address — always plain `http`, since no TLS or reverse proxy
-  fronts the API.
+  Swagger UI address plus — when the development Compose stack injects them —
+  the MockServer addresses (ADR-024); always plain `http`, since no TLS or
+  reverse proxy fronts the API.
 - Configuration system: Zod-validated env (ADR-004), env files in
   `env/` (`.env.development`, `.env.test`, `.env.example`, `.env.redis-test`),
   namespaced `registerAs` factories, fail-fast validation. Validated variables:
@@ -32,7 +33,8 @@ auth, no deployment setup.
   `REDIS_MAX_RETRIES_PER_REQUEST`, `REDIS_SHUTDOWN_TIMEOUT_MS`,
   `RATE_LIMIT_SHORT_LIMIT`, `RATE_LIMIT_SHORT_TTL_SECONDS`,
   `RATE_LIMIT_LONG_LIMIT`, `RATE_LIMIT_LONG_TTL_MINUTES`,
-  `ENROLLMENTS_MAX_VERIFY_ATTEMPTS`, `REDIS_INSIGHT_URL`, `LOG_PRETTY`.
+  `ENROLLMENTS_MAX_VERIFY_ATTEMPTS`, `REDIS_INSIGHT_URL`,
+  `MOCKSERVER_HOST_URL`, `MOCKSERVER_DOCKER_URL`, `LOG_PRETTY`.
 - Redis integration (ADR-012/013): global `RedisModule` in
   `src/shared/redis/` with a single lazy ioredis 6 client (symbol token,
   `@InjectRedis()` escape hatch), `RedisService` application abstraction
@@ -166,7 +168,14 @@ challenge feature stores its OTP in Redis; global rate limiting uses the same
 connection via atomic Lua scripts. The development Compose stack runs
 `redis/redis-stack:latest` with bundled Redis Insight on port 8001
 (ADR-020); the API logs the host-accessible Insight URL at startup when the
-stack injects `REDIS_INSIGHT_URL`. Testcontainers (ADR-016) provides isolated
+stack injects `REDIS_INSIGHT_URL`. It also runs MockServer
+(`mockserver/mockserver:9.2.0`, ADR-024), a development-only HTTP mock for
+resilience testing: expectations registered through its control API simulate
+downstream failures (5xx responses, delays, failure-then-recovery sequences)
+against a real endpoint; nothing depends on the service, no outgoing traffic
+is redirected to it automatically, and the API only logs its injected
+addresses (host and Compose network) at startup. Testcontainers (ADR-016)
+provides isolated
 `redis:8.2-alpine` containers for integration and e2e tests — each test file
 starts its own container with dynamic ports in `beforeAll`/`afterAll`, enabling
 parallel execution and true isolation without manual Docker Compose. Docker
@@ -230,6 +239,6 @@ Per-app commands are listed in each `apps/<app>/ONBOARDING.md`.
 
 All ADRs live in [DECISIONS.md](../DECISIONS.md). Status as of this snapshot:
 
-- **Accepted:** ADR-001 (Turborepo), ADR-002 (Fastify), ADR-003 (SWC), ADR-004 (@nestjs/config + Zod), ADR-005 (URI versioning), ADR-006 (1 MiB body limit), ADR-007 (`api` prefix), ADR-008/009 (Pino / nestjs-pino), ADR-010 (UUIDv4 request IDs), ADR-011 (envelope exclusions), ADR-012 (ioredis without a wrapper), ADR-013 (Redis module architecture), ADR-014 (Swagger/OpenAPI, development-only), ADR-015 (Global HTTP rate limiting with Redis-backed @nestjs/throttler), ADR-016 (Testcontainers for integration and e2e testing), ADR-017 (OTP verification attempt lockout for enrollment security), ADR-018 (HMAC-SHA-256 digest storage for enrollment OTPs), ADR-019 (OTP verification hardening — conditional attempt counting and challenge identity), ADR-020 (development Redis service migrated to Redis Stack with bundled Redis Insight), ADR-021 (bilingual internationalization en/fa via the official @nestjs/i18n), ADR-022 (centralized logging with Grafana Alloy, Loki, and Grafana), ADR-023 (project-level multi-agent development workflow for ZCode + Claude Code).
+- **Accepted:** ADR-001 (Turborepo), ADR-002 (Fastify), ADR-003 (SWC), ADR-004 (@nestjs/config + Zod), ADR-005 (URI versioning), ADR-006 (1 MiB body limit), ADR-007 (`api` prefix), ADR-008/009 (Pino / nestjs-pino), ADR-010 (UUIDv4 request IDs), ADR-011 (envelope exclusions), ADR-012 (ioredis without a wrapper), ADR-013 (Redis module architecture), ADR-014 (Swagger/OpenAPI, development-only), ADR-015 (Global HTTP rate limiting with Redis-backed @nestjs/throttler), ADR-016 (Testcontainers for integration and e2e testing), ADR-017 (OTP verification attempt lockout for enrollment security), ADR-018 (HMAC-SHA-256 digest storage for enrollment OTPs), ADR-019 (OTP verification hardening — conditional attempt counting and challenge identity), ADR-020 (development Redis service migrated to Redis Stack with bundled Redis Insight), ADR-021 (bilingual internationalization en/fa via the official @nestjs/i18n), ADR-022 (centralized logging with Grafana Alloy, Loki, and Grafana), ADR-023 (project-level multi-agent development workflow for ZCode + Claude Code), ADR-024 (MockServer for development-time resilience testing).
 
 All architectural decisions are accepted and implemented. Do not build on rejected alternatives (e.g. do not introduce header versioning or a second logger).

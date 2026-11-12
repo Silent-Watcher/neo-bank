@@ -13,3 +13,6 @@ coverage/
 /.pnpm-store/
 # Vitest
 **/.vitest/
+
+# Mimosa plugin runtime state
+**/.mimosa

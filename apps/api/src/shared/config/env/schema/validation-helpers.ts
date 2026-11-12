@@ -23,3 +23,38 @@ export function positiveSafeInteger(field: string) {
       message: `${field} must be within the safe integer range.`,
     });
 }
+
+/**
+ * Creates a Zod schema for an optional http(s) URL environment variable used
+ * for startup-log visibility (e.g. Redis Insight, MockServer addresses).
+ *
+ * This ensures:
+ * - Blank values are treated as unset, so an empty entry in an env file
+ *   behaves exactly like a missing variable.
+ * - Only http(s) URLs are accepted.
+ * - URLs containing credentials are rejected, so no secret can reach the
+ *   startup log.
+ *
+ * @param field - The variable name used in error messages
+ * @returns A Zod schema producing `string | undefined`
+ */
+export function optionalHttpUrlEnv(field: string) {
+  return z
+    .string()
+    .transform((value) => {
+      const trimmed = value.trim();
+      return trimmed === '' ? undefined : trimmed;
+    })
+    .pipe(
+      z.url({ protocol: /^https?$/, error: `${field} must be a valid http(s) URL.` }).optional(),
+    )
+    .refine(
+      (url) => {
+        if (url === undefined) return true;
+        const parsed = new URL(url);
+        return parsed.username === '' && parsed.password === '';
+      },
+      { error: `${field} must not contain credentials.` },
+    )
+    .optional();
+}

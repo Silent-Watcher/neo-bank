@@ -2,7 +2,8 @@
 
 Docker support for the monorepo: development environments with hot reloading
 and production images for all three applications, plus PostgreSQL and Redis
-as infrastructure services.
+as infrastructure services and a development-only MockServer for resilience
+testing (ADR-024).
 
 **Note on automated testing (ADR-016):** Integration and e2e tests use
 Testcontainers (`apps/api/test/testcontainers.ts`) to start isolated
@@ -19,7 +20,7 @@ development Compose stack remains for local development
 | `apps/<app>/Dockerfile.prod`           | Production image (multi-stage, non-root, minimal)                                                               |
 | `apps/<app>/Dockerfile.*.dockerignore` | Per-Dockerfile build-context ignores (used _instead of_ the root file, not merged with it)                      |
 | `docker/compose.yml`                   | Development orchestrator: `include:` of the dev app stack and the monitoring stack into one `docker compose up` |
-| `docker/compose.app.dev.yml`           | Development app stack: all three apps with hot reloading plus PostgreSQL and Redis (`neo-bank-dev` project)     |
+| `docker/compose.app.dev.yml`           | Dev app stack: hot-reloading apps plus PostgreSQL, Redis, and MockServer (dev-only, ADR-024) (`neo-bank-dev`)   |
 | `docker/compose.app.prod.yml`          | Production app stack: hardened images, internal networks (`neo-bank-prod` project)                              |
 | `docker/compose.prod.all.yml`          | Production orchestrator: `include:` of the production app stack and the monitoring stack                        |
 | `docker/compose.monitoring.yml`        | Monitoring stack: Grafana, Loki, Alloy (`neo-bank-monitoring` project)                                          |
@@ -120,6 +121,7 @@ operational guide.
 | PostgreSQL    | 5432                 | `${POSTGRES_PORT}` (default 5432)          | **no** (internal network only)           |
 | Redis         | 6379                 | `${REDIS_PORT}` (default 6379)             | **no** (internal network only)           |
 | Redis Insight | 8001                 | `${REDIS_INSIGHT_PORT}` (default 8001)     | **no** (development only)                |
+| MockServer    | 1080                 | `127.0.0.1:${MOCKSERVER_PORT}` (def. 1080) | **no** (development only)                |
 | Grafana       | 3000                 | `127.0.0.1:${GRAFANA_PORT}` (default 3002) | **no** (monitoring stack; loopback only) |
 | Loki          | 3100                 | `127.0.0.1:${LOKI_PORT}` (default 3100)    | **no** (monitoring stack; loopback only) |
 
@@ -175,6 +177,120 @@ During development, reach PostgreSQL and Redis on `localhost` with the host
 ports above; in production they are reachable only from containers on the
 internal network, by service name (`postgres`, `redis`).
 
+## MockServer (development only)
+
+The development stack runs [MockServer](https://www.mock-server.com/)
+(`mockserver/mockserver:9.2.0`, version-pinned, ADR-024), a development-only
+HTTP mock for resilience testing: it simulates downstream service behavior —
+timeouts, HTTP 5xx responses, delayed responses, failure-then-recovery
+sequences — so resilience patterns around outbound integrations (bounded
+timeouts, capped retries, failure handling, recovery) can be exercised
+repeatably against a real HTTP endpoint. The service is defined only in
+`docker/compose.app.dev.yml`; the production Compose files cannot inherit it,
+and nothing in production changes.
+
+**Run / stop** — MockServer is part of the dev app stack, so the usual
+commands bring it up and tear it down:
+
+```sh
+pnpm docker:app:dev        # dev app stack (includes MockServer)
+pnpm docker:dev            # dev orchestrator: app stack + monitoring
+pnpm docker:app:dev:down   # stop the dev app stack
+pnpm docker:dev:down       # stop the dev orchestrator
+```
+
+**Addresses** — control API, mocked endpoints, and dashboard share a single
+port (`${MOCKSERVER_PORT}` in `docker/env/.env.docker.example`, default
+`1080`):
+
+- Host (developers on the machine): `http://localhost:1080`
+- Compose network (containers): `http://mockserver:1080`
+
+The dev Compose stack injects both addresses into the API as the optional
+`MOCKSERVER_HOST_URL` / `MOCKSERVER_DOCKER_URL` variables, and the API startup
+log prints them under a `MockServer:` section in development only — local
+non-Docker development and production log nothing (same pattern as
+`REDIS_INSIGHT_URL`, ADR-020).
+
+**Availability and dashboard:** the distroless image ships a built-in
+`HEALTHCHECK` probing `PUT /mockserver/status` (PUT, not GET, in 9.x), so
+`docker compose ps` reports its health without a Compose override:
+
+```sh
+curl -X PUT http://localhost:1080/mockserver/status
+```
+
+A live dashboard (requests, expectations, verification) is at
+`http://localhost:1080/mockserver/dashboard`.
+
+**Usage examples** — register expectations with `PUT /mockserver/expectation`,
+then point the dependency under test at one of the addresses above:
+
+Always respond 500 for a path:
+
+```sh
+curl -X PUT http://localhost:1080/mockserver/expectation \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "httpRequest": { "method": "GET", "path": "/downstream/payments" },
+    "httpResponse": { "statusCode": 500, "body": "simulated downstream failure" }
+  }'
+```
+
+Delay every matching response by 5 seconds (`delay` inside `httpResponse`):
+
+```sh
+curl -X PUT http://localhost:1080/mockserver/expectation \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "httpRequest": { "method": "GET", "path": "/downstream/payments" },
+    "httpResponse": {
+      "statusCode": 200,
+      "body": "{ \"ok\": true }",
+      "delay": { "timeUnit": "SECONDS", "value": 5 }
+    }
+  }'
+```
+
+Fail once, then recover — an array body registers both expectations on the
+same endpoint, and the times-limited expectation is matched first while it
+still has remaining matches:
+
+```sh
+curl -X PUT http://localhost:1080/mockserver/expectation \
+  -H 'Content-Type: application/json' \
+  -d '[
+    {
+      "httpRequest": { "method": "GET", "path": "/downstream/payments" },
+      "httpResponse": { "statusCode": 500 },
+      "times": { "remainingTimes": 1, "unlimited": false }
+    },
+    {
+      "httpRequest": { "method": "GET", "path": "/downstream/payments" },
+      "httpResponse": { "statusCode": 200, "body": "{ \"ok\": true }" }
+    }
+  ]'
+```
+
+Expectations are stateful — reset everything, or clear scoped state, between
+scenarios:
+
+```sh
+curl -X PUT http://localhost:1080/mockserver/reset
+curl -X PUT "http://localhost:1080/mockserver/clear?type=expectations"
+```
+
+**Integration boundary:** running MockServer does not redirect any of the
+API's outgoing requests — an application dependency must be explicitly
+configured to target `http://mockserver:1080` (or the host address) before
+anything is mocked. There is deliberately no `depends_on` relationship (the
+API only logs the addresses and starts fine without the service), no volume
+(every container restart starts with no expectations), and no role in the
+automated test suite (Testcontainers tests never use the dev Compose stack,
+ADR-016): MockServer is a manual, interactive development tool. The
+monitoring stack's Alloy collects its stdout like any other dev container
+(ADR-022).
+
 ## Data Persistence
 
 - **PostgreSQL** persists in a named Docker volume
@@ -215,7 +331,11 @@ installed into the volumes.
 
 After a successful listen, the API logs its API address
 (`http://<address>:<port>/api/v1`) and — in development only — the Swagger UI
-address (`http://<address>:<port>/docs`) using the Pino logger. The protocol
+address (`http://<address>:<port>/docs`) using the Pino logger. In development
+the log can also contain a `MockServer:` section (`Host:` / `Docker:` lines,
+ADR-024) and the Redis Insight URL (ADR-020); each appears only where the
+development Compose stack injected the corresponding optional variable, so
+local non-Docker development and production log neither. The protocol
 is always `http`: the Fastify adapter is created without HTTPS options and no
 reverse proxy fronts the API, so no external URL is invented. For the wildcard
 bind address (`HOST=0.0.0.0`, the default in `apps/api/env/.env.development`

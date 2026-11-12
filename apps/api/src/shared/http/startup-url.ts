@@ -45,10 +45,19 @@ export function buildStartupUrl(address: string, port: number, path: string): st
   return `${PROTOCOL}://${hostPart}:${port}${path}`;
 }
 
+export interface MockServerStartupUrls {
+  /** Host-machine MockServer address; `null` when none is exposed. */
+  readonly host: string | null;
+  /** Compose-network MockServer address; `null` when none is exposed. */
+  readonly docker: string | null;
+}
+
 export interface StartupUrlSections {
   readonly apiUrls: readonly string[];
   /** `null` when Swagger is not registered (non-development environments). */
   readonly swaggerUrls: readonly string[] | null;
+  /** MockServer addresses; `null` where the service is not exposed. */
+  readonly mockserverUrls: MockServerStartupUrls | null;
   /** Host-accessible Redis Insight URL; `null` where none is exposed. */
   readonly redisInsightUrl: string | null;
 }
@@ -59,6 +68,7 @@ export interface StartupUrlSections {
 export function buildStartupLogMessage({
   apiUrls,
   swaggerUrls,
+  mockserverUrls,
   redisInsightUrl,
 }: StartupUrlSections): string {
   const lines: string[] = ['Application successfully started', '', 'API:'];
@@ -67,6 +77,18 @@ export function buildStartupLogMessage({
   if (swaggerUrls !== null) {
     lines.push('', 'Swagger:');
     lines.push(...labeledUrls(swaggerUrls));
+  }
+
+  // A section with no addresses is suppressed so future callers cannot print
+  // a bare header advertising visibility that does not exist.
+  if (mockserverUrls !== null && (mockserverUrls.host !== null || mockserverUrls.docker !== null)) {
+    lines.push('', 'MockServer:');
+    if (mockserverUrls.host !== null) {
+      lines.push(`  Host:    ${mockserverUrls.host}`);
+    }
+    if (mockserverUrls.docker !== null) {
+      lines.push(`  Docker:  ${mockserverUrls.docker}`);
+    }
   }
 
   if (redisInsightUrl !== null) {

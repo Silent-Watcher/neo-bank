@@ -46,7 +46,7 @@ pnpm cm
 
 ## Docker
 
-The full stack — API, web, admin, PostgreSQL, Redis — can also run in Docker, in development (hot reloading) and production configurations. See [`docs/docker.md`](./docs/docker.md).
+The full stack — API, web, admin, PostgreSQL, Redis, plus a development-only MockServer for resilience testing (ADR-024) — can also run in Docker, in development (hot reloading) and production configurations. See [`docs/docker.md`](./docs/docker.md).
 
 Centralized log monitoring (Grafana, Loki, Grafana Alloy) runs as an independent Compose stack; Grafana is at `http://localhost:3002` when monitoring is up. Operations: [`docs/observability/README.md`](./docs/observability/README.md).
 
