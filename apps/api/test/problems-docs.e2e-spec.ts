@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import request from 'supertest';
 
-import { createTestApp } from './create-test-app.js';
+import { createE2eTestApp } from './create-test-app.js';
 
 describe('Problem Type documentation (e2e)', () => {
   it('serves the application-error Problem Type page as HTML', async () => {
     // Arrange
-    const app = await createTestApp();
+    const app = await createE2eTestApp();
 
     // Act
     const response = await request(app.getHttpServer()).get('/problems/application-error');
@@ -24,7 +24,7 @@ describe('Problem Type documentation (e2e)', () => {
 
   it('resolves at the exact URI used in Problem Details responses, without the API prefix', async () => {
     // Arrange
-    const app = await createTestApp();
+    const app = await createE2eTestApp();
 
     // Act
     const prefixed = await request(app.getHttpServer()).get('/api/v1/problems/application-error');

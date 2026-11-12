@@ -830,3 +830,238 @@ verdict: APPROVED, no remaining findings.
 **Wave 6 summary:** 3 findings — 1 actionable Low (SEC-01, fixed and
 re-reviewed), 2 informational (SEC-02/SEC-03, Won't Fix with technical
 justification). No Critical/High/Medium findings.
+
+---
+
+## Wave 7 — Task 4 (environment governance) code review (2026-11-13)
+
+Review scope: `apps/api/src/shared/config/env/schema/enrollments.env.ts`
+(behavior-preserving helper swap), population of
+`apps/api/env/.env.development` / `.env.production`, root `AGENTS.md`
+stability subsection, `docs/ai-decisions.md`, `PROJECT_CONTEXT.md` index row.
+Verdict: `CHANGES_REQUIRED` → remediated → re-review below.
+
+### TF4-1 — Empty `KEY=` env entries crash startup for five Redis variables
+
+- **Status:** Resolved
+- **Severity:** Critical
+- **Category:** Correctness / Edge Case
+- **Locations:** `apps/api/env/.env.development` and `.env.production` —
+  `REDIS_TLS=`, `REDIS_CONNECT_TIMEOUT_MS=`, `REDIS_COMMAND_TIMEOUT_MS=`,
+  `REDIS_MAX_RETRIES_PER_REQUEST=`, `REDIS_SHUTDOWN_TIMEOUT_MS=` (and
+  `REDIS_DB=` for semantic consistency)
+- **Technical explanation:** `node --env-file` and Compose `env_file` deliver
+  `KEY=` as the empty **string**, not as an absent variable. The schema
+  defaults apply only to `undefined`: `REDIS_TLS` (`z.enum(['true','false'])`)
+  rejects `''`, and the four `positiveSafeInteger(...).default(...)` fields
+  coerce `Number('') === 0` and fail `.positive()`. The aggregate schema runs
+  at module import, so both populated files crashed at startup on every path
+  (`pnpm dev`, dev Compose, prod Compose).
+- **Failure scenario:** every startup using either populated file throws
+  `EnvValidationError` before binding a port.
+- **Judge recommendation:** populate explicit schema-default values, or omit
+  the keys (`.env.test` convention).
+- **Investigation results:** confirmed against `redis.env.ts`,
+  `redis.env.spec.ts`, and the `optionalHttpUrlEnv` helper's rationale.
+  Populated explicit values instead of omitting keys, to keep the 27-name
+  parity with `.env.example` (governance rule) and to document the effective
+  configuration: `REDIS_DB=0`, `REDIS_TLS=false`,
+  `REDIS_CONNECT_TIMEOUT_MS=10000`, `REDIS_COMMAND_TIMEOUT_MS=5000`,
+  `REDIS_MAX_RETRIES_PER_REQUEST=3`, `REDIS_SHUTDOWN_TIMEOUT_MS=2000` in both
+  files. (`.env.example` retains its blank template keys — pre-existing
+  behavior outside this task's scope, noted for a future template-hardening
+  pass.)
+- **Agreed resolution:** fixed as above.
+
+### TF4-2 — Production template sets `TRUST_PROXY=true` without any proxy in the shipped topology
+
+- **Status:** Resolved
+- **Severity:** Medium
+- **Category:** Correctness (security-adjacent configuration)
+- **Locations:** `apps/api/env/.env.production` (`TRUST_PROXY`)
+- **Technical explanation:** no reverse proxy exists in any shipped
+  production Compose topology (`compose.app.prod.yml` publishes the API port
+  directly; `compose.prod.all.yml` only adds monitoring). With
+  `trustProxy=true`, Fastify derives `req.ip` from client-supplied
+  `X-Forwarded-For`, which feeds the Redis throttler's per-IP tracker —
+  enabling rate-limit evasion and polluted client-IP logs.
+- **Failure scenario:** a deployment using the template as shipped lets any
+  client rotate `X-Forwarded-For` to defeat global rate limits.
+- **Judge recommendation:** set `TRUST_PROXY=false`, or document the
+  assumption explicitly.
+- **Investigation results:** confirmed: no proxy service exists in the
+  shipped stacks. Set `TRUST_PROXY=false` with a comment instructing that it
+  may be set `true` only where a real proxy terminates client connections.
+  (The original `true` had been an explicitly flagged assumption in the
+  approved proposal; the review resolved the assumption against the shipped
+  topology.)
+- **Agreed resolution:** fixed as above.
+
+### TF4-3 — "Mandatory post-task record" appears unanchored in the PROJECT_CONTEXT index row
+
+- **Status:** Resolved (partial)
+- **Severity:** Low
+- **Category:** Documentation consistency
+- **Locations:** `PROJECT_CONTEXT.md` documentation index row for
+  `docs/ai-decisions.md`
+- **Technical explanation:** the judge stated no rule establishes the
+  record's mandatoriness. **Partially incorrect:** the mandate exists in root
+  `AGENTS.md`, `## Agent Workflow` → `### AI Decision Log` ("After completing
+  an implementation task … record the relevant independent decisions in
+  `docs/ai-decisions.md`"). The judge examined the wrong region of the file.
+  The residual point is fair: the index row did not point at that rule.
+- **Failure scenario:** an agent consulting only the index could miss the
+  governing rule.
+- **Judge recommendation:** reference the rule or drop "mandatory".
+- **Investigation results:** rule confirmed present; index row reworded to
+  anchor it ("mandatory per root AGENTS.md Agent Workflow").
+- **Agreed resolution:** index wording anchored to the rule; no rule change
+  needed.
+
+**Wave 7 summary:** 3 findings — 1 Critical (TF4-1, fixed: explicit
+schema-default values populated), 1 Medium (TF4-2, fixed: `TRUST_PROXY=false`
+with an explicit proxy assumption comment), 1 Low (TF4-3, partially
+incorrect; index wording anchored). Re-review verdict recorded below.
+
+**Wave 7 re-review (same reviewer):** `APPROVED` — TF4-1/TF4-2/TF4-3 all
+verified fixed; no new defects introduced; key-set parity and schema validity
+re-confirmed; no secrets in tracked files.
+
+---
+
+## Wave 8 — Task 4 (environment governance) security review (2026-11-13)
+
+Review scope: identical to Wave 7. Verdict: `SECURITY_CHANGES_REQUIRED`
+(1 actionable LOW) → remediated → re-review below.
+
+### SEC-01 — Stale `TRUST_PROXY=true` statement in the _037 record contradicts the remediated value
+
+- **Status:** Resolved
+- **Severity:** Low
+- **Category:** Security (documentation integrity on a security-relevant control; adjacent to CWE-1059)
+- **Locations:** `prompts/_037-environment-governance.md` (Decisions section)
+- **Technical explanation:** the Decisions bullet still presented production
+  `TRUST_PROXY=true` as an explicit, commented assumption awaiting
+  confirmation, while the Implementation section and the actual
+  `.env.production` record the remediated `false` (Wave 7 TF4-2). A future
+  agent reading the Decisions bullet could "confirm" the stale assumption and
+  reintroduce client-IP spoofing against the per-IP rate limiter.
+- **Failure scenario:** regression to `X-Forwarded-For`-spoofable rate limiting
+  in a future production deployment, licensed by the project's own record.
+- **Judge recommendation:** correct the stale bullet to record the final
+  accepted decision.
+- **Investigation results:** valid; the record predates the TF4-2 remediation
+  and was not updated with it. Bullet rewritten to state the final value and
+  the proxy-conditioned exception.
+- **Agreed resolution:** fixed.
+
+### SEC-02 — Production `BODY_LIMIT=2097152` doubles the schema default
+
+- **Status:** Won't Fix (documented, approved choice)
+- **Severity:** Informational (CWE-770, marginal)
+- **Category:** Security / hardening
+- **Locations:** `apps/api/env/.env.development`, `.env.production` (`BODY_LIMIT`)
+- **Technical explanation:** 2 MiB is the deliberate, developer-approved value
+  (matches the populated `.env.test` precedent; the schema default remains
+  1 MiB for environments that leave it unset). Throughput is bounded by the
+  per-IP rate limiter (10 req/s short policy) and fail-closed Redis behavior;
+  no realistic exploit path was identified by the reviewer.
+- **Judge recommendation (optional):** revert production to 1 MiB or document
+  why it was raised.
+- **Investigation results:** kept at 2 MiB per the approved plan; the value is
+  a named, commented configuration entry that a future hardening pass can
+  lower when real payload needs are known.
+- **Agreed resolution:** Won't Fix with the justification above.
+
+### SEC-03 — Development `HOST=0.0.0.0` exposes the dev API (and Swagger) to the local network
+
+- **Status:** Won't Fix (accepted, documented trade-off)
+- **Severity:** Informational (CWE-668)
+- **Category:** Security / exposure
+- **Locations:** `apps/api/env/.env.development` (`HOST`)
+- **Technical explanation:** one dev file serves both host-local `pnpm dev`
+  and the Compose container; the container requires `0.0.0.0` (nothing
+  overrides `HOST` there). Mitigations already in place: exact-origin CORS
+  allow-list, `TRUST_PROXY=false`, fail-closed Redis, loopback-bound
+  MockServer. Exposure is limited to development data on the LAN.
+- **Judge recommendation (optional):** keep `127.0.0.1` host-side and let the
+  dev Compose `environment:` override `HOST: 0.0.0.0` (mirrors prod).
+- **Investigation results:** not applied in this task: adding a `HOST`
+  override to the dev compose `environment:` block is a compose-file behavior
+  change outside this task's scope (env-file governance); it is recorded as a
+  candidate for a future pass.
+- **Agreed resolution:** Won't Fix with the justification above; follow-up
+  candidate noted.
+
+### SEC-04 — Non-Compose production can boot with an empty `REDIS_PASSWORD` against a passwordless Redis
+
+- **Status:** Won't Fix (pre-existing schema behavior; fail-closed at runtime)
+- **Severity:** Informational (CWE-1188, theoretical)
+- **Category:** Security / configuration hardening
+- **Locations:** `apps/api/src/shared/config/env/schema/redis.env.ts`
+  (`REDIS_PASSWORD` allows empty), `apps/api/env/.env.production`
+- **Technical explanation:** unlike `CORS_ORIGIN` (production superRefine) and
+  `ENROLLMENTS_OTP_HMAC_SECRET` (64-hex regex), an empty `REDIS_PASSWORD`
+  passes validation. The shipped Compose prod stack cannot boot that way
+  (`${REDIS_PASSWORD:?…}` interpolation), and a password-protected Redis with
+  an empty client password fails auth at runtime — the throttler storage
+  rejects and every guarded route fails closed (verified fail-closed paths).
+  The risk requires an operator to deliberately run a passwordless Redis.
+- **Judge recommendation (optional):** production-only refinement requiring
+  non-empty `REDIS_PASSWORD` when `APP_ENV=production`.
+- **Investigation results:** not applied: it is a pre-existing schema behavior
+  outside this task's scope (the task populated values; it did not change
+  validation semantics), and the schema comment explicitly documents empty as
+  "no authentication". A production-only superRefine is a valid future
+  hardening candidate.
+- **Agreed resolution:** Won't Fix with the justification above.
+
+**Wave 8 summary:** 4 findings — 1 actionable Low (SEC-01, fixed), 3
+informational (SEC-02/SEC-03/SEC-04, Won't Fix with technical justification;
+SEC-03 carries a noted follow-up candidate). Re-review verdict recorded below.
+
+---
+
+## Wave 9 — Task 1 (E2E Testcontainers) code review (2026-11-13)
+
+Review scope: `apps/api/test/e2e.global-setup.ts` (new),
+`create-test-app.ts`, `vitest-e2e.config.ts`, the 14 renamed e2e specs, the
+enrollments-spec Redis decoupling, `apps/api/package.json` (+lockfile).
+Verdict: `APPROVED_WITH_SUGGESTIONS` (1 Low) → remediated → re-review below.
+
+### CR-01 — Four stale comments contradicting the new Redis wiring
+
+- **Status:** Resolved
+- **Severity:** Low
+- **Category:** Documentation / Syntax–Code Quality
+- **Locations:** `apps/api/env/.env.test` (mechanism comment),
+  `apps/api/test/enrollments.e2e-spec.ts` (~line 97),
+  `apps/api/test/redis-health.e2e-spec.ts` (~line 7),
+  `apps/api/test/testcontainers.ts` (~line 36)
+- **Technical explanation:** four comments still described the old wiring —
+  the `.env.test` comment claimed `createE2eTestApp` overrides
+  `REDIS_CONFIG` (it overrides `REDIS_CLIENT`; the judge confirmed the
+  `REDIS_CONFIG`-only route silently reconnects the placeholder env client);
+  the enrollments spec said the global rate limiter "uses the real Redis from
+  env.test"; redis-health said `.env.test` "points Redis at the real compose
+  dev server"; and `testcontainers.ts` justified `GenericContainer` against
+  the now-removed `@testcontainers/redis` package.
+- **Failure scenario:** a maintainer following the `.env.test` comment would
+  implement the ineffective `REDIS_CONFIG` override and get fail-closed 500s
+  with no obvious cause.
+- **Judge recommendation:** reword all four in the same change.
+- **Investigation results:** valid; all four comments rewritten to describe
+  the actual wiring (REDIS_CLIENT override, shared container, placeholder
+  semantics, core-package rationale).
+- **Agreed resolution:** fixed.
+
+**Wave 9 summary:** 1 finding — 1 Low (CR-01, fixed). No correctness,
+security, or architectural defects identified; the judge explicitly verified
+override propagation to the throttler storage, client lifecycle on both
+stubbed and real `RedisService` paths, redis-suite isolation, type
+augmentation, dependency-removal safety, and failure paths. Re-review verdict
+recorded below.
+
+**Wave 9 re-review (same reviewer):** `APPROVED` — all four CR-01 locations
+verified fixed; no new findings; surrounding code byte-identical to the
+previously reviewed implementation.

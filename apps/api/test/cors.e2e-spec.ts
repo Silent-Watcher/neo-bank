@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import request from 'supertest';
 
-import { createTestApp } from './create-test-app.js';
+import { createE2eTestApp } from './create-test-app.js';
 
 // Must match CORS_ORIGIN in env/.env.test, which the e2e run loads.
 const allowedOrigin = 'http://localhost:3000';
@@ -9,7 +9,7 @@ const allowedOrigin = 'http://localhost:3000';
 describe('CORS (e2e)', () => {
   it('grants an allowed origin access to a regular response', async () => {
     // Arrange
-    const app = await createTestApp();
+    const app = await createE2eTestApp();
 
     // Act
     const response = await request(app.getHttpServer())
@@ -24,7 +24,7 @@ describe('CORS (e2e)', () => {
 
   it('does not grant a disallowed origin access', async () => {
     // Arrange
-    const app = await createTestApp();
+    const app = await createE2eTestApp();
 
     // Act
     const response = await request(app.getHttpServer())
@@ -39,7 +39,7 @@ describe('CORS (e2e)', () => {
 
   it('does not treat a different port or scheme as an allowed origin', async () => {
     // Arrange
-    const app = await createTestApp();
+    const app = await createE2eTestApp();
 
     // Act & Assert
     for (const origin of ['http://localhost:3001', 'https://localhost:3000']) {
@@ -52,7 +52,7 @@ describe('CORS (e2e)', () => {
 
   it('answers a preflight from an allowed origin with the requested method', async () => {
     // Arrange
-    const app = await createTestApp();
+    const app = await createE2eTestApp();
 
     // Act
     const response = await request(app.getHttpServer())
@@ -69,7 +69,7 @@ describe('CORS (e2e)', () => {
 
   it('echoes permitted request headers in the preflight response', async () => {
     // Arrange
-    const app = await createTestApp();
+    const app = await createE2eTestApp();
 
     // Act
     const response = await request(app.getHttpServer())
@@ -86,7 +86,7 @@ describe('CORS (e2e)', () => {
 
   it('does not answer a preflight from a disallowed origin', async () => {
     // Arrange
-    const app = await createTestApp();
+    const app = await createE2eTestApp();
 
     // Act
     const response = await request(app.getHttpServer())

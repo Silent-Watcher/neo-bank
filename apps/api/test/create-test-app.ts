@@ -6,9 +6,12 @@ import type { TestingModuleBuilder } from '@nestjs/testing';
 import { Test } from '@nestjs/testing';
 import type { Redis } from 'ioredis';
 import { Logger } from 'nestjs-pino';
+import { inject } from 'vitest';
 
+import type { RedisConfig } from '#config/redis.config.js';
 import { AppModule } from '#src/modules/app/app.module.js';
 import { REDIS_CLIENT } from '#src/shared/redis/redis.constants.js';
+import { createRedisClient } from '#src/shared/redis/redis.provider.js';
 import serverConfig from '#src/shared/config/server.config.js';
 import { fastifyGenReqId } from '#src/shared/http/request-id.js';
 import { registerRequestIdLifecycle } from '#src/shared/http/request-id.lifecycle.js';
@@ -19,14 +22,20 @@ import { registerRequestIdLifecycle } from '#src/shared/http/request-id.lifecycl
 // response/error contracts with throwaway routes; configureModule lets specs
 // override providers (e.g. the logger params) before the module compiles.
 // adapterTrustProxy overrides the validated TRUST_PROXY value for specs that
-// verify proxy-trust behavior itself.
+// verify proxy-trust behavior itself. redisConfig supplies a Redis client
+// built against a different server than the validated REDIS_CONFIG;
+// spec-provided configureModule overrides keep precedence (applied after
+// this one).
+export interface CreateTestAppOptions {
+  controllers?: Type[];
+  configureModule?: (builder: TestingModuleBuilder) => void;
+  adapterTrustProxy?: boolean;
+  redisConfig?: RedisConfig;
+}
+
 export async function createTestApp(
   beforeInit?: (app: NestFastifyApplication) => void,
-  options?: {
-    controllers?: Type[];
-    configureModule?: (builder: TestingModuleBuilder) => void;
-    adapterTrustProxy?: boolean;
-  },
+  options?: CreateTestAppOptions,
 ): Promise<NestFastifyApplication> {
   const { trustProxy, bodyLimit, corsOrigins } = serverConfig();
 
@@ -34,6 +43,13 @@ export async function createTestApp(
     imports: [AppModule],
     controllers: options?.controllers,
   });
+  if (options?.redisConfig) {
+    // @nestjs/config's ConfigService holds the registerAs factory result and
+    // does not observe provider overrides on the namespace token, so the
+    // client itself is supplied — the same mechanism the test:redis suites
+    // use. RedisService still owns the connection lifecycle for this client.
+    moduleBuilder.overrideProvider(REDIS_CLIENT).useValue(createRedisClient(options.redisConfig));
+  }
   options?.configureModule?.(moduleBuilder);
   const module = await moduleBuilder.compile();
   const app = module.createNestApplication<NestFastifyApplication>(
@@ -86,4 +102,20 @@ export async function createTestApp(
   await app.getHttpAdapter().getInstance().ready();
 
   return app;
+}
+
+/**
+ * E2E-suite entry point: the identical application with Redis pointed at the
+ * shared Testcontainers container started by test/e2e.global-setup.ts
+ * (ADR-025, one container per test execution). The container's connection
+ * config travels through Vitest's provide/inject channel, so calling this
+ * outside the e2e run (which provides it) fails fast with a clear error.
+ * The test:redis suites keep calling createTestApp directly with their own
+ * per-file containers.
+ */
+export async function createE2eTestApp(
+  beforeInit?: (app: NestFastifyApplication) => void,
+  options?: Omit<CreateTestAppOptions, 'redisConfig'>,
+): Promise<NestFastifyApplication> {
+  return createTestApp(beforeInit, { ...options, redisConfig: inject('e2eRedisConfig') });
 }

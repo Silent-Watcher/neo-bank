@@ -6,7 +6,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import request from 'supertest';
 
 import { ContractController } from './contract.controller.js';
-import { createTestApp } from './create-test-app.js';
+import { createE2eTestApp } from './create-test-app.js';
 import { buildPinoHttpOptions } from '#src/shared/logging/pino-http.options.js';
 
 interface LogLine {
@@ -28,7 +28,7 @@ describe('Pino logging (e2e)', () => {
       },
     });
 
-    app = await createTestApp(undefined, {
+    app = await createE2eTestApp(undefined, {
       controllers: [ContractController],
       configureModule: (builder) => {
         // Rebuild the real pino options so redaction and access-log behavior

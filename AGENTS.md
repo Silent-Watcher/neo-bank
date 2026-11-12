@@ -26,7 +26,8 @@ This is a TypeScript monorepo managed with pnpm and Turborepo.
   might already exist, partially exist, or depend on an unfinished feature.
 - Load context progressively: read only the documentation and source files
   the current task requires; specialized documents (`docs/docker.md`,
-  `docs/observability/`, `docs/security-otp-enrollment.md`, ADRs) are read
+  `docs/ai-decisions.md`, `docs/observability/`,
+  `docs/security-otp-enrollment.md`, ADRs) are read
   only when relevant. Prefer targeted searches over broad repository
   exploration, and do not re-read files whose contents are already available
   in the session unless they may have changed.
@@ -85,6 +86,34 @@ This includes all applicable development, production, testing, and application-s
 5. When a variable's purpose or configuration requirements change, update its documentation consistently.
 6. Never update `.env.example` without checking the remaining environment files.
 7. Never assume that updating only one environment file is sufficient.
+
+#### Environment Variable Stability
+
+Existing environment variables and their populated values are stable project
+configuration, not agent preferences. Future agents must:
+
+1. Preserve existing environment variable names.
+2. Preserve existing populated values; never overwrite a value because a
+   different default would be preferred.
+3. Never rename an existing variable without explicit developer approval.
+4. Add new variables only when an actual implementation requires them.
+5. Remove a variable only when it is genuinely obsolete; check its usages
+   first and justify the removal.
+6. Update all relevant environment files and validation schemas when adding
+   or removing variables (see Synchronization Rules above).
+7. Keep development, test, and production configurations consistent with
+   their respective requirements, and preserve legitimate
+   environment-specific differences.
+8. Never duplicate an existing variable under a different name.
+9. Never expose secret values in documentation, logs, reports, or example
+   files.
+10. If an existing variable must change for a genuine architectural or
+    functional reason, explain the reason and obtain developer approval
+    before changing it.
+
+Populating previously empty variables is a one-time activity, not a standing
+license: once populated (see `prompts/_037`), values fall under the stability
+rules above.
 
 #### Comments and Documentation
 
@@ -457,6 +486,15 @@ Orchestration rules for the primary agent:
 - Create approved decision records with **Accepted** status (the proposal remains outside the repository until explicitly approved).
 - Do not create a `Pending` ADR file as a substitute for approval.
 - The accepted ADR must be the first repository write associated with that feature.
+
+### AI Decision Log
+
+- After completing an implementation task, review the decisions made during that task and record the relevant independent decisions in `docs/ai-decisions.md`.
+- An independent decision is a choice the agent made without explicit developer direction that is not already established by project documentation, conventions, or an accepted ADR. Do not record trivial implementation details (such as variable names or following an existing convention); do record meaningful choices (testing strategies, dependency introductions, boundary or behavior changes, interpretation of underspecified requirements).
+- Every entry must contain: Context, Decision, Reasoning, Alternatives, Trade-offs, Impact, Reversibility, and an ADR Recommendation (whether the decision deserves a formal ADR, and why).
+- Reference existing documentation (`DECISIONS.md`, `docs/judge-findings.md`, `DEFERRED.md`, the task's prompt record) instead of duplicating it.
+- Recording a decision in the log does not authorize anything beyond what was already approved: a decision with architectural significance is an ADR candidate and requires developer approval before any ADR is created.
+- The agent must not silently introduce significant architectural decisions. When a discovered problem seems to require one, stop and present it instead of deciding independently.
 
 ### ADR-First Development Workflow
 

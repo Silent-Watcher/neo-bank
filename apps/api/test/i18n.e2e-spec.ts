@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import request from 'supertest';
 
 import { ContractController } from './contract.controller.js';
-import { createTestApp } from './create-test-app.js';
+import { createE2eTestApp } from './create-test-app.js';
 
 const ENVELOPE_FA_MESSAGE = 'با موفقیت انجام شد';
 const PHONE_VALIDATION_FA = 'شماره تلفن همراه باید یک شماره همراه ایران با قالب 09XXXXXXXXX باشد.';
@@ -21,7 +21,7 @@ async function echo(
 
 describe('Locale resolution (e2e)', () => {
   it('resolves an explicit supported language', async () => {
-    const app = await createTestApp(undefined, { controllers: [ContractController] });
+    const app = await createE2eTestApp(undefined, { controllers: [ContractController] });
 
     const en = await echo(app.getHttpServer(), 'en');
     const fa = await echo(app.getHttpServer(), 'fa');
@@ -34,7 +34,7 @@ describe('Locale resolution (e2e)', () => {
   });
 
   it('falls back from regional identifiers to their base language', async () => {
-    const app = await createTestApp(undefined, { controllers: [ContractController] });
+    const app = await createE2eTestApp(undefined, { controllers: [ContractController] });
 
     const faIr = await echo(app.getHttpServer(), 'fa-IR');
     const enUs = await echo(app.getHttpServer(), 'en-US');
@@ -47,7 +47,7 @@ describe('Locale resolution (e2e)', () => {
   });
 
   it('honors q-values across multiple languages', async () => {
-    const app = await createTestApp(undefined, { controllers: [ContractController] });
+    const app = await createE2eTestApp(undefined, { controllers: [ContractController] });
 
     const prefersFa = await echo(app.getHttpServer(), 'fr-CH,fr;q=0.9,fa;q=0.8');
     const prefersEn = await echo(app.getHttpServer(), 'fa;q=0.5,en;q=0.9');
@@ -58,7 +58,7 @@ describe('Locale resolution (e2e)', () => {
   });
 
   it('uses the default locale for unsupported languages and a missing header', async () => {
-    const app = await createTestApp(undefined, { controllers: [ContractController] });
+    const app = await createE2eTestApp(undefined, { controllers: [ContractController] });
 
     const unsupported = await echo(app.getHttpServer(), 'xx-YY');
     const missing = await echo(app.getHttpServer(), undefined);
@@ -73,7 +73,7 @@ describe('Locale resolution (e2e)', () => {
 
 describe('Locale response headers (e2e)', () => {
   it('advertises Vary for Accept-Language so caches keep per-language copies', async () => {
-    const app = await createTestApp(undefined, { controllers: [ContractController] });
+    const app = await createE2eTestApp(undefined, { controllers: [ContractController] });
 
     const response = await echo(app.getHttpServer(), 'fa');
 
@@ -84,7 +84,7 @@ describe('Locale response headers (e2e)', () => {
 
 describe('Localized validation errors (e2e)', () => {
   it('returns Persian validation messages for the enrollments challenge endpoint', async () => {
-    const app = await createTestApp();
+    const app = await createE2eTestApp();
 
     const response = await request(app.getHttpServer())
       .post('/api/v1/enrollments/challenge')
@@ -98,7 +98,7 @@ describe('Localized validation errors (e2e)', () => {
   });
 
   it('translates unkeyed type issues so no English Zod message leaks into Persian responses', async () => {
-    const app = await createTestApp(undefined, { controllers: [ContractController] });
+    const app = await createE2eTestApp(undefined, { controllers: [ContractController] });
 
     const response = await request(app.getHttpServer())
       .post('/api/v1/validate/things')
@@ -111,7 +111,7 @@ describe('Localized validation errors (e2e)', () => {
   });
 
   it('translates the OTP format message in Persian while keeping field paths untouched', async () => {
-    const app = await createTestApp();
+    const app = await createE2eTestApp();
 
     const response = await request(app.getHttpServer())
       .post('/api/v1/enrollments/verify')
@@ -124,7 +124,7 @@ describe('Localized validation errors (e2e)', () => {
   });
 
   it('keeps English messages when no Accept-Language is sent', async () => {
-    const app = await createTestApp();
+    const app = await createE2eTestApp();
 
     const response = await request(app.getHttpServer())
       .post('/api/v1/enrollments/challenge')
@@ -140,7 +140,7 @@ describe('Localized validation errors (e2e)', () => {
 
 describe('Localized error titles with a stable contract (e2e)', () => {
   it('translates the Problem Details title while code, status, and type stay identical', async () => {
-    const app = await createTestApp(undefined, { controllers: [ContractController] });
+    const app = await createE2eTestApp(undefined, { controllers: [ContractController] });
 
     const en = await request(app.getHttpServer()).get('/api/v1/app-error');
     const fa = await request(app.getHttpServer())
@@ -158,7 +158,7 @@ describe('Localized error titles with a stable contract (e2e)', () => {
 
 describe('Request locale isolation (e2e)', () => {
   it('serves concurrent requests in their own language without leakage', async () => {
-    const app = await createTestApp(undefined, { controllers: [ContractController] });
+    const app = await createE2eTestApp(undefined, { controllers: [ContractController] });
 
     // The requests run in small concurrent batches, interleaving two locales:
     // each request must resolve and render its own language. Batches of 4 sit
@@ -181,7 +181,7 @@ describe('Request locale isolation (e2e)', () => {
 
 describe('Health endpoint with localization headers (e2e)', () => {
   it('keeps the monitoring contract for both supported languages', async () => {
-    const app = await createTestApp();
+    const app = await createE2eTestApp();
 
     const en = await request(app.getHttpServer()).get('/health').set('Accept-Language', 'en');
     const fa = await request(app.getHttpServer()).get('/health').set('Accept-Language', 'fa');

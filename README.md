@@ -33,8 +33,8 @@ pnpm lint
 pnpm format
 pnpm format:check
 pnpm typecheck
-pnpm test
-pnpm test:redis   # API Redis integration tests (requires running Redis)
+pnpm test         # unit + e2e tests across workspaces via Turborepo
+pnpm test:e2e     # API e2e tests (self-managed Testcontainers Redis; requires Docker)
 pnpm docker:dev   # start the full Docker dev stack in the background
 pnpm docker:prod  # start the full Docker production stack in the background
 pnpm docker:monitoring   # centralized log monitoring (Grafana + Loki + Alloy)
@@ -43,6 +43,8 @@ pnpm cm
 ```
 
 `pnpm cm` opens Commitizen. Commits follow Conventional Commits with optional `api`, `web`, `admin`, or `monorepo` scopes, for example `feat(api): add accounts endpoint`. Husky formats and lints staged files before commits, validates commit messages, and runs `pnpm test` before pushes.
+
+The Redis integration suite (`test:redis`) exists only in the `apps/api` workspace: run `pnpm --dir apps/api test:redis` (also requires Docker).
 
 ## Docker
 

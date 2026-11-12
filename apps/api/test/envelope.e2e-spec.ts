@@ -2,14 +2,14 @@ import { describe, expect, it } from 'vitest';
 import request from 'supertest';
 
 import { ContractController } from './contract.controller.js';
-import { createTestApp } from './create-test-app.js';
+import { createE2eTestApp } from './create-test-app.js';
 
 const UUID_V4_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
 describe('Response envelope (e2e)', () => {
   it('wraps an ordinary successful JSON response exactly once', async () => {
     // Arrange
-    const app = await createTestApp(undefined, { controllers: [ContractController] });
+    const app = await createE2eTestApp(undefined, { controllers: [ContractController] });
 
     // Act
     const response = await request(app.getHttpServer()).get('/api/v1/echo');
@@ -29,7 +29,7 @@ describe('Response envelope (e2e)', () => {
 
   it('reflects the actual status code, including 201', async () => {
     // Arrange
-    const app = await createTestApp(undefined, { controllers: [ContractController] });
+    const app = await createE2eTestApp(undefined, { controllers: [ContractController] });
 
     // Act
     const response = await request(app.getHttpServer()).post('/api/v1/things');
@@ -44,7 +44,7 @@ describe('Response envelope (e2e)', () => {
 
   it('keeps the request ID consistent between the envelope and the header', async () => {
     // Arrange
-    const app = await createTestApp(undefined, { controllers: [ContractController] });
+    const app = await createE2eTestApp(undefined, { controllers: [ContractController] });
 
     // Act
     const response = await request(app.getHttpServer()).get('/api/v1/echo');
@@ -57,7 +57,7 @@ describe('Response envelope (e2e)', () => {
 
   it('preserves the no-body behavior of 204 responses', async () => {
     // Arrange
-    const app = await createTestApp(undefined, { controllers: [ContractController] });
+    const app = await createE2eTestApp(undefined, { controllers: [ContractController] });
 
     // Act
     const response = await request(app.getHttpServer()).get('/api/v1/no-content');
@@ -70,7 +70,7 @@ describe('Response envelope (e2e)', () => {
 
   it('preserves the no-body behavior of 304 responses', async () => {
     // Arrange
-    const app = await createTestApp(undefined, { controllers: [ContractController] });
+    const app = await createE2eTestApp(undefined, { controllers: [ContractController] });
 
     // Act
     const response = await request(app.getHttpServer()).get('/api/v1/not-modified');
@@ -83,7 +83,7 @@ describe('Response envelope (e2e)', () => {
 
   it('does not wrap HEAD responses', async () => {
     // Arrange
-    const app = await createTestApp(undefined, { controllers: [ContractController] });
+    const app = await createE2eTestApp(undefined, { controllers: [ContractController] });
 
     // Act
     const response = await request(app.getHttpServer()).head('/api/v1/resource');
@@ -99,7 +99,7 @@ describe('Response envelope (e2e)', () => {
 
   it('passes file downloads through unwrapped', async () => {
     // Arrange
-    const app = await createTestApp(undefined, { controllers: [ContractController] });
+    const app = await createE2eTestApp(undefined, { controllers: [ContractController] });
 
     // Act
     const response = await request(app.getHttpServer()).get('/api/v1/file');
@@ -114,7 +114,7 @@ describe('Response envelope (e2e)', () => {
 
   it('passes non-JSON responses through unwrapped', async () => {
     // Arrange
-    const app = await createTestApp(undefined, { controllers: [ContractController] });
+    const app = await createE2eTestApp(undefined, { controllers: [ContractController] });
 
     // Act
     const response = await request(app.getHttpServer()).get('/api/v1/text');
@@ -128,7 +128,7 @@ describe('Response envelope (e2e)', () => {
 
   it('does not corrupt Server-Sent Events responses', async () => {
     // Arrange
-    const app = await createTestApp(undefined, { controllers: [ContractController] });
+    const app = await createE2eTestApp(undefined, { controllers: [ContractController] });
 
     // Act
     const response = await request(app.getHttpServer()).get('/api/v1/events');

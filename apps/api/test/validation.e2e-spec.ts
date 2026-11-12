@@ -2,12 +2,12 @@ import { describe, expect, it } from 'vitest';
 import request from 'supertest';
 
 import { ContractController } from './contract.controller.js';
-import { createTestApp } from './create-test-app.js';
+import { createE2eTestApp } from './create-test-app.js';
 
 describe('ZodValidationPipe (e2e)', () => {
   it('validates the body and returns the coerced parsed output', async () => {
     // Arrange
-    const app = await createTestApp(undefined, { controllers: [ContractController] });
+    const app = await createE2eTestApp(undefined, { controllers: [ContractController] });
 
     // Act
     const response = await request(app.getHttpServer())
@@ -22,7 +22,7 @@ describe('ZodValidationPipe (e2e)', () => {
 
   it('rejects an invalid body with Problem Details carrying the issue messages', async () => {
     // Arrange
-    const app = await createTestApp(undefined, { controllers: [ContractController] });
+    const app = await createE2eTestApp(undefined, { controllers: [ContractController] });
 
     // Act
     const response = await request(app.getHttpServer())
@@ -41,7 +41,7 @@ describe('ZodValidationPipe (e2e)', () => {
 
   it('validates a route parameter and coerces it to a number', async () => {
     // Arrange
-    const app = await createTestApp(undefined, { controllers: [ContractController] });
+    const app = await createE2eTestApp(undefined, { controllers: [ContractController] });
 
     // Act
     const response = await request(app.getHttpServer()).get('/api/v1/validate/things/7');
@@ -54,7 +54,7 @@ describe('ZodValidationPipe (e2e)', () => {
 
   it('rejects an invalid route parameter without a stray path prefix', async () => {
     // Arrange
-    const app = await createTestApp(undefined, { controllers: [ContractController] });
+    const app = await createE2eTestApp(undefined, { controllers: [ContractController] });
 
     // Act
     const response = await request(app.getHttpServer()).get('/api/v1/validate/things/abc');
@@ -68,7 +68,7 @@ describe('ZodValidationPipe (e2e)', () => {
 
   it('validates query parameters and applies schema defaults', async () => {
     // Arrange
-    const app = await createTestApp(undefined, { controllers: [ContractController] });
+    const app = await createE2eTestApp(undefined, { controllers: [ContractController] });
 
     // Act
     const response = await request(app.getHttpServer()).get('/api/v1/validate/search');

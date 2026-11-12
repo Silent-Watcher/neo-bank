@@ -2,7 +2,7 @@ import request from 'supertest';
 import { describe, expect, it } from 'vitest';
 
 import { setupSwagger, SWAGGER_DOCS_PATH } from '#src/shared/swagger/swagger.setup.js';
-import { createTestApp } from './create-test-app.js';
+import { createE2eTestApp } from './create-test-app.js';
 
 // e2e runs with APP_ENV=test, where bootstrap registers no Swagger routes:
 // that is the environment-isolation behavior. The development behavior is
@@ -12,7 +12,7 @@ import { createTestApp } from './create-test-app.js';
 describe('Swagger (e2e)', () => {
   it('registers no Swagger routes outside development', async () => {
     // Arrange
-    const app = await createTestApp();
+    const app = await createE2eTestApp();
 
     // Act
     const ui = await request(app.getHttpServer()).get(`/${SWAGGER_DOCS_PATH}`);
@@ -26,7 +26,7 @@ describe('Swagger (e2e)', () => {
 
   it('serves the UI and a valid OpenAPI document in development', async () => {
     // Arrange
-    const app = await createTestApp((devApp) => setupSwagger(devApp));
+    const app = await createE2eTestApp((devApp) => setupSwagger(devApp));
 
     // Act
     const ui = await request(app.getHttpServer()).get(`/${SWAGGER_DOCS_PATH}`);
@@ -44,7 +44,7 @@ describe('Swagger (e2e)', () => {
 
   it('documents the actual routes without duplicating prefixes', async () => {
     // Arrange
-    const app = await createTestApp((devApp) => setupSwagger(devApp));
+    const app = await createE2eTestApp((devApp) => setupSwagger(devApp));
 
     // Act
     const json = await request(app.getHttpServer()).get(`/${SWAGGER_DOCS_PATH}/json`);
@@ -67,7 +67,7 @@ describe('Swagger (e2e)', () => {
 
   it('documents the challenge endpoint contract from the Zod schema', async () => {
     // Arrange
-    const app = await createTestApp((devApp) => setupSwagger(devApp));
+    const app = await createE2eTestApp((devApp) => setupSwagger(devApp));
 
     // Act
     const json = await request(app.getHttpServer()).get(`/${SWAGGER_DOCS_PATH}/json`);
@@ -96,7 +96,7 @@ describe('Swagger (e2e)', () => {
 
   it('documents the health probe with degraded-mode semantics', async () => {
     // Arrange
-    const app = await createTestApp((devApp) => setupSwagger(devApp));
+    const app = await createE2eTestApp((devApp) => setupSwagger(devApp));
 
     // Act
     const json = await request(app.getHttpServer()).get(`/${SWAGGER_DOCS_PATH}/json`);

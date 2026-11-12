@@ -33,7 +33,8 @@ export class TestRedis {
     const db = options?.db ?? 0;
 
     // Use GenericContainer with redis image and password via env
-    // RedisContainer from @testcontainers/redis doesn't support withUsername()
+    // (the RedisContainer module class is not used: it does not support
+    // withUsername() and the scoped wrapper package is not installed)
     this.container = await new GenericContainer(image)
       .withEnvironment({ REDIS_PASSWORD: password })
       .withExposedPorts(6379)

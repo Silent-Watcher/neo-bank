@@ -1,13 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import request from 'supertest';
 
-import { createTestApp } from './create-test-app.js';
+import { createE2eTestApp } from './create-test-app.js';
 
 describe('HTTP adapter configuration (e2e)', () => {
   it('passes the configured BODY_LIMIT from the environment to Fastify', async () => {
     // Arrange: env/.env.test sets BODY_LIMIT=2097152, distinct from the 1048576
     // default, so a matching limit proves the environment value was applied.
-    const app = await createTestApp();
+    const app = await createE2eTestApp();
 
     // Act
     const initialConfig = app.getHttpAdapter().getInstance().initialConfig;
@@ -19,7 +19,7 @@ describe('HTTP adapter configuration (e2e)', () => {
 
   it('honors forwarded headers because TRUST_PROXY=true in the test environment', async () => {
     // Arrange
-    const app = await createTestApp((nestApp) => {
+    const app = await createE2eTestApp((nestApp) => {
       nestApp
         .getHttpAdapter()
         .getInstance()

@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, inject, it, vi } from 'vitest';
 import request from 'supertest';
 import type { TestingModuleBuilder } from '@nestjs/testing';
 
@@ -6,7 +6,7 @@ import { randomUUID } from 'node:crypto';
 import { RedisService } from '#src/shared/redis/redis.service.js';
 import { RATE_LIMIT_CONFIG } from '#config/rate-limit.config.js';
 import { createRedisClient } from '#src/shared/redis/redis.provider.js';
-import { createTestApp } from './create-test-app.js';
+import { createE2eTestApp } from './create-test-app.js';
 import { _env } from '#src/shared/config/env/env.config.js';
 import {
   composeOtpChallengeValue,
@@ -41,10 +41,11 @@ async function scanThrottleKeys(): Promise<string[]> {
 }
 
 beforeAll(async () => {
+  // Key hygiene runs against the SAME shared Testcontainers container the app
+  // uses (provided by test/e2e.global-setup.ts, ADR-025) — not the env Redis —
+  // so the suite stays independent of any manually started server.
   inspectClient = createRedisClient({
-    url: _env.REDIS_URL,
-    username: _env.REDIS_USERNAME,
-    password: _env.REDIS_PASSWORD,
+    ...inject('e2eRedisConfig'),
     db: 0,
     tls: false,
     connectTimeoutMs: 2000,
@@ -63,10 +64,10 @@ afterAll(async () => {
   await inspectClient.quit();
 });
 
-function createTestAppWithMockRedis(
+function createE2eTestAppWithMockRedis(
   configureModule?: (builder: TestingModuleBuilder) => void,
-): Promise<{ app: Awaited<ReturnType<typeof createTestApp>>; close: () => Promise<void> }> {
-  return createTestApp(undefined, {
+): Promise<{ app: Awaited<ReturnType<typeof createE2eTestApp>>; close: () => Promise<void> }> {
+  return createE2eTestApp(undefined, {
     configureModule: (builder) =>
       builder
         .overrideProvider(RedisService)
@@ -85,7 +86,7 @@ function createTestAppWithMockRedis(
 }
 
 function overrideRedisService(
-  app: Awaited<ReturnType<typeof createTestApp>>,
+  app: Awaited<ReturnType<typeof createE2eTestApp>>,
   methods: Record<string, unknown>,
 ) {
   const redisService = app.get(RedisService);
@@ -94,9 +95,10 @@ function overrideRedisService(
 
 describe('EnrollmentsController (e2e)', () => {
   // Redis is overridden so the suite verifies the exact key, TTL, and stored
-  // value without requiring a running Redis server. The global rate limiter
-  // uses the real Redis from env.test (high limits) so validation errors are
-  // not masked by throttling.
+  // value without touching the shared Testcontainers container for those
+  // paths. The global rate limiter uses the shared e2e container via the
+  // overridden REDIS_CLIENT (high limits) so validation errors are not
+  // masked by throttling.
 
   it('validates the phone number, stores only the challenge value (challenge ID + OTP HMAC digest) in Redis, and returns only the phone number', async () => {
     // Arrange
@@ -113,7 +115,7 @@ describe('EnrollmentsController (e2e)', () => {
     const checkOtpRateLimit = vi
       .fn<(rateLimitKey: string, maxSends: number, windowMinutes: number) => Promise<boolean>>()
       .mockResolvedValue(true);
-    const { app, close } = await createTestAppWithMockRedis();
+    const { app, close } = await createE2eTestAppWithMockRedis();
     overrideRedisService(app, { issueOtp, checkOtpRateLimit });
 
     // Act
@@ -158,7 +160,7 @@ describe('EnrollmentsController (e2e)', () => {
     const checkOtpRateLimit = vi
       .fn<(rateLimitKey: string, maxSends: number, windowMinutes: number) => Promise<boolean>>()
       .mockResolvedValue(true);
-    const { app, close } = await createTestAppWithMockRedis();
+    const { app, close } = await createE2eTestAppWithMockRedis();
     overrideRedisService(app, { issueOtp, checkOtpRateLimit });
 
     // Act
@@ -182,7 +184,7 @@ describe('EnrollmentsController (e2e)', () => {
   it('rejects invalid phone numbers with Problem Details validation errors', async () => {
     // Arrange — each request uses a distinct X-Forwarded-For so the per-IP
     // rate limiter does not interfere (TRUST_PROXY=true in test env).
-    const { app, close } = await createTestAppWithMockRedis();
+    const { app, close } = await createE2eTestAppWithMockRedis();
     overrideRedisService(app, {
       issueOtp: vi.fn().mockResolvedValue('issued'),
       checkOtpRateLimit: vi.fn().mockResolvedValue(true),
@@ -206,7 +208,7 @@ describe('EnrollmentsController (e2e)', () => {
 
   it('serves an application-error Problem Details response when OTP storage fails', async () => {
     // Arrange
-    const { app, close } = await createTestAppWithMockRedis();
+    const { app, close } = await createE2eTestAppWithMockRedis();
     overrideRedisService(app, {
       issueOtp: vi.fn().mockRejectedValue(new Error('connection lost')),
       checkOtpRateLimit: vi.fn().mockResolvedValue(true),
@@ -230,7 +232,7 @@ describe('EnrollmentsController (e2e)', () => {
     const checkOtpRateLimit = vi
       .fn<(rateLimitKey: string, maxSends: number, windowMinutes: number) => Promise<boolean>>()
       .mockResolvedValue(false);
-    const { app, close } = await createTestAppWithMockRedis();
+    const { app, close } = await createE2eTestAppWithMockRedis();
     overrideRedisService(app, { issueOtp, checkOtpRateLimit });
 
     // Act
@@ -254,7 +256,7 @@ describe('EnrollmentsController (e2e)', () => {
     const checkOtpRateLimit = vi
       .fn<(rateLimitKey: string, maxSends: number, windowMinutes: number) => Promise<boolean>>()
       .mockResolvedValue(true);
-    const { app, close } = await createTestAppWithMockRedis();
+    const { app, close } = await createE2eTestAppWithMockRedis();
     overrideRedisService(app, { issueOtp, checkOtpRateLimit });
 
     // Act
@@ -273,7 +275,7 @@ describe('EnrollmentsController (e2e)', () => {
 
   it('serves a generic 500 when the rate limit check fails (Redis error)', async () => {
     // Arrange
-    const { app, close } = await createTestAppWithMockRedis();
+    const { app, close } = await createE2eTestAppWithMockRedis();
     overrideRedisService(app, {
       issueOtp: vi.fn().mockResolvedValue('issued'),
       checkOtpRateLimit: vi.fn().mockRejectedValue(new Error('connection lost')),
@@ -295,7 +297,7 @@ describe('EnrollmentsController (e2e)', () => {
 
   describe('POST /enrollments/verify', () => {
     function createAppWithVerifyMock(resolveResult: boolean | Error, storedValue?: string) {
-      return createTestAppWithMockRedis().then(({ app, close }) => {
+      return createE2eTestAppWithMockRedis().then(({ app, close }) => {
         const resolveOtpVerification =
           resolveResult instanceof Error
             ? vi.fn().mockRejectedValue(resolveResult)

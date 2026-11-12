@@ -175,12 +175,17 @@ Constraints:
   do not add transactions, Lua scripts, or locks without a concrete
   requirement, and never treat pipelining as atomicity.
 - Unit tests must not require a running Redis server: use `lazyConnect`
-  client instances and provider overrides. Integration/e2e tests that need
-  real Redis use Testcontainers (ADR-016, `test/testcontainers.ts`): each
-  test file starts its own `redis:8.2-alpine` container with a dynamic port.
-  Override both `REDIS_CONFIG` **and** `REDIS_CLIENT` in the testing module so
-  the throttler and all consumers share the container's connection. Tests
-  that exercise the fail-closed path inject an unroutable client directly.
+  client instances and provider overrides. Real-Redis tests use
+  Testcontainers (`test/testcontainers.ts`, ADR-016) in two tiers: the Redis
+  integration suite (`*.redis-spec.ts`) starts its own `redis:8.2-alpine`
+  container per test file and overrides both `REDIS_CONFIG` **and**
+  `REDIS_CLIENT` in the testing module; the e2e suite shares one container
+  per test run via the Vitest globalSetup (`test/e2e.global-setup.ts`,
+  ADR-025) and builds its apps with `createE2eTestApp()`, which injects the
+  container's connection config and overrides `REDIS_CLIENT` (overriding
+  `REDIS_CONFIG` alone does not work — `ConfigService` holds the `registerAs`
+  result and does not observe provider overrides on that token). Tests that
+  exercise the fail-closed path inject an unroutable client directly.
 
 ## Directory Structure
 
@@ -200,6 +205,9 @@ src/
     enums/ errors/ filters/ http/ interceptors/ logging/ pipes/
 test/
   create-test-app.ts       # e2e app factory mirroring main.ts bootstrap
+                           # (createE2eTestApp wires the shared e2e Redis)
+  e2e.global-setup.ts      # Vitest globalSetup: one shared Testcontainers
+                           # Redis per e2e run (ADR-025, provide/inject)
   testcontainers.ts        # Testcontainers helpers: TestRedis (start/stop/getConfig)
   *.e2e-spec.ts            # supertest-based e2e suites
   *.redis-spec.ts          # real-Redis integration tests via Testcontainers (pnpm test:redis)
@@ -240,11 +248,12 @@ env/                       # .env.development / .env.test / .env.example /
   `test/create-test-app.ts` for endpoint contracts (envelope, Problem
   Details, routing). Both layers are a project requirement for features
   (root rule).
-- Unit tests mock infrastructure (RedisService); integration/e2e tests that
-  need real Redis use Testcontainers (ADR-016) — `test/testcontainers.ts`
-  provides `TestRedis` class; override both `REDIS_CONFIG` and `REDIS_CLIENT`
-  in the testing module. Tests exercising fail-closed behavior inject an
-  unroutable client.
+- Unit tests mock infrastructure (RedisService); real-Redis tests use
+  Testcontainers (ADR-016) — `test/testcontainers.ts` provides the `TestRedis`
+  class. The Redis integration tier runs per test file; the e2e tier shares
+  one container per run (Vitest globalSetup `test/e2e.global-setup.ts`,
+  ADR-025) via `createE2eTestApp()`. Tests exercising fail-closed behavior
+  inject an unroutable client.
 - Do not start dev servers to verify intermediate steps; run the checks when
   the feature is complete (root rule).
 
@@ -257,14 +266,14 @@ pnpm lint         # oxlint
 pnpm format       # oxfmt --write .
 pnpm typecheck    # tsc --noEmit
 pnpm test         # Vitest unit tests (mocks, no Docker)
-pnpm test:e2e     # supertest e2e suite (Testcontainers Redis per file)
+pnpm test:e2e     # supertest e2e suite (one shared Testcontainers Redis per run)
 pnpm test:redis   # real-Redis integration suite via Testcontainers
 ```
 
 ## Constraints
 
 - Follow the decision records in [../../DECISIONS.md](../../DECISIONS.md) —
-  all ADRs ADR-001 through ADR-015 are **Accepted** and implemented; do not
+  all ADRs ADR-001 through ADR-025 are **Accepted** and implemented; do not
   build against their rejected alternatives.
 - New architectural decisions follow the ADR-first workflow in the root
   [AGENTS.md](../../AGENTS.md): propose the ADR, get explicit user approval,

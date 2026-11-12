@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import request from 'supertest';
 
 import { ContractController } from './contract.controller.js';
-import { createTestApp } from './create-test-app.js';
+import { createE2eTestApp } from './create-test-app.js';
 
 const UUID_V4_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const VALID_UUID_V4_UPPERCASE = '550E8400-E29B-41D4-A716-446655440000';
@@ -12,7 +12,7 @@ const UUID_V1 = '550e8400-e29b-11d4-a716-446655440000';
 describe('Request IDs (e2e)', () => {
   it('generates a valid UUIDv4 when the header is absent', async () => {
     // Arrange
-    const app = await createTestApp(undefined, { controllers: [ContractController] });
+    const app = await createE2eTestApp(undefined, { controllers: [ContractController] });
 
     // Act
     const response = await request(app.getHttpServer()).get('/api/v1/echo');
@@ -25,7 +25,7 @@ describe('Request IDs (e2e)', () => {
 
   it('accepts a valid inbound UUIDv4 and normalizes it to lowercase', async () => {
     // Arrange
-    const app = await createTestApp(undefined, { controllers: [ContractController] });
+    const app = await createE2eTestApp(undefined, { controllers: [ContractController] });
 
     // Act
     const response = await request(app.getHttpServer())
@@ -40,7 +40,7 @@ describe('Request IDs (e2e)', () => {
 
   it('rejects malformed UUIDs with a standardized 400 before the handler runs', async () => {
     // Arrange
-    const app = await createTestApp(undefined, { controllers: [ContractController] });
+    const app = await createE2eTestApp(undefined, { controllers: [ContractController] });
 
     // Act
     const response = await request(app.getHttpServer())
@@ -62,7 +62,7 @@ describe('Request IDs (e2e)', () => {
 
   it('rejects UUIDs of other versions', async () => {
     // Arrange
-    const app = await createTestApp(undefined, { controllers: [ContractController] });
+    const app = await createE2eTestApp(undefined, { controllers: [ContractController] });
 
     // Act
     const response = await request(app.getHttpServer())
@@ -78,7 +78,7 @@ describe('Request IDs (e2e)', () => {
 
   it('rejects multiple header values that cannot be one valid UUIDv4', async () => {
     // Arrange
-    const app = await createTestApp(undefined, { controllers: [ContractController] });
+    const app = await createE2eTestApp(undefined, { controllers: [ContractController] });
 
     // Act
     const response = await request(app.getHttpServer())
@@ -94,7 +94,7 @@ describe('Request IDs (e2e)', () => {
 
   it('carries the request ID on responses to excluded and version-neutral routes', async () => {
     // Arrange
-    const app = await createTestApp();
+    const app = await createE2eTestApp();
 
     // Act
     const response = await request(app.getHttpServer()).get('/health');

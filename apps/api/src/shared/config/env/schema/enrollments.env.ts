@@ -1,17 +1,10 @@
 import { z } from 'zod';
 
+import { positiveSafeInteger } from './validation-helpers.js';
+
 // The OTP is exactly six digits (100000–999999) and is stored in Redis only as
 // an HMAC-SHA-256 digest keyed with ENROLLMENTS_OTP_HMAC_SECRET (ADR-018), so a
 // Redis read-only compromise does not expose verifiable OTP values.
-function positiveSafeInteger(field: string) {
-  return z.coerce
-    .number({ error: `${field} must be a valid number.` })
-    .int(`${field} must be an integer.`)
-    .positive(`${field} must be positive.`)
-    .refine((value) => Number.isSafeInteger(value), {
-      message: `${field} must be within the safe integer range.`,
-    });
-}
 
 export const enrollmentsEnvSchema = z.object({
   // Maximum failed OTP verification attempts allowed during a single 120-second

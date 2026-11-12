@@ -1,13 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
 import request from 'supertest';
 
-import { createTestApp } from './create-test-app.js';
+import { createE2eTestApp } from './create-test-app.js';
 import { RedisService } from '#src/shared/redis/redis.service.js';
 
 describe('Health (e2e)', () => {
   it('returns 200 with the health payload wrapped in the envelope', async () => {
     // Arrange
-    const app = await createTestApp(undefined, {
+    const app = await createE2eTestApp(undefined, {
       configureModule: (builder) => {
         builder.overrideProvider(RedisService).useValue({
           ping: vi.fn().mockResolvedValue('PONG'),
@@ -28,7 +28,7 @@ describe('Health (e2e)', () => {
 
   it('is not served under the global prefix and version segment', async () => {
     // Arrange
-    const app = await createTestApp();
+    const app = await createE2eTestApp();
 
     // Act
     const response = await request(app.getHttpServer()).get('/api/v1/health');

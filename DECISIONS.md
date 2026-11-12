@@ -938,7 +938,7 @@ Redis Stack bundles the Redis server, the Redis Stack modules, and Redis Insight
 
 ### References
 
-- `compose.dev.yml` (redis service), `.env.docker.example` (REDIS_INSIGHT_PORT), `apps/api/src/shared/http/startup-url.ts` and `apps/api/src/main.ts` (startup logging), `apps/api/src/shared/config/env/schema/server.env.ts` (optional REDIS_INSIGHT_URL)
+- `docker/compose.app.dev.yml` (redis service), `docker/env/.env.docker.example` (REDIS_INSIGHT_PORT), `apps/api/src/shared/http/startup-url.ts` and `apps/api/src/main.ts` (startup logging), `apps/api/src/shared/config/env/schema/server.env.ts` (optional REDIS_INSIGHT_URL)
 - `docs/docker.md` (ports table, Insight access)
 
 ---
@@ -1049,9 +1049,9 @@ Introduce an independently managed **monitoring Compose stack** (`compose.monito
 
 ### References
 
-- `compose.monitoring.yml`, `.env.monitoring.example`, `monitoring/alloy/config.alloy`, `monitoring/loki/loki.yml`, `monitoring/grafana/provisioning/`, `monitoring/grafana/dashboards/api-logs.json`
-- `compose.dev.yml` (`LOG_PRETTY`, log rotation anchors), `compose.prod.yml` (log rotation), `apps/api/src/shared/config/env/schema/log.env.ts`, `apps/api/src/shared/config/log.config.ts`
-- `docs/observability/README.md` (operations), `docs/observability/manual-testing.md` (verification scenarios), `docs/observability/learning-guide.fa.md` (Persian learning guide), `docs/docker.md` (ports, rotation)
+- `docker/compose.monitoring.yml`, `docker/env/.env.monitoring.example`, `monitoring/alloy/config.alloy`, `monitoring/loki/loki.yml`, `monitoring/grafana/provisioning/`, `monitoring/grafana/dashboards/api-logs.json`
+- `docker/compose.app.dev.yml` (`LOG_PRETTY`, log rotation anchors), `docker/compose.app.prod.yml` (log rotation), `apps/api/src/shared/config/env/schema/log.env.ts`, `apps/api/src/shared/config/log.config.ts`
+- `docs/observability/README.md` (operations), `docs/observability/manual-testing.md` (verification scenarios), `docs/docker.md` (ports, rotation)
 - Official documentation: https://grafana.com/docs/loki/latest/ · https://grafana.com/docs/alloy/latest/ · https://grafana.com/docs/grafana/latest/
 
 ---
@@ -1161,3 +1161,110 @@ Adopt **MockServer** (`mockserver/mockserver:9.2.0`, version-pinned) as the deve
 - `docker/compose.app.dev.yml` (mockserver service, api environment), `docker/env/.env.docker.example` (MOCKSERVER_PORT), `apps/api/src/shared/http/startup-url.ts`, `apps/api/src/main.ts`, `apps/api/src/shared/config/env/schema/server.env.ts` (optional MockServer URLs)
 - `docs/docker.md` (MockServer section, ports table)
 - Official documentation: https://www.mock-server.com/, image: https://hub.docker.com/r/mockserver/mockserver
+
+---
+
+## ADR-025: Manage the E2E Redis with Testcontainers
+
+- **Status:** Accepted
+- **Date:** 2026-11-13
+
+### Context
+
+The e2e suite (`pnpm test:e2e`, 14 `*.e2e-spec.ts` files) requires a reachable Redis: guarded routes (rate limiting, OTP) fail closed without one. The suite currently depends on the **development Compose stack being up** — `apps/api/env/.env.test` points `REDIS_URL` at the dev stack's host-published Redis (`127.0.0.1:6380`), so a developer must manually start a long-running stack before every e2e run, and leftover state (rate-limit keys, OTP lockouts) leaks between runs. This also contradicts the repository's own documentation, which already claims e2e tests use Testcontainers. The Redis integration tier (`pnpm test:redis`) has managed its own Redis with Testcontainers per test file since ADR-016, proving the pattern works in this repository.
+
+### Decision
+
+The e2e suite manages its own Redis with Testcontainers: **one shared container per test execution**, started by a Vitest `globalSetup` file and stopped by its teardown.
+
+- **Reuse, don't replace:** the existing `TestRedis` helper (`apps/api/test/testcontainers.ts` — `GenericContainer('redis:8.2-alpine')`, dynamic mapped port, `REDIS_PASSWORD`, log wait strategy) is used unchanged; the `test:redis` tier keeps its per-file container model untouched.
+- **No env mutation, no fixed ports:** the container's connection config is passed from the global setup to the test workers through Vitest's native `provide`/`inject` channel (verified against the installed vitest 5.0.5). `create-test-app.ts` builds a client from the injected config via the existing `createRedisClient` helper and overrides the `REDIS_CLIENT` provider — the mechanism the `test:redis` tier already uses. Overriding the `REDIS_CONFIG` token alone does not work: `@nestjs/config`'s `ConfigService` holds the `registerAs` factory result and does not observe provider overrides on the namespace token (proven by the validation run). `RedisService` still owns the connection lifecycle; the app-side wiring stays exercised. No per-spec changes.
+- **Failure-safe cleanup:** the global setup's teardown stops the container after the run, including failing runs; Testcontainers' default resource reaper (ryuk) reaps orphans after a crashed process.
+- **`.env.test` placeholders:** `REDIS_URL`/`REDIS_USERNAME`/`REDIS_PASSWORD` remain present (the Zod schema validates at import) but become documented validation-only placeholders; the connection comes exclusively from the container config.
+- **Docker becomes an e2e requirement:** `pnpm test:e2e` now needs a running Docker daemon — it already needs one for `pnpm test:redis`; `turbo.json` already passes `DOCKER_HOST`/`DOCKER_CONTEXT` to test tasks. No new dependency: the container lifecycle uses the already-installed core `testcontainers` package. The never-imported `@testcontainers/redis` and `@testcontainers/postgresql` wrapper sub-packages are removed (developer-approved: core functionality covers both suites; the Redis helper deliberately uses `GenericContainer` because `RedisContainer` lacks `withUsername()`, and the Postgres wrapper can be re-added when a database integration actually lands).
+
+### Alternatives Considered
+
+- _Keep the manual dev-stack dependency:_ the stated problem — manual work and non-reproducibility — remains. Rejected.
+- _One container per test file (the `test:redis` model):_ 14× container starts and lifecycle boilerplate for isolation the e2e suite does not need — its specs are HTTP-contract tests that already share one Redis server (the dev stack's) today. Rejected for e2e; per-file remains correct for the redis tier, whose specs exercise Lua/TTL/atomicity semantics directly.
+- _One container per test:_ disqualifying startup overhead. Rejected.
+- _In-process fake (e.g. ioredis-mock) or embedded server:_ not real Redis behavior; the guarded routes depend on real throttler and OTP semantics. Rejected.
+
+### Consequences and Trade-offs
+
+**Positive**
+
+- `pnpm test:e2e` is self-sufficient: no manually started containers, no dev stack, no fixed host port (dynamic allocation removes the 6380 workaround for the busy 6379).
+- Fresh Redis per run eliminates cross-run state leakage — strictly more reproducible than the long-lived compose Redis.
+- Documentation and implementation stop contradicting each other.
+- One container per run keeps startup overhead at ~1–2 seconds (image cached after first pull).
+
+**Negative**
+
+- The Docker daemon is now required to run the e2e suite (previously optional for it).
+- The e2e suite runs against `redis:8.2-alpine` instead of the dev stack's `redis-stack` image; the API uses only core Redis commands and the redis tier already validates against the same image, but the server software differs from the dev environment.
+- State is shared across the run inside one container — identical to today's shared compose Redis, so no isolation regression, but suite-level key hygiene remains each spec's responsibility.
+
+### References
+
+- `apps/api/test/e2e.global-setup.ts` (new), `apps/api/test/vitest-e2e.config.ts`, `apps/api/test/create-test-app.ts`, `apps/api/test/testcontainers.ts` (reused unchanged), `apps/api/env/.env.test`
+- ADR-016 (Testcontainers for the Redis integration tier), `docs/current-state.md` (testing section), `apps/api/AGENTS.md` / `apps/api/ONBOARDING.md` (test commands)
+- `prompts/_038-e2e-testcontainers.md`
+
+---
+
+## ADR-026: Memory-Based Load Shedding and Health-Aware Readiness
+
+- **Status:** Accepted
+- **Date:** 2026-11-13
+
+### Context
+
+The API is a single Node.js process. Under severe memory pressure it keeps accepting new requests until the kernel's OOM killer (or the runtime) terminates it: there is no protection state, no signal to an orchestrator, and no graceful degradation. The health endpoint (`GET /health`, Terminus) has exactly one indicator (Redis PING) that reports `degraded` with HTTP 200 — the 503 path is unreachable — and there is no readiness/liveness distinction. No orchestrator is in use today (Docker Compose stacks), but Kubernetes compatibility is a design goal, and the Compose healthcheck probes `/health` — so `/health`'s "process is alive" semantics must be preserved.
+
+### Decision
+
+Introduce **memory-based load shedding**: a centralized, configuration-driven protection state driven by the process's own RSS, exposed through request rejection and a readiness endpoint.
+
+1. **Signal — RSS, sampled in-process.** `process.memoryUsage().rss`, sampled by a dedicated `MemoryProtectionService` (`src/shared/memory-protection/`) on a fixed interval (default 5 s, lifecycle-bound to the application via bootstrap/shutdown hooks). RSS is the footprint the kernel, cgroups, and the OOM killer act on; heap-only metrics miss Buffers, external, and native memory. Sampling costs microseconds — negligible.
+2. **State machine with hysteresis.** `Ok → Protected` when a single sample crosses the activation threshold (`MEMORY_PROTECTION_MAX_RSS_MB`) — fail-fast protection. `Protected → Ok` only after RSS stays below the lower recovery threshold (`MEMORY_PROTECTION_RECOVERY_RSS_MB`) for `MEMORY_PROTECTION_STABLE_SAMPLES` consecutive samples — sustained improvement, no flapping, no arbitrary fixed cooldown. Transitions are logged (warn on protecting, info on recovery) through the existing Pino logger.
+3. **Request rejection — a global admission guard.** `MemoryProtectionGuard`, registered as `APP_GUARD` **before** `RedisThrottlerGuard` (cheapest rejection first, no Redis dependency on the rejection path). While `Protected`, non-exempt requests receive **HTTP 503 Problem Details** through the existing `ProblemDetailsFilter`: stable `code: SERVICE_UNAVAILABLE`, the application-error Problem Type, localized title/detail (bilingual), and a `Retry-After` header set to the seconds until the next sample. Exemptions via a `@SkipMemoryProtection()` metadata decorator on the health endpoints and the Problem-Type docs page.
+4. **Readiness/liveness split.** `/health` remains byte-identical (process liveness; degraded Redis still → HTTP 200, so the Compose healthcheck can never restart a pressured container). New `GET /health/ready` (version-neutral, prefix-excluded, unthrottled, memory-exempt) runs Terminus over Redis (strict: reports `down` on ping failure) and memory (reports `down` while `Protected`) — any `down` yields HTTP 503, otherwise 200.
+5. **Guard and readiness are combined deliberately.** Failing readiness alone does **not** stop direct traffic: control-plane propagation lags, non-orchestrated environments (Compose today) have no orchestrator to react, and NodePort/direct traffic bypasses load-balancer routing entirely. The guard closes those windows locally; readiness handles orchestrated routing.
+6. **Configuration.** New `MEMORY_PROTECTION` namespace (Zod schema + `registerAs` symbol token, existing conventions): `MEMORY_PROTECTION_ENABLED` (default `true`), `MEMORY_PROTECTION_MAX_RSS_MB` (default `1024`), `MEMORY_PROTECTION_RECOVERY_RSS_MB` (default `768`, cross-field-validated below the activation threshold), `MEMORY_PROTECTION_SAMPLE_INTERVAL_MS` (default `5000`), `MEMORY_PROTECTION_STABLE_SAMPLES` (default `3`). No new dependency — Node built-ins only.
+
+### Alternatives Considered
+
+- _Fastify `onRequest` hook / middleware:_ earliest and cheapest, but bypasses the exception filter and i18n — it would hand-build a second copy of the Problem Details contract and exempt routes by URL string matching. Rejected (DRY/KISS).
+- _Interceptor:_ runs after guards; the guard is the semantically correct admission layer and composes with metadata exemptions. Rejected.
+- _Readiness-only (no local rejection):_ does not stop direct traffic and fails the stated requirement ("new incoming requests receive an appropriate HTTP response"). Rejected as the sole mechanism; adopted in combination.
+- _heapUsed / heapTotal / cgroup-derived fraction:_ heap metrics miss non-heap memory; deriving thresholds from cgroup limits couples the application to Linux filesystem details and deployment internals. Rejected in favor of explicit absolute MB thresholds.
+- _Sampling in a separate worker/process:_ over-engineering for a single microsecond-scale metric in a single-process application (YAGNI). Rejected.
+- _External/infrastructure-level shedding (load balancer checks):_ no in-process memory signal exists for them to act on. Rejected.
+
+### Consequences and Trade-offs
+
+**Positive**
+
+- Graceful degradation: under memory pressure the service sheds load with a standard, localized 503 + `Retry-After` instead of dying mid-request.
+- Orchestrator-compatible signals: readiness (503) and liveness (unchanged 200) are distinct, matching Kubernetes probe semantics exactly.
+- Health and docs endpoints stay reachable during protection; recovery is automatic and hysteresis-stabilized.
+- Zero dependencies; uses the existing error, i18n, health, and logging conventions end to end.
+
+**Negative**
+
+- Thresholds must match the deployment's real memory limit: too high never sheds (OOM kill remains possible), too low causes false 503s.
+- Pressure between samples is invisible for up to one interval; requests already accepted are not shed.
+- RSS is a practical proxy for container memory, not an exact cgroup mapping.
+- Event-loop starvation delays sampling (acceptable: a blocked loop cannot serve requests anyway).
+- The mechanism sheds load; it does not reclaim memory or fix leaks.
+
+### Operational Implications
+
+- **Kubernetes:** `readinessProbe → GET /health/ready`, `livenessProbe → GET /health`. Under pressure the pod leaves the Service endpoints (no new routed traffic), in-flight requests finish, liveness never fails on memory (no restart loops making pressure worse), and the guard covers direct/NodePort traffic plus the control-plane reaction window. Recovery returns the pod to rotation automatically.
+- **Docker Compose:** the guard is the only shedding layer (no orchestrator); the container healthcheck (`/health`) intentionally stays healthy during protection.
+
+### References
+
+- `apps/api/src/shared/memory-protection/` (service, guard, indicator, decorator, config), `apps/api/src/shared/config/env/schema/memory-protection.env.ts`, `apps/api/src/modules/app/health.controller.ts` (`/health/ready`), `apps/api/src/modules/app/app.module.ts` (guard registration order), `apps/api/src/shared/errors/error.code.ts` (`ServiceUnavailable`)
+- `prompts/_039-memory-load-shedding.md`

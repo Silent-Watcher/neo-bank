@@ -39,7 +39,7 @@ feature coverage is minimal.
 | ioredis 6                                | Redis client behind the shared `RedisService` ([ADR-012](../../DECISIONS.md)/[013](../../DECISIONS.md)) |
 | @nestjs/swagger + @fastify/static        | OpenAPI docs; Swagger UI at `/docs`, **development only** ([ADR-014](../../DECISIONS.md))               |
 | Vitest + supertest                       | Unit and e2e testing                                                                                    |
-| Testcontainers                           | Real Redis/PostgreSQL in integration & e2e tests (ADR-016); see `test/testcontainers.ts`                |
+| Testcontainers                           | Real Redis in integration & e2e tests (ADR-016/025); see `test/testcontainers.ts`                       |
 | Oxlint / Oxfmt                           | Linting and formatting (no ESLint/Prettier)                                                             |
 
 ## 3. Prerequisites
@@ -108,7 +108,7 @@ Verify with `curl http://localhost:3001/health`.
 
 ```sh
 pnpm test         # unit tests (Vitest) — mocks infrastructure, no Docker
-pnpm test:e2e     # e2e tests (Testcontainers starts real Redis per test file)
+pnpm test:e2e     # e2e tests (one shared Testcontainers Redis per run; needs Docker)
 pnpm test:redis   # Redis integration tests (Testcontainers starts real Redis per test file)
 ```
 
@@ -143,7 +143,8 @@ src/
     redis/                 # global RedisModule: ioredis provider, RedisService,
                            # @InjectRedis(), degraded-mode health indicator
     swagger/               # dev-only OpenAPI setup + shared response schemas
-test/                      # e2e specs + create-test-app.ts + Vitest alias map
+test/                      # e2e specs + create-test-app.ts + e2e.global-setup.ts
+                           # (shared e2e Redis) + Vitest alias map
 env/                       # .env.development / .env.test / .env.example
 ```
 
@@ -186,13 +187,16 @@ assert the envelope and Problem Details contracts. New top-level `#` import
 aliases must also be added to `test/subpath-import-aliases.ts` or tests
 will not resolve them.
 
-**Real infrastructure in tests (ADR-016):** Integration and e2e tests that
-need Redis use Testcontainers (`test/testcontainers.ts`) — each test file
-starts its own `redis:8.2-alpine` container with a dynamic port in
-`beforeAll` and stops it in `afterAll`. No manual Docker Compose needed;
-unit tests keep mocking infrastructure. Override both `REDIS_CONFIG` **and**
-`REDIS_CLIENT` in the testing module so the throttler and all consumers share
-the container's connection.
+**Real infrastructure in tests (ADR-016/025):** Tests that need Redis use
+Testcontainers (`test/testcontainers.ts`). The Redis integration tier
+(`pnpm test:redis`) starts its own `redis:8.2-alpine` container per test
+file with a dynamic port in `beforeAll` and stops it in `afterAll`; the e2e
+tier (`pnpm test:e2e`) shares one container per test run, started by the
+Vitest globalSetup (`test/e2e.global-setup.ts`) and injected into the specs
+through `createE2eTestApp()`. No manual Docker Compose needed; unit tests
+keep mocking infrastructure. Redis-tier specs override both `REDIS_CONFIG`
+**and** `REDIS_CLIENT` in the testing module so the throttler and all
+consumers share the container's connection.
 
 **API documentation is mandatory:** every endpoint implemented or changed
 must get its Swagger/OpenAPI documentation in the same task — see the
@@ -224,8 +228,9 @@ tooling (lint, format, Turbo tasks) comes from the root; see
   startup: `/health` then reports `degraded` with HTTP 200 and the client
   reconnects on its own. See `src/shared/redis/` and the API
   [AGENTS.md](./AGENTS.md) Redis rules.
-- Several ADRs ([../../DECISIONS.md](../../DECISIONS.md)) are **Pending**
-  but implemented — follow them; don't reintroduce alternatives.
+- All ADRs ([../../DECISIONS.md](../../DECISIONS.md)) ADR-001 through
+  ADR-025 are **Accepted** and implemented — follow them; don't
+  reintroduce alternatives.
 
 ## 8. Useful Commands
 
@@ -234,8 +239,8 @@ pnpm dev                       # dev server with watch + env/.env.development
 pnpm build                     # production build (SWC → dist/)
 pnpm start                     # run the built app
 pnpm test                      # unit tests (mocks infrastructure, no Docker)
-pnpm test:e2e                  # e2e tests (Testcontainers starts real Redis)
-pnpm test:redis                # Redis integration tests (Testcontainers starts real Redis)
+pnpm test:e2e                  # e2e tests (one shared Testcontainers Redis per run; needs Docker)
+pnpm test:redis                # Redis integration tests (Testcontainers starts real Redis per test file)
 pnpm lint                      # Oxlint
 pnpm format                    # Oxfmt (write)
 pnpm format:check              # Oxfmt (check only)

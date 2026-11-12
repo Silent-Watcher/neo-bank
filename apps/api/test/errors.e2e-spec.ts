@@ -2,14 +2,14 @@ import { describe, expect, it } from 'vitest';
 import request from 'supertest';
 
 import { ContractController } from './contract.controller.js';
-import { createTestApp } from './create-test-app.js';
+import { createE2eTestApp } from './create-test-app.js';
 
 const UUID_V4_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
 describe('Problem Details errors (e2e)', () => {
   it('normalizes built-in NestJS HTTP exceptions', async () => {
     // Arrange
-    const app = await createTestApp(undefined, { controllers: [ContractController] });
+    const app = await createE2eTestApp(undefined, { controllers: [ContractController] });
 
     // Act
     const response = await request(app.getHttpServer()).get('/api/v1/missing');
@@ -34,7 +34,7 @@ describe('Problem Details errors (e2e)', () => {
 
   it('normalizes validation message arrays into a readable detail', async () => {
     // Arrange
-    const app = await createTestApp(undefined, { controllers: [ContractController] });
+    const app = await createE2eTestApp(undefined, { controllers: [ContractController] });
 
     // Act
     const response = await request(app.getHttpServer()).get('/api/v1/bad-array');
@@ -50,7 +50,7 @@ describe('Problem Details errors (e2e)', () => {
 
   it('normalizes AppHttpException with the family Problem Type and typed code', async () => {
     // Arrange
-    const app = await createTestApp(undefined, { controllers: [ContractController] });
+    const app = await createE2eTestApp(undefined, { controllers: [ContractController] });
 
     // Act
     const response = await request(app.getHttpServer()).get('/api/v1/app-error');
@@ -68,7 +68,7 @@ describe('Problem Details errors (e2e)', () => {
 
   it('returns a safe generic 500 for unknown exceptions without leaking internals', async () => {
     // Arrange
-    const app = await createTestApp(undefined, { controllers: [ContractController] });
+    const app = await createE2eTestApp(undefined, { controllers: [ContractController] });
 
     // Act
     const response = await request(app.getHttpServer()).get('/api/v1/boom');
@@ -85,7 +85,7 @@ describe('Problem Details errors (e2e)', () => {
 
   it('uses the correct API version and request ID on the error path', async () => {
     // Arrange
-    const app = await createTestApp(undefined, { controllers: [ContractController] });
+    const app = await createE2eTestApp(undefined, { controllers: [ContractController] });
 
     // Act
     const response = await request(app.getHttpServer())
