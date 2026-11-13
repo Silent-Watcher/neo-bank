@@ -114,3 +114,40 @@ requires developer approval before any ADR is created.
 - **Reversibility:** Trivial — the wrapper is 5 lines over the base helper.
 - **ADR Recommendation:** No — test-infrastructure detail covered by ADR-025's
   decision scope; the ADR documents the mechanism.
+
+### 3. Config-namespace tokens: local provider in the owning module, not raw injection from ConfigModule
+
+- **Task:** `_039-memory-load-shedding.md`
+- **Date:** 2026-11-13
+- **Context:** `MemoryProtectionService` needs its `MemoryProtectionConfig`
+  injected for DI, and e2e specs must be able to override it with
+  `overrideProvider(MEMORY_PROTECTION_CONFIG)`. Session experience showed
+  `@nestjs/config`'s `ConfigService` holds `registerAs` factory results
+  internally and ignores provider overrides on the namespace token (ADR-025
+  validation), and the first validation run of this task failed all e2e suites
+  because `ConfigModule`'s globally loaded token was not resolvable from the
+  new module's own DI context.
+- **Decision:** `MemoryProtectionModule` explicitly provides
+  `{ provide: MEMORY_PROTECTION_CONFIG, useFactory: () => memoryProtectionConfig() }`
+  so the service's `@Inject(token)` resolves locally and testing-module
+  overrides replace exactly that binding. Consumers that only read config keep
+  calling the factory function or `ConfigService` as before.
+- **Reasoning:** Any module that injects a `registerAs` token directly must
+  also provide it locally (or import a module that does) — relying on
+  ConfigModule's global registration is not portable across module contexts,
+  and `ConfigService.getOrThrow` would silently defeat e2e overrides (the
+  ADR-025 trap).
+- **Alternatives:** Inject `ConfigService` and `getOrThrow(token)` (breaks
+  override-based testing — same trap); read `_env` directly in the service
+  (bypasses the config-factory convention and cannot be overridden).
+- **Trade-offs:** One extra pure factory call at boot and a provider entry
+  that duplicates ConfigModule's registration for this token; in exchange,
+  injection works in every context and overrides are honored.
+- **Impact:** `MemoryProtectionModule` (and the e2e spec that overrides the
+  token); sets the pattern for future config namespaces that need injectable
+  tokens.
+- **Reversibility:** Trivial — delete the provider entry if the service ever
+  switches to factory-call style.
+- **ADR Recommendation:** No — implementation detail of the already-approved
+  ADR-026 configuration design; the trap itself is documented here and in the
+  ADR-025 decision text.

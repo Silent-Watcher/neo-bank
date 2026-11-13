@@ -3,6 +3,10 @@ import { z } from 'zod';
 import { EnvValidationError } from '#errors/env-validation.error.js';
 import { enrollmentsEnvSchema } from './schema/enrollments.env.js';
 import { logEnvSchema } from './schema/log.env.js';
+import {
+  isRecoveryThresholdInvalid,
+  memoryProtectionEnvSchema,
+} from './schema/memory-protection.env.js';
 import { rateLimitEnvSchema } from './schema/rate-limit.env.js';
 import { redisEnvSchema } from './schema/redis.env.js';
 import { isCorsOriginRequiredInProduction, serverEnvSchema } from './schema/server.env.js';
@@ -14,6 +18,7 @@ export const envSchema = z
     ...redisEnvSchema.shape,
     ...rateLimitEnvSchema.shape,
     ...enrollmentsEnvSchema.shape,
+    ...memoryProtectionEnvSchema.shape,
   })
   .superRefine((env, ctx) => {
     if (isCorsOriginRequiredInProduction(env)) {
@@ -21,6 +26,14 @@ export const envSchema = z
         code: 'custom',
         path: ['CORS_ORIGIN'],
         message: 'CORS_ORIGIN is required when APP_ENV is production.',
+      });
+    }
+    if (isRecoveryThresholdInvalid(env)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['MEMORY_PROTECTION_RECOVERY_RSS_MB'],
+        message:
+          'MEMORY_PROTECTION_RECOVERY_RSS_MB must be lower than MEMORY_PROTECTION_MAX_RSS_MB (hysteresis).',
       });
     }
   });

@@ -1,4 +1,8 @@
-import { BadRequestException, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  NotFoundException,
+  ServiceUnavailableException,
+} from '@nestjs/common';
 import type { ArgumentsHost } from '@nestjs/common';
 import { HttpStatus } from '@nestjs/common';
 import { describe, expect, it, vi } from 'vitest';
@@ -181,6 +185,32 @@ describe('ProblemDetailsFilter', () => {
     expect(logger.warn).not.toHaveBeenCalled();
   });
 
+  it('keeps non-Error thrown values at error severity without echoing the value', () => {
+    // A dependency rejecting with a non-Error is a genuine unhandled failure
+    // and must stay visible at error level; the thrown value itself is never
+    // logged or echoed (only its type is wrapped as the cause).
+    const { filter, logger, replySend, host } = createFilterFixture();
+
+    filter.catch('sensitive-throwable-value', host);
+
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.objectContaining({
+        err: expect.objectContaining({ message: 'Non-Error value thrown (string)' }),
+      }),
+      'Unhandled exception',
+    );
+    expect(logger.warn).not.toHaveBeenCalled();
+    const body = replySend.mock.calls[0][0] as Record<string, unknown>;
+    expect(JSON.stringify(body)).not.toContain('sensitive-throwable-value');
+    expect(body).toEqual(
+      expect.objectContaining({
+        status: 500,
+        code: ErrorCode.ApplicationError,
+        detail: 'An unexpected error occurred.',
+      }),
+    );
+  });
+
   it('logs expected client errors at warn severity only', () => {
     // const { filter, logger } = createFilterFixture();
     const { filter, logger, host } = createFilterFixture();
@@ -189,6 +219,18 @@ describe('ProblemDetailsFilter', () => {
     filter.catch(new NotFoundException(), host);
 
     expect(logger.warn).toHaveBeenCalledWith('HTTP 404 NOT_FOUND');
+    expect(logger.error).not.toHaveBeenCalled();
+  });
+
+  it('logs deliberate bare 5xx exceptions (e.g. load-shedding 503s) at warn severity', () => {
+    // A bare ServiceUnavailableException carries no attached error — it is a
+    // deliberate rejection, not an unhandled failure, so it must not pollute
+    // error-level logs with an "Unhandled exception" line.
+    const { filter, logger, host } = createFilterFixture();
+
+    filter.catch(new ServiceUnavailableException('overloaded'), host);
+
+    expect(logger.warn).toHaveBeenCalledWith('HTTP 503 SERVICE_UNAVAILABLE');
     expect(logger.error).not.toHaveBeenCalled();
   });
 

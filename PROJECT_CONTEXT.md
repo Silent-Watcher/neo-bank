@@ -37,7 +37,8 @@ Key layers (Node `#` subpath import aliases, see `apps/api/package.json`):
   `enrollments` (OTP challenge + verify, no SMS, no registration yet).
 - `src/shared/` — cross-cutting infrastructure: `config` (Zod env validation
   - namespaced `registerAs` factories), `logging` (Pino via nestjs-pino),
-    `redis`, errors, filters, interceptors, pipes, HTTP helpers.
+    `redis`, `memory-protection` (ADR-026), errors, filters, interceptors,
+    pipes, HTTP helpers.
 - `src/i18n/{en,fa}/` — `@nestjs/i18n` catalogs (`en` default, `fa` Persian);
   all user-facing messages must exist in both locales.
 
@@ -64,6 +65,11 @@ Core contracts:
   failure).
 - **Logging:** Pino only (ADR-008/009); JSON in production, pretty in dev,
   `LOG_PRETTY` override; never `console.log`, never log OTPs/secrets.
+- **Memory protection:** `src/shared/memory-protection/` (ADR-026) samples
+  process RSS and sheds load with 503 + `Retry-After` (global guard runs
+  before the throttler) while its hysteresis state machine is protected;
+  `/health/ready` reports readiness (503 when Redis is unreachable or
+  protection is active), `/health` stays liveness (degraded Redis → 200).
 - **Swagger:** development-only at `/docs` (ADR-014), schemas from Zod.
 
 ## Testing
@@ -117,7 +123,7 @@ Core contracts:
 | `apps/*/ONBOARDING.md`                      | Developer onboarding, stack tables, env vars, commands                    |
 | `docs/architecture.md`                      | Detailed architecture, boundaries, workspace relationships                |
 | `docs/current-state.md`                     | Feature/state snapshot (verified per feature)                             |
-| `DECISIONS.md`                              | ADR-001…ADR-025, all Accepted                                             |
+| `DECISIONS.md`                              | ADR-001…ADR-026, all Accepted                                             |
 | `docs/docker.md`                            | Docker stacks: setup, env files, commands                                 |
 | `docs/observability/README.md`              | Monitoring stack operations                                               |
 | `docs/observability/manual-testing.md`      | Reproducible monitoring verification scenarios                            |

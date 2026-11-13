@@ -8,7 +8,8 @@
   },
   "details": {
     "unexpected": "An unexpected error occurred.",
-    "rateLimited": "Too many requests. Retry later."
+    "rateLimited": "Too many requests. Retry later.",
+    "serviceOverloaded": "The service is temporarily under heavy load. Please retry shortly."
   },
   "status": {
     "badRequest": "Bad Request",

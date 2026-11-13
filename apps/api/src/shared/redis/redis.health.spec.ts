@@ -36,7 +36,7 @@ async function createIndicator(ping: () => Promise<void>) {
         // keeps this spec independent of the loader.
         provide: I18nService,
         useValue: {
-          t: vi.fn((key: string) =>
+          t: vi.fn<(key: string) => string>((key) =>
             key === 'health.redisUnavailable' ? 'Redis is unavailable.' : key,
           ),
         },
@@ -86,5 +86,47 @@ describe('RedisHealthIndicator', () => {
 
     // Assert
     expect(result).toEqual({ redis: { status: 'degraded', message: 'Redis is unavailable.' } });
+  });
+});
+
+describe('RedisHealthIndicator.checkReady (strict readiness variant)', () => {
+  it('reports up when PING succeeds', async () => {
+    // Arrange
+    const indicator = await createIndicator(vi.fn().mockResolvedValue(undefined));
+
+    // Act
+    const result = await indicator.checkReady();
+
+    // Assert
+    expect(result).toEqual({ redis: { status: 'up' } });
+  });
+
+  it('reports down — not degraded — when PING fails, failing readiness with 503', async () => {
+    // Arrange
+    const indicator = await createIndicator(
+      vi.fn().mockRejectedValue(new Error('connect ECONNREFUSED 127.0.0.1:6379')),
+    );
+
+    // Act
+    const result = await indicator.checkReady();
+
+    // Assert
+    expect(result).toEqual({
+      redis: {
+        status: 'down',
+        message: 'connect ECONNREFUSED 127.0.0.1:6379',
+      },
+    });
+  });
+
+  it('reports down with the localized fallback for non-error rejections', async () => {
+    // Arrange
+    const indicator = await createIndicator(vi.fn().mockRejectedValue('boom'));
+
+    // Act
+    const result = await indicator.checkReady();
+
+    // Assert
+    expect(result).toEqual({ redis: { status: 'down', message: 'Redis is unavailable.' } });
   });
 });

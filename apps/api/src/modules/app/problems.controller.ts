@@ -2,6 +2,7 @@ import { Controller, Get, Header, VERSION_NEUTRAL } from '@nestjs/common';
 import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 
 import { APPLICATION_ERROR_PROBLEM_TYPE } from '#errors/error.code.js';
+import { SkipMemoryProtection } from '#src/shared/memory-protection/skip-memory-protection.decorator.js';
 
 const APPLICATION_ERROR_DOCUMENTATION = `<!doctype html>
 <html lang="en">
@@ -35,8 +36,10 @@ const APPLICATION_ERROR_DOCUMENTATION = `<!doctype html>
 
 // Version-neutral so the `type` URI stays stable across API versions. The
 // route is excluded from the global prefix in the bootstrap and serves HTML,
-// so the response envelope interceptor does not wrap it.
+// so the response envelope interceptor does not wrap it. Exempt from memory
+// protection: static documentation with no handler cost must stay reachable.
 @ApiTags('problems')
+@SkipMemoryProtection()
 @Controller({ path: 'problems/application-error', version: VERSION_NEUTRAL })
 export class ProblemsController {
   @Get()

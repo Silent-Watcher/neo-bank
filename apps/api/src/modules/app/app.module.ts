@@ -4,6 +4,8 @@ import { TerminusModule } from '@nestjs/terminus';
 import { configModule } from '#config/config.js';
 import { ProblemDetailsFilter } from '#filters/problem-details.filter.js';
 import { ResponseEnvelopeInterceptor } from '#interceptors/response-envelope.interceptor.js';
+import { MemoryProtectionModule } from '#src/shared/memory-protection/memory-protection.module.js';
+import { MemoryProtectionGuard } from '#src/shared/memory-protection/memory-protection.guard.js';
 import { AppLoggerModule } from '#src/shared/logging/logger.module.js';
 import { i18nModule } from '#src/shared/i18n/i18n.module.js';
 import { RedisModule } from '#src/shared/redis/redis.module.js';
@@ -22,12 +24,17 @@ import { EnrollmentsModule } from '#modules/enrollments/enrollments.module.js';
     AppLoggerModule,
     TerminusModule,
     RedisModule,
+    MemoryProtectionModule,
     throttlerModule,
     EnrollmentsModule,
   ],
   controllers: [AppController, HealthController, ProblemsController],
   providers: [
     AppService,
+    // Memory protection rejects before the throttler guard so a protected
+    // process sheds load through the cheapest path — no Redis round trip
+    // (ADR-026). Guard order follows provider order.
+    { provide: APP_GUARD, useClass: MemoryProtectionGuard },
     { provide: APP_GUARD, useClass: RedisThrottlerGuard },
     { provide: APP_INTERCEPTOR, useClass: ResponseEnvelopeInterceptor },
     { provide: APP_FILTER, useClass: ProblemDetailsFilter },

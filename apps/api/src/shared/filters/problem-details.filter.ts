@@ -79,9 +79,11 @@ export class ProblemDetailsFilter implements ExceptionFilter {
       .header(X_REQUEST_ID_HEADER, problem.requestId)
       .send(problem);
 
-    if (normalized.status >= HttpStatus.INTERNAL_SERVER_ERROR) {
+    if (normalized.status >= HttpStatus.INTERNAL_SERVER_ERROR && normalized.error !== undefined) {
       // Unexpected server errors carry the original exception and stack for
-      // diagnostics; expected client errors are logged at warn without them.
+      // diagnostics; deliberate bare 5xx exceptions (e.g. load-shedding 503s,
+      // readiness failures — no attached error) are expected outcomes and log
+      // at warn so they cannot drown real incidents at error level.
       this.logger.error({ err: normalized.error }, 'Unhandled exception');
     } else {
       this.logger.warn(`HTTP ${normalized.status} ${normalized.code}`);
@@ -127,7 +129,13 @@ export class ProblemDetailsFilter implements ExceptionFilter {
       status: HttpStatus.INTERNAL_SERVER_ERROR,
       code: ErrorCode.ApplicationError,
       detail: this.i18n.t('errors.details.unexpected'),
-      error: exception instanceof Error ? exception : undefined,
+      // Non-Error thrown values carry no safe diagnostics, but the failure
+      // must still surface at error level, so the type is wrapped as the
+      // cause. The thrown value itself is never logged or echoed.
+      error:
+        exception instanceof Error
+          ? exception
+          : new Error(`Non-Error value thrown (${typeof exception})`),
     };
   }
 }

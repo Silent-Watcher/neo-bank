@@ -33,7 +33,10 @@ neutral `/health` probe on Fastify, port 3001 in development/test.
 - **Shared infrastructure:** `src/shared/` — `config/` (Zod env schemas +
   `registerAs` factories), `logging/` (nestjs-pino), `redis/` (global
   RedisModule: ioredis client provider, `RedisService`,
-  `@InjectRedis()`, health indicator), `swagger/` (dev-only OpenAPI setup +
+  `@InjectRedis()`, health indicator), `memory-protection/` (ADR-026
+  memory-based load shedding: RSS sampler with a hysteresis state machine,
+  global `MemoryProtectionGuard`, `@SkipMemoryProtection()`, memory
+  readiness indicator), `swagger/` (dev-only OpenAPI setup +
   shared response schemas), `errors/` +
   `filters/problem-details.filter.ts` (RFC 9457 error contract),
   `interceptors/response-envelope.interceptor.ts` (success envelope),
@@ -46,6 +49,12 @@ neutral `/health` probe on Fastify, port 3001 in development/test.
   providers (e.g. `REDIS_CLIENT`), keep them defined inside the owning
   module's directory, and expose them to consumers only through the owning
   module's exports or a dedicated injection decorator.
+- **Global guard order:** `MemoryProtectionGuard` is registered before
+  `RedisThrottlerGuard` (ADR-026): while memory protection is active,
+  non-exempt requests are rejected with 503 on the cheapest possible path —
+  no Redis round trip, no rate-limit bookkeeping — so the rejection path
+  never depends on Redis. Opt out only for probes and documentation pages
+  with `@SkipMemoryProtection()`.
 - **Request/response contracts:** every successful JSON response is wrapped
   by the envelope interceptor; every error becomes Problem Details
   (ADR-010/011). Do not hand-roll response or error shapes; ADR-011 lists the
@@ -197,6 +206,9 @@ src/
     enrollments/           # feature modules: controller + service + schema + specs
   shared/
     config/                # config.ts wiring + env/ Zod schemas + factories
+    memory-protection/     # ADR-026 load shedding: RSS sampler (hysteresis),
+                           # MemoryProtectionGuard, @SkipMemoryProtection,
+                           # memory health indicator
     redis/                 # global RedisModule: provider, RedisService, InjectRedis,
                            # key builder (redis-keys.ts)
     swagger/               # OpenAPI setup (dev-only), shared response schemas
@@ -236,7 +248,12 @@ env/                       # .env.development / .env.test / .env.example /
 - Errors: throw `BadRequestException` (message array) for validation
   failures and `AppHttpException` with an `ErrorCode` for domain errors; the
   global filter turns them into Problem Details. Never catch errors into
-  ad-hoc response shapes.
+  ad-hoc response shapes. Localize the `detail` at the throw site (en/fa);
+  the filter localizes the `title`.
+- The Problem Details filter logs exceptions with an attached error at error
+  level; deliberate bare HTTP exceptions (e.g. load-shedding 503s) log at
+  warn as `HTTP <status> <code>` — throw a bare exception only for expected,
+  deliberate rejections.
 - Logging only through the injected Pino `Logger` / `PinoLogger`;
   `console.log` is lint-banned.
 - New `#` alias → add it in `package.json` `imports` **and**
@@ -273,7 +290,7 @@ pnpm test:redis   # real-Redis integration suite via Testcontainers
 ## Constraints
 
 - Follow the decision records in [../../DECISIONS.md](../../DECISIONS.md) —
-  all ADRs ADR-001 through ADR-025 are **Accepted** and implemented; do not
+  all ADRs ADR-001 through ADR-026 are **Accepted** and implemented; do not
   build against their rejected alternatives.
 - New architectural decisions follow the ADR-first workflow in the root
   [AGENTS.md](../../AGENTS.md): propose the ADR, get explicit user approval,

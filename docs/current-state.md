@@ -34,7 +34,10 @@ auth, no deployment setup.
   `RATE_LIMIT_SHORT_LIMIT`, `RATE_LIMIT_SHORT_TTL_SECONDS`,
   `RATE_LIMIT_LONG_LIMIT`, `RATE_LIMIT_LONG_TTL_MINUTES`,
   `ENROLLMENTS_MAX_VERIFY_ATTEMPTS`, `REDIS_INSIGHT_URL`,
-  `MOCKSERVER_HOST_URL`, `MOCKSERVER_DOCKER_URL`, `LOG_PRETTY`.
+  `MOCKSERVER_HOST_URL`, `MOCKSERVER_DOCKER_URL`, `LOG_PRETTY`,
+  `MEMORY_PROTECTION_ENABLED`, `MEMORY_PROTECTION_MAX_RSS_MB`,
+  `MEMORY_PROTECTION_RECOVERY_RSS_MB`, `MEMORY_PROTECTION_SAMPLE_INTERVAL_MS`,
+  `MEMORY_PROTECTION_STABLE_SAMPLES`.
 - Redis integration (ADR-012/013): global `RedisModule` in
   `src/shared/redis/` with a single lazy ioredis 6 client (symbol token,
   `@InjectRedis()` escape hatch), `RedisService` application abstraction
@@ -85,8 +88,29 @@ auth, no deployment setup.
   Swagger UI at `/docs`, document at `/docs/json`/`/docs/yaml`; request
   schemas generated from Zod with `z.toJSONSchema()`; shared envelope and
   Problem Details response schemas; all existing endpoints documented.
-- Health check at `/health` (Terminus) with a Redis indicator: healthy,
-  or `degraded` with HTTP 200 when Redis is unreachable.
+- Liveness probe at `/health` (Terminus, version-neutral, outside the API
+  prefix, unthrottled) with a Redis indicator: healthy, or `degraded` with
+  HTTP 200 when Redis is unreachable — a degraded Redis never makes the
+  process look dead.
+- Memory-based load shedding (ADR-026): `src/shared/memory-protection/`
+  samples process RSS on a fixed interval
+  (`MEMORY_PROTECTION_SAMPLE_INTERVAL_MS`, default 5000 ms) and maintains a
+  hysteresis state machine — protection activates as soon as one sample
+  reaches `MEMORY_PROTECTION_MAX_RSS_MB` (default 1024) and clears only after
+  RSS stays below `MEMORY_PROTECTION_RECOVERY_RSS_MB` (default 768) for
+  `MEMORY_PROTECTION_STABLE_SAMPLES` (default 3) consecutive samples
+  (`MEMORY_PROTECTION_ENABLED` toggles the feature, default on). While
+  active, a global `MemoryProtectionGuard` (registered before the Redis
+  throttler guard so the rejection path needs no Redis) rejects non-exempt
+  requests with 503 Problem Details (`SERVICE_UNAVAILABLE`, localized en/fa
+  detail, `Retry-After` = seconds to the next sample); health endpoints and
+  the Problem-Type docs page are exempt via `@SkipMemoryProtection()`.
+- Readiness probe at `/health/ready` (ADR-026; version-neutral, outside the
+  API prefix, unthrottled): Terminus over strict Redis (an unreachable Redis
+  fails readiness) plus a memory indicator (down while memory protection is
+  active) → HTTP 503 when any indicator is down, so orchestrators stop
+  routing new traffic to the instance. The liveness endpoint deliberately
+  excludes the memory indicator.
 - Feature module `enrollments`: `POST /api/v1/enrollments/challenge` —
   validates an Iranian mobile number (with normalization for
   `+98`/`0098`/`98`/missing zero/whitespace), generates a cryptographically
@@ -122,7 +146,7 @@ auth, no deployment setup.
   An additional per-phone hourly rate limit (5 sends / rolling 60 min) is
   enforced atomically via Redis sorted set. No registration or authentication
   steps yet.
-- Tests: Vitest unit (285 tests), e2e (14 files / 77 tests), Redis
+- Tests: Vitest unit (316 tests), e2e (15 files / 83 tests), Redis
   integration (4 files / 60 tests via `pnpm test:redis`). All integration
   and e2e tests use Testcontainers (`apps/api/test/testcontainers.ts`,
   ADR-016): the Redis integration tier starts an isolated
@@ -242,6 +266,6 @@ Per-app commands are listed in each `apps/<app>/ONBOARDING.md`.
 
 All ADRs live in [DECISIONS.md](../DECISIONS.md). Status as of this snapshot:
 
-- **Accepted:** ADR-001 (Turborepo), ADR-002 (Fastify), ADR-003 (SWC), ADR-004 (@nestjs/config + Zod), ADR-005 (URI versioning), ADR-006 (1 MiB body limit), ADR-007 (`api` prefix), ADR-008/009 (Pino / nestjs-pino), ADR-010 (UUIDv4 request IDs), ADR-011 (envelope exclusions), ADR-012 (ioredis without a wrapper), ADR-013 (Redis module architecture), ADR-014 (Swagger/OpenAPI, development-only), ADR-015 (Global HTTP rate limiting with Redis-backed @nestjs/throttler), ADR-016 (Testcontainers for integration and e2e testing), ADR-017 (OTP verification attempt lockout for enrollment security), ADR-018 (HMAC-SHA-256 digest storage for enrollment OTPs), ADR-019 (OTP verification hardening — conditional attempt counting and challenge identity), ADR-020 (development Redis service migrated to Redis Stack with bundled Redis Insight), ADR-021 (bilingual internationalization en/fa via the official @nestjs/i18n), ADR-022 (centralized logging with Grafana Alloy, Loki, and Grafana), ADR-023 (project-level multi-agent development workflow for ZCode + Claude Code), ADR-024 (MockServer for development-time resilience testing), ADR-025 (managing the e2e Redis with Testcontainers — one shared container per run).
+- **Accepted:** ADR-001 (Turborepo), ADR-002 (Fastify), ADR-003 (SWC), ADR-004 (@nestjs/config + Zod), ADR-005 (URI versioning), ADR-006 (1 MiB body limit), ADR-007 (`api` prefix), ADR-008/009 (Pino / nestjs-pino), ADR-010 (UUIDv4 request IDs), ADR-011 (envelope exclusions), ADR-012 (ioredis without a wrapper), ADR-013 (Redis module architecture), ADR-014 (Swagger/OpenAPI, development-only), ADR-015 (Global HTTP rate limiting with Redis-backed @nestjs/throttler), ADR-016 (Testcontainers for integration and e2e testing), ADR-017 (OTP verification attempt lockout for enrollment security), ADR-018 (HMAC-SHA-256 digest storage for enrollment OTPs), ADR-019 (OTP verification hardening — conditional attempt counting and challenge identity), ADR-020 (development Redis service migrated to Redis Stack with bundled Redis Insight), ADR-021 (bilingual internationalization en/fa via the official @nestjs/i18n), ADR-022 (centralized logging with Grafana Alloy, Loki, and Grafana), ADR-023 (project-level multi-agent development workflow for ZCode + Claude Code), ADR-024 (MockServer for development-time resilience testing), ADR-025 (managing the e2e Redis with Testcontainers — one shared container per run), ADR-026 (memory-based load shedding and health-aware readiness).
 
 All architectural decisions are accepted and implemented. Do not build on rejected alternatives (e.g. do not introduce header versioning or a second logger).

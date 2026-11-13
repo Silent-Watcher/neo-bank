@@ -55,12 +55,14 @@ describe('Swagger (e2e)', () => {
       '/api/v1/enrollments/challenge',
       '/api/v1/enrollments/verify',
       '/health',
+      '/health/ready',
       '/problems/application-error',
     ]);
     expect(json.body.paths['/api/v1/enrollments/challenge'].post).toBeDefined();
     expect(json.body.paths['/api/v1/enrollments/verify'].post).toBeDefined();
     expect(json.body.paths['/api/v1'].get).toBeDefined();
     expect(json.body.paths['/health'].get).toBeDefined();
+    expect(json.body.paths['/health/ready'].get).toBeDefined();
     expect(json.body.paths['/problems/application-error'].get).toBeDefined();
     await app.close();
   });

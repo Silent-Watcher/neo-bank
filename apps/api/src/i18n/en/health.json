@@ -1,3 +1,5 @@
 {
-  "redisUnavailable": "Redis is unavailable."
+  "redisUnavailable": "Redis is unavailable.",
+  "memoryProtected": "The service is under memory pressure and is temporarily not accepting new requests.",
+  "notReady": "The service is not ready to receive traffic."
 }

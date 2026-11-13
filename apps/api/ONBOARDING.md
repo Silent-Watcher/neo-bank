@@ -35,7 +35,7 @@ feature coverage is minimal.
 | @nestjs/config                           | Configuration namespaces via `registerAs` + `ConfigService`                                             |
 | @nestjs/i18n                             | Bilingual en/fa translations: locale resolution, JSON catalogs ([ADR-021](../../DECISIONS.md))          |
 | Pino / nestjs-pino                       | Structured logging; request-scoped context, header redaction                                            |
-| @nestjs/terminus                         | `/health` endpoint                                                                                      |
+| @nestjs/terminus                         | `/health` (liveness) and `/health/ready` (readiness) endpoints                                          |
 | ioredis 6                                | Redis client behind the shared `RedisService` ([ADR-012](../../DECISIONS.md)/[013](../../DECISIONS.md)) |
 | @nestjs/swagger + @fastify/static        | OpenAPI docs; Swagger UI at `/docs`, **development only** ([ADR-014](../../DECISIONS.md))               |
 | Vitest + supertest                       | Unit and e2e testing                                                                                    |
@@ -66,33 +66,38 @@ cp env/.env.example env/.env.development
 # edit values if needed; defaults work for local development
 ```
 
-| Variable                           | Meaning                                                                                                                                                                  | Default behavior if unset                         |
-| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------- |
-| `APP_ENV`                          | `development` \| `production` \| `test`                                                                                                                                  | required                                          |
-| `HOST`, `PORT`                     | Bind address and port                                                                                                                                                    | required (dev/test files set `3001`)              |
-| `CORS_ORIGIN`                      | Comma-separated allowed origins                                                                                                                                          | CORS disabled; required when `APP_ENV=production` |
-| `TRUST_PROXY`                      | Trust proxy headers (`true`/`false`)                                                                                                                                     | `false`                                           |
-| `BODY_LIMIT`                       | Max request body bytes                                                                                                                                                   | `1048576` (1 MiB)                                 |
-| `REDIS_INSIGHT_URL`                | Host-accessible Redis Insight URL; startup log prints it only when set (ADR-020)                                                                                         | unset (injected by the dev Compose stack)         |
-| `MOCKSERVER_HOST_URL`              | Host-machine MockServer address; the startup log prints it in development only when set (ADR-024)                                                                        | unset (injected by the dev Compose stack)         |
-| `MOCKSERVER_DOCKER_URL`            | Compose-network MockServer address; the startup log prints it in development only when set (ADR-024)                                                                     | unset (injected by the dev Compose stack)         |
-| `LOG_LEVEL`                        | Pino level                                                                                                                                                               | `info`                                            |
-| `LOG_PRETTY`                       | Explicit pretty-print override (`true`/`false`); the dev Compose stack sets `false` so containers emit JSON for centralized logging                                      | unset → pretty only in development                |
-| `REDIS_URL`                        | Redis URL (`redis://` or `rediss://`)                                                                                                                                    | required                                          |
-| `REDIS_USERNAME`, `REDIS_PASSWORD` | Redis ACL credentials                                                                                                                                                    | required; empty value = no authentication         |
-| `REDIS_DB`                         | Logical database index (0–15)                                                                                                                                            | server default                                    |
-| `REDIS_TLS`                        | Force TLS for `redis://` (`true`/`false`)                                                                                                                                | `false` (`rediss://` always uses TLS)             |
-| `REDIS_CONNECT_TIMEOUT_MS`         | Connection timeout (ms)                                                                                                                                                  | `10000`                                           |
-| `REDIS_COMMAND_TIMEOUT_MS`         | Per-command timeout (ms)                                                                                                                                                 | `5000`                                            |
-| `REDIS_MAX_RETRIES_PER_REQUEST`    | Command retry budget                                                                                                                                                     | `3`                                               |
-| `REDIS_SHUTDOWN_TIMEOUT_MS`        | Graceful-QUIT window (ms)                                                                                                                                                | `2000`                                            |
-| `RATE_LIMIT_SHORT_LIMIT`           | Short-window max requests                                                                                                                                                | `10`                                              |
-| `RATE_LIMIT_SHORT_TTL_SECONDS`     | Short-window TTL in seconds                                                                                                                                              | `1`                                               |
-| `RATE_LIMIT_LONG_LIMIT`            | Long-window max requests                                                                                                                                                 | `100`                                             |
-| `RATE_LIMIT_LONG_TTL_MINUTES`      | Long-window TTL in minutes                                                                                                                                               | `1`                                               |
-| `ENROLLMENTS_MAX_VERIFY_ATTEMPTS`  | Max failed OTP verify attempts per window                                                                                                                                | `5`                                               |
-| `ENROLLMENTS_LOCKOUT_TTL_SECONDS`  | Lockout window after max attempts (s)                                                                                                                                    | `900` (15 min)                                    |
-| `ENROLLMENTS_OTP_HMAC_SECRET`      | HMAC-SHA-256 key for OTP digest storage (ADR-018); required, no default — generate with `openssl rand -hex 32` (64 hex chars = 32 bytes), identical across API instances | —                                                 |
+| Variable                               | Meaning                                                                                                                                                                  | Default behavior if unset                         |
+| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------- |
+| `APP_ENV`                              | `development` \| `production` \| `test`                                                                                                                                  | required                                          |
+| `HOST`, `PORT`                         | Bind address and port                                                                                                                                                    | required (dev/test files set `3001`)              |
+| `CORS_ORIGIN`                          | Comma-separated allowed origins                                                                                                                                          | CORS disabled; required when `APP_ENV=production` |
+| `TRUST_PROXY`                          | Trust proxy headers (`true`/`false`)                                                                                                                                     | `false`                                           |
+| `BODY_LIMIT`                           | Max request body bytes                                                                                                                                                   | `1048576` (1 MiB)                                 |
+| `REDIS_INSIGHT_URL`                    | Host-accessible Redis Insight URL; startup log prints it only when set (ADR-020)                                                                                         | unset (injected by the dev Compose stack)         |
+| `MOCKSERVER_HOST_URL`                  | Host-machine MockServer address; the startup log prints it in development only when set (ADR-024)                                                                        | unset (injected by the dev Compose stack)         |
+| `MOCKSERVER_DOCKER_URL`                | Compose-network MockServer address; the startup log prints it in development only when set (ADR-024)                                                                     | unset (injected by the dev Compose stack)         |
+| `LOG_LEVEL`                            | Pino level                                                                                                                                                               | `info`                                            |
+| `LOG_PRETTY`                           | Explicit pretty-print override (`true`/`false`); the dev Compose stack sets `false` so containers emit JSON for centralized logging                                      | unset → pretty only in development                |
+| `REDIS_URL`                            | Redis URL (`redis://` or `rediss://`)                                                                                                                                    | required                                          |
+| `REDIS_USERNAME`, `REDIS_PASSWORD`     | Redis ACL credentials                                                                                                                                                    | required; empty value = no authentication         |
+| `REDIS_DB`                             | Logical database index (0–15)                                                                                                                                            | server default                                    |
+| `REDIS_TLS`                            | Force TLS for `redis://` (`true`/`false`)                                                                                                                                | `false` (`rediss://` always uses TLS)             |
+| `REDIS_CONNECT_TIMEOUT_MS`             | Connection timeout (ms)                                                                                                                                                  | `10000`                                           |
+| `REDIS_COMMAND_TIMEOUT_MS`             | Per-command timeout (ms)                                                                                                                                                 | `5000`                                            |
+| `REDIS_MAX_RETRIES_PER_REQUEST`        | Command retry budget                                                                                                                                                     | `3`                                               |
+| `REDIS_SHUTDOWN_TIMEOUT_MS`            | Graceful-QUIT window (ms)                                                                                                                                                | `2000`                                            |
+| `RATE_LIMIT_SHORT_LIMIT`               | Short-window max requests                                                                                                                                                | `10`                                              |
+| `RATE_LIMIT_SHORT_TTL_SECONDS`         | Short-window TTL in seconds                                                                                                                                              | `1`                                               |
+| `RATE_LIMIT_LONG_LIMIT`                | Long-window max requests                                                                                                                                                 | `100`                                             |
+| `RATE_LIMIT_LONG_TTL_MINUTES`          | Long-window TTL in minutes                                                                                                                                               | `1`                                               |
+| `ENROLLMENTS_MAX_VERIFY_ATTEMPTS`      | Max failed OTP verify attempts per window                                                                                                                                | `5`                                               |
+| `ENROLLMENTS_LOCKOUT_TTL_SECONDS`      | Lockout window after max attempts (s)                                                                                                                                    | `900` (15 min)                                    |
+| `ENROLLMENTS_OTP_HMAC_SECRET`          | HMAC-SHA-256 key for OTP digest storage (ADR-018); required, no default — generate with `openssl rand -hex 32` (64 hex chars = 32 bytes), identical across API instances | —                                                 |
+| `MEMORY_PROTECTION_ENABLED`            | Memory-based load shedding on/off, exactly `true`/`false` (ADR-026)                                                                                                      | `true`                                            |
+| `MEMORY_PROTECTION_MAX_RSS_MB`         | Process RSS (MB) that activates protection: non-exempt requests get 503 while active                                                                                     | `1024`                                            |
+| `MEMORY_PROTECTION_RECOVERY_RSS_MB`    | Recovery threshold (MB); must stay below the max threshold (validated at boot, hysteresis)                                                                               | `768`                                             |
+| `MEMORY_PROTECTION_SAMPLE_INTERVAL_MS` | RSS sampling interval (ms); the 503 `Retry-After` is derived from it                                                                                                     | `5000`                                            |
+| `MEMORY_PROTECTION_STABLE_SAMPLES`     | Consecutive below-recovery samples required to deactivate protection                                                                                                     | `3`                                               |
 
 Startup fails fast with a readable Zod error if validation fails.
 
@@ -139,6 +144,9 @@ src/
                            # missing-key policy, catalog loader)
     interceptors/          # global success response envelope
     logging/               # nestjs-pino module and pino-http options
+    memory-protection/     # ADR-026 load shedding: RSS sampler (hysteresis state
+                           # machine), global MemoryProtectionGuard,
+                           # @SkipMemoryProtection(), memory health indicator
     pipes/                 # ZodValidationPipe (translates Zod issues per request locale)
     redis/                 # global RedisModule: ioredis provider, RedisService,
                            # @InjectRedis(), degraded-mode health indicator
@@ -155,7 +163,8 @@ that a second feature would need belongs in `src/shared/`.
 
 **Routes:** every controller gets `/api/v1` automatically (global prefix +
 URI versioning, [ADR-005](../../DECISIONS.md)/[ADR-007](../../DECISIONS.md)).
-Only `/health` and `/problems/application-error` sit outside the prefix.
+Only `/health`, `/health/ready`, and `/problems/application-error` sit
+outside the prefix.
 
 ## 6. Development Workflow
 
@@ -229,7 +238,7 @@ tooling (lint, format, Turbo tasks) comes from the root; see
   reconnects on its own. See `src/shared/redis/` and the API
   [AGENTS.md](./AGENTS.md) Redis rules.
 - All ADRs ([../../DECISIONS.md](../../DECISIONS.md)) ADR-001 through
-  ADR-025 are **Accepted** and implemented — follow them; don't
+  ADR-026 are **Accepted** and implemented — follow them; don't
   reintroduce alternatives.
 
 ## 8. Useful Commands

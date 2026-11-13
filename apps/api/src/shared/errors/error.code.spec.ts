@@ -12,6 +12,7 @@ describe('errorCodeForStatus', () => {
   it('maps known statuses to their centralized codes', () => {
     expect(errorCodeForStatus(400)).toBe(ErrorCode.BadRequest);
     expect(errorCodeForStatus(404)).toBe(ErrorCode.NotFound);
+    expect(errorCodeForStatus(503)).toBe(ErrorCode.ServiceUnavailable);
   });
 
   it('falls back to the application error code for unmapped statuses', () => {
@@ -29,6 +30,9 @@ describe('problemTypeForErrorCode', () => {
     expect(problemTypeForErrorCode(ErrorCode.InvalidRequestId)).toBe(
       APPLICATION_ERROR_PROBLEM_TYPE,
     );
+    expect(problemTypeForErrorCode(ErrorCode.ServiceUnavailable)).toBe(
+      APPLICATION_ERROR_PROBLEM_TYPE,
+    );
   });
 
   it('returns no type for ordinary HTTP error codes', () => {
@@ -41,6 +45,7 @@ describe('titleForErrorCode', () => {
   it('provides stable titles for application-family codes', () => {
     expect(titleForErrorCode(ErrorCode.ApplicationError)).toBe('Application Error');
     expect(titleForErrorCode(ErrorCode.InvalidRequestId)).toBe('Invalid Request Id');
+    expect(titleForErrorCode(ErrorCode.ServiceUnavailable)).toBe('Service Unavailable');
   });
 
   it('provides no title for ordinary HTTP error codes', () => {

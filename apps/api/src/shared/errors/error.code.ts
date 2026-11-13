@@ -10,6 +10,7 @@ export enum ErrorCode {
   OtpRateLimitExceeded = 'OTP_RATE_LIMIT_EXCEEDED',
   OtpVerificationFailed = 'OTP_VERIFICATION_FAILED',
   RateLimited = 'RATE_LIMITED',
+  ServiceUnavailable = 'SERVICE_UNAVAILABLE',
 }
 
 // Stable fallback codes for built-in HTTP exceptions, keyed by status.
@@ -17,6 +18,7 @@ const STATUS_ERROR_CODES: ReadonlyMap<number, ErrorCode> = new Map([
   [400, ErrorCode.BadRequest],
   [404, ErrorCode.NotFound],
   [429, ErrorCode.RateLimited],
+  [503, ErrorCode.ServiceUnavailable],
 ]);
 
 export function errorCodeForStatus(status: number): ErrorCode {
@@ -34,6 +36,7 @@ const ERROR_CODE_PROBLEM_TYPES: ReadonlyMap<ErrorCode, string> = new Map([
   [ErrorCode.OtpRateLimitExceeded, APPLICATION_ERROR_PROBLEM_TYPE],
   [ErrorCode.OtpVerificationFailed, APPLICATION_ERROR_PROBLEM_TYPE],
   [ErrorCode.RateLimited, APPLICATION_ERROR_PROBLEM_TYPE],
+  [ErrorCode.ServiceUnavailable, APPLICATION_ERROR_PROBLEM_TYPE],
 ]);
 
 export function problemTypeForErrorCode(code: ErrorCode): string | undefined {
@@ -48,6 +51,7 @@ const ERROR_CODE_TITLES: ReadonlyMap<ErrorCode, string> = new Map([
   [ErrorCode.OtpRateLimitExceeded, 'Too Many Requests'],
   [ErrorCode.OtpVerificationFailed, 'Verification Failed'],
   [ErrorCode.RateLimited, 'Too Many Requests'],
+  [ErrorCode.ServiceUnavailable, 'Service Unavailable'],
 ]);
 
 export function titleForErrorCode(code: ErrorCode): string | undefined {

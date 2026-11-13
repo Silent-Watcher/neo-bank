@@ -1065,3 +1065,259 @@ recorded below.
 **Wave 9 re-review (same reviewer):** `APPROVED` — all four CR-01 locations
 verified fixed; no new findings; surrounding code byte-identical to the
 previously reviewed implementation.
+
+---
+
+## Wave 10 — Task 1 (E2E Testcontainers) security review (2026-11-13)
+
+Review scope: e2e.global-setup.ts, create-test-app.ts override path, renamed
+specs, enrollments-spec decoupling, package.json/lockfile, docs. Verdict:
+`SECURITY_APPROVED_WITH_INFORMATIONAL_FINDINGS`.
+
+### SEC-T1-01 — Ephemeral test Redis is Docker-published on all host interfaces during runs
+
+- **Status:** Won't Fix (pre-existing Testcontainers default, accepted)
+- **Severity:** Informational (CWE-668)
+- **Category:** Security / exposure
+- **Locations:** `apps/api/test/testcontainers.ts:38-45` (reused by `e2e.global-setup.ts`)
+- **Technical explanation:** Docker's default port mapping publishes the
+  password-protected, synthetic-data Redis on an ephemeral host port on all
+  interfaces for the duration of a test run. This is the exact pattern the
+  `test:redis` tier has used since ADR-016; the e2e tier previously targeted
+  the loopback-bound compose Redis, so its exposure surface is new — but the
+  reviewer classified it as theoretical (LAN adjacency + active run + known
+  ephemeral port + public placeholder password + synthetic data only).
+- **Failure scenario:** an adjacent-network attacker reaching the ephemeral
+  port during a run could read/write synthetic test data.
+- **Judge recommendation (optional):** document the reachability, or restrict
+  via host firewall / CI network isolation.
+- **Investigation results:** restricting the binding would deviate from the
+  Testcontainers default used by both tiers and the ryuk/teardown cleanup
+  already bounds the window; no code change required for approval per the
+  reviewer. The exposure is documented here.
+- **Agreed resolution:** Won't Fix with the justification above; revisit if a
+  CI network-isolation policy is introduced.
+
+**Wave 10 summary:** 1 finding — 1 informational (Won't Fix, documented). No
+confirmed vulnerabilities; production code paths untouched by the change
+(test → src dependency direction grep-verified).
+
+---
+
+## Wave 11 — Task 3 (memory load shedding) code review (2026-11-13)
+
+Review scope: the full memory-protection layer (service, guard, indicator,
+module, decorator, env schema + config factory, error code, redis health
+strict variant, health controller readiness endpoint, app-module guard
+ordering, prefix exclusions, i18n, env files, specs). Verdict:
+`APPROVED_WITH_SUGGESTIONS` (4 suggestions) → remediated → re-review below.
+
+### CR-01 — Duplicate `@nestjs/common` import statement
+
+- **Status:** Resolved
+- **Severity:** Suggestion
+- **Category:** Syntax/Code Quality
+- **Locations:** `apps/api/src/modules/app/health.controller.ts:1,5`
+- **Technical explanation:** two import statements from the same module
+  (line 5 added `ServiceUnavailableException` separately).
+- **Failure scenario:** none functional; cosmetic.
+- **Judge recommendation:** merge into the line-1 import.
+- **Investigation results:** valid. Merged.
+- **Agreed resolution:** fixed.
+
+### CR-02 — `MEMORY_PROTECTION_SAMPLE_INTERVAL_MS` accepts values Node silently clamps
+
+- **Status:** Resolved
+- **Severity:** Suggestion
+- **Category:** Edge Case
+- **Locations:** `memory-protection.env.ts`, `memory-protection.service.ts:45`
+- **Technical explanation:** `positiveSafeInteger` admits values above
+  2147483647 ms, but Node's `setInterval` clamps larger delays down to 1 ms —
+  an implausible-but-accepted configuration would sample RSS every
+  millisecond while `Retry-After` would advertise days.
+- **Failure scenario:** operator pastes an unvalidated large value; CPU burns
+  on a 1 ms sampling loop with no validation error.
+- **Judge recommendation:** bound the schema field (e.g. 1 hour) consistent
+  with the fail-fast posture.
+- **Investigation results:** valid. Added `MAX_SAMPLE_INTERVAL_MS = 3_600_000`
+  (1 hour) as a named constant bound on the schema field with the Node-clamp
+  rationale in a comment, plus spec coverage for the bound.
+- **Agreed resolution:** fixed.
+
+### CR-03 — Module-level guard provider is dead weight (guard instantiated twice)
+
+- **Status:** Resolved
+- **Severity:** Suggestion
+- **Category:** YAGNI/Clean Code
+- **Locations:** `memory-protection.module.ts` vs `app.module.ts:37`
+- **Technical explanation:** the only consumer is AppModule's `APP_GUARD`
+  `useClass` registration, which builds its own instance; nothing injects the
+  module-provided copy.
+- **Failure scenario:** none at runtime; misleading to future readers.
+- **Judge recommendation:** drop the guard from the module's
+  providers/exports.
+- **Investigation results:** valid. Guard removed from the module; ordering
+  control stays in AppModule as documented.
+- **Agreed resolution:** fixed.
+
+### CR-04 — Expected 503 rejections log at error level as "Unhandled exception"
+
+- **Status:** Resolved
+- **Severity:** Suggestion
+- **Category:** Observability/Error Handling
+- **Locations:** `apps/api/src/shared/filters/problem-details.filter.ts:82-85`
+- **Technical explanation:** every shed request and readiness-probe failure
+  is a deliberate, bare `ServiceUnavailableException` without an attached
+  cause, but the filter logs all ≥500 statuses at error level with
+  "Unhandled exception" — under memory pressure, error logs fill with
+  expected rejections indistinguishable from real failures.
+- **Failure scenario:** on-call cannot separate load-shed 503 noise from
+  genuine unhandled errors during an incident.
+- **Judge recommendation:** warn-level branch for expected built-in 503s.
+- **Investigation results:** valid, and root-caused in the shared filter per
+  the fix-once rule: the error-level branch now requires an attached error
+  (`normalized.error !== undefined`); deliberate bare 5xx HttpExceptions log
+  at warn as `HTTP <status> <code>`. Unknown exceptions (which carry the
+  original error) keep error-level logging with the stack. Spec case added
+  for a bare 503 → warn.
+- **Agreed resolution:** fixed.
+
+**Wave 11 summary:** 4 findings — all Suggestion-level, all fixed (import
+merge, interval bound + spec, dead provider removal, expected-503 warn branch
+
+- spec). No Critical/High/Medium findings; the judge explicitly verified the
+  state machine, timer lifecycle, guard ordering, filter contract, exemption
+  resolution, i18n locale resolution inside guards, and the e2e override
+  effectiveness. Re-review verdict recorded below.
+
+**Wave 11 re-review (same reviewer):** `APPROVED` — all four remediations
+verified at their locations (import merge, interval bound + boundary spec,
+dead guard provider removed with its import, warn branch equivalent to
+"unknown exception" so no genuine error-level visibility is lost); regression
+check found no collateral damage; delegated validation results noted without
+independent re-execution (read-only reviewer).
+
+---
+
+## Wave 12 — Task 3 (memory load shedding) security review (2026-11-13)
+
+Review scope: identical to Wave 11. Verdict: `SECURITY_CHANGES_REQUIRED`
+(1 actionable Low, 1 Low deployment-boundary, 3 informational) → SEC-01
+remediated → re-review below.
+
+### SEC-01 — Non-Error thrown values lose error-level logging entirely
+
+- **Status:** Resolved
+- **Severity:** Low
+- **Category:** Security (CWE-778, insufficient logging of exceptions)
+- **Locations:** `problem-details.filter.ts` (logging branch + normalize)
+- **Technical explanation:** the Wave-11 CR-04 fix keys error-level logging
+  on an attached `error`; `normalize()` only attaches `Error` instances, so a
+  dependency rejecting with a non-Error (string/object) now logs a bare warn
+  `HTTP 500 APPLICATION_ERROR` with no diagnostics — previously error level.
+  Error throws (the realistic majority) are unaffected (e2e-verified by the
+  reviewer).
+- **Failure scenario:** incident caused by a non-Error rejection is invisible
+  to error-level alerting.
+- **Judge recommendation:** wrap non-Error thrown values so they retain
+  error-level logging.
+- **Investigation results:** valid. `normalize()` now wraps non-Error unknown
+  values as `new Error(\`Non-Error value thrown (${typeof exception})\`)`—
+  the thrown VALUE is never logged or echoed (no secret-leak surface; the
+  pre-fix behavior also never logged the value), while the failure regains
+  error-level visibility. Bare deliberate`HttpException`s keep warn logging.
+  Spec case added: non-Error throw → error-level log, response contract
+  unchanged, thrown value absent from the response.
+- **Agreed resolution:** fixed.
+
+### SEC-02 — Probe endpoints are an unthrottled, unauthenticated work path during shedding
+
+- **Status:** Won't Fix (deployment-boundary mitigation; conscious acceptance)
+- **Severity:** Low (CWE-400)
+- **Category:** Security / resource amplification
+- **Locations:** `health.controller.ts` (probe endpoints), `main.ts` (exposure)
+- **Technical explanation:** `/health/ready` executes a Redis PING + Terminus
+  aggregation per request, is unauthenticated, unthrottled, and exempt from
+  shedding — during protection it is the most expensive endpoint an attacker
+  can reach. The reviewer scoped it explicitly: `/health` already had this
+  property; the reviewer's primary mitigation is deployment-level (restrict
+  probe routes to the orchestrator network at ingress), with an optional
+  in-process coarse limiter as defense-in-depth.
+- **Judge recommendation:** ingress restriction; optional in-process limiter.
+- **Investigation results:** not applied in code: an in-process limiter on
+  probe routes risks rejecting legitimate orchestrator/LB probing
+  configurations and would need its own throttling design — the correct layer
+  is the deployment boundary (network policy / ingress), which is outside the
+  repository. The exposure and recommendation are recorded here; revisit if a
+  production ingress configuration lands in this repo.
+- **Agreed resolution:** Won't Fix with the justification above; deployment
+  guidance recorded.
+
+### SEC-03 — `Retry-After` discloses the sampling cadence; protected-state disclosure is inherent
+
+- **Status:** Won't Fix (inherent to load shedding)
+- **Severity:** Informational (CWE-203)
+- **Category:** Security / observable discrepancy
+- **Locations:** `memory-protection.service.ts`, `memory-protection.guard.ts`
+- **Technical explanation:** the 503 announces the protected state (the
+  feature's purpose) and `Retry-After` reveals a seconds-rounded cadence
+  hint; no thresholds, RSS values, config, or stacks leak (verified: body,
+  headers, logs). Knowing the cadence does not help bypass shedding (state
+  depends on RSS, not timing).
+- **Judge recommendation:** none required; optionally document the advisory
+  nature of the header.
+- **Investigation results:** ADR-026 already defines the header as derived
+  from the sampling interval; the advisory (non-promise) nature is implicit
+  in the hysteresis design documented there. No change.
+- **Agreed resolution:** Won't Fix.
+
+### SEC-04 — No floor on MAX_RSS_MB / bound on STABLE_SAMPLES permits permanent shedding via misconfiguration
+
+- **Status:** Won't Fix (operator-only, fails loudly)
+- **Severity:** Informational (CWE-1188)
+- **Category:** Security / configuration hardening
+- **Locations:** `memory-protection.env.ts`, `env.config.ts` cross-field rule
+- **Technical explanation:** a deployment setting MAX_RSS_MB below the
+  process baseline (or a huge STABLE_SAMPLES) sheds from boot. The failure is
+  loud, not silent: the sampler logs the activation warning immediately at
+  bootstrap and the readiness endpoint fails 503 at the deploy gate, while
+  liveness stays 200 (no restart loop). Environment-only values; no injection
+  surface.
+- **Judge recommendation:** optional minimum floor or startup warning below
+  baseline.
+- **Investigation results:** not applied: an arbitrary MB floor is a magic
+  number that could conflict with legitimately small containers, and the
+  fail-loud signal pair (warn log + readiness 503 at gate) already surfaces
+  the misconfiguration immediately. Revisit if a real deployment hits it.
+- **Agreed resolution:** Won't Fix with the justification above.
+
+### SEC-05 — One warn line per rejected request while shedding
+
+- **Status:** Won't Fix (log-volume trade-off accepted)
+- **Severity:** Informational (CWE-400)
+- **Category:** Security / log amplification
+- **Locations:** `problem-details.filter.ts` warn branch
+- **Technical explanation:** shed rejections log one warn line each; volume
+  grows with attack rate. Pino throughput and the bounded json-file rotation
+  (compose `x-logging`) bound the cost; per-request visibility during
+  shedding is operationally valuable (shed rate is the incident signal).
+- **Judge recommendation (optional):** sample or aggregate shedding
+  rejections.
+- **Investigation results:** not applied: aggregation would hide the very
+  rate the on-call needs during an incident; storage is bounded by the
+  existing log rotation. Revisit with the monitoring stack if ingestion cost
+  becomes real.
+- **Agreed resolution:** Won't Fix with the justification above.
+
+**Wave 12 summary:** 5 findings — 1 actionable Low (SEC-01, fixed:
+non-Error wraps preserve error-level logging without logging the value), 1
+Low (SEC-02, Won't Fix: deployment-boundary mitigation recorded), 3
+informational (SEC-03/04/05, Won't Fix with justification). No
+Critical/High/Medium; no injection, access-control, deserialization, or
+secret-exposure weaknesses. Re-review verdict recorded below.
+
+**Wave 12 re-review (same reviewer):** `SECURITY_APPROVED_WITH_INFORMATIONAL_FINDINGS`
+— SEC-01 verified fixed (error-level visibility restored, no value echo,
+deliberate 503s still warn, genuine Errors unchanged); SEC-02–05 dispositions
+reviewer-concurred ("nothing above was downgraded to obtain approval"); no
+OPEN code-level security weakness remains in scope.
