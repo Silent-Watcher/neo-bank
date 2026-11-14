@@ -112,8 +112,12 @@ describe('DatabaseConnectionInitializer', () => {
     };
     const initializer = await createInitializer(orm);
 
-    // Act
+    // Act & Assert — a handler is attached before the timers advance: the
+    // rejection can fire while fake timers run, and a momentarily-unhandled
+    // rejection makes Vitest fail the whole run as a suite error even though
+    // the assertion later passes.
     const pending = initializer.onApplicationBootstrap();
+    pending.catch(() => undefined);
     await vi.advanceTimersByTimeAsync(200);
 
     // Assert
@@ -202,8 +206,10 @@ describe('DatabaseConnectionInitializer', () => {
       attemptTimeoutMs: 50,
     });
 
-    // Act
+    // Act & Assert — defensive handler attached before the timers advance
+    // (same momentarily-unhandled-rejection hazard as the exhaustion test).
     const pending = initializer.onApplicationBootstrap();
+    pending.catch(() => undefined);
     await vi.advanceTimersByTimeAsync(100);
 
     // Assert
