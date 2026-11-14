@@ -166,8 +166,8 @@ format. The variable is optional and documented in `apps/api/env/.env.example`
 
 ## Redis Insight
 
-The development stack's `redis` service runs `redis/redis-stack:latest`
-(ADR-020), which bundles Redis Insight. When the dev stack is up, Insight is
+The development stack's `redis` service runs `redis/redis-stack:7.4.0-v8`
+(version-pinned; bundles Redis server 7.4.7) (ADR-020), which bundles Redis Insight. When the dev stack is up, Insight is
 at `http://localhost:${REDIS_INSIGHT_PORT}` (default 8001). The API logs the
 URL at startup (`Redis Insight: http://localhost:8001`) because the dev
 Compose stack injects it as `REDIS_INSIGHT_URL`; environments without Insight

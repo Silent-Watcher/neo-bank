@@ -221,7 +221,8 @@ configuration errors are not retried), while post-boot outages keep
 degraded-liveness/strict-readiness health; explicit migrations only — at
 infrastructure level (no entities yet); the dev and prod Compose stacks
 inject `DATABASE_URL` into the API service. The development Compose stack runs
-`redis/redis-stack:latest` with bundled Redis Insight on port 8001
+`redis/redis-stack:7.4.0-v8` (pinned; Redis server 7.4.7) with bundled Redis
+Insight on port 8001
 (ADR-020); the API logs the host-accessible Insight URL at startup when the
 stack injects `REDIS_INSIGHT_URL`. It also runs MockServer
 (`mockserver/mockserver:9.2.0`, ADR-024), a development-only HTTP mock for

@@ -161,7 +161,9 @@ services:
     logging: *default-logging
 
   redis:
-    image: redis/redis-stack:latest
+    # Version-pinned (was :latest): 7.4.0-v8 bundles Redis server 7.4.7 —
+    # the exact build the stack ran before the pin, verified by digest.
+    image: redis/redis-stack:7.4.0-v8
     # Data is intentionally ephemeral: no persistence, no volume, no AOF.
     # Authentication is enabled in every environment so dev matches prod.
     # The Stack entrypoint starts redis-server plus the bundled modules and
