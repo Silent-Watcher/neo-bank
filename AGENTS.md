@@ -890,6 +890,14 @@ rule, not a task-specific instruction.
 - Do not terminate processes that were already running before the task began.
 - The execution platform owns the sandbox lifecycle. Clean up processes started inside it, but never attempt to terminate the host sandbox.
 
+**Zero-orphan rule — everything the task starts must be torn down before the task reports completion:**
+
+- This covers every long-lived thing the task spawns: host processes and background commands, Docker Compose projects and one-off containers, networks, and any other handle the task created. An agent-run that ends (or a session that gets interrupted) is not an excuse for leftovers.
+- One-off Docker Compose runs (for example `docker compose -f compose.app.dev.yml up -d <service>` for a verification step) must be torn down with `docker compose ... down` on the same file and project, or explicitly handed to the developer as still-running — never abandoned silently. Standalone compose files with their own `name:` create a _parallel project_ next to the orchestrator stack; a duplicate project holding application ports blocks the real stack (`port is already allocated`).
+- Verify before reporting completion: no task-started process is still listening (`ss -ltnp` on the ports involved), and `docker ps` shows no task-started containers unless they are the explicit, agreed deliverable (for example "bring up the dev stack" tasks).
+- Data volumes follow this rule only when the task created them as scratch (delete then); persistent data volumes that predate the task or that the developer relies on are never deleted.
+- When cleanup is impossible or would destroy state the developer needs, say so explicitly in the final report instead of leaving the orphan silently.
+
 ## Definition of Done
 
 A feature is complete when its implementation and prompt record are updated, every matched entry from the Documentation Update Triggers table has been applied, relevant checks have been executed, unintended changes have been ruled out, task-created processes have been cleaned up, and remaining limitations are reported.
