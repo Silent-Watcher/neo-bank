@@ -3,16 +3,16 @@ import request from 'supertest';
 import type { TestingModuleBuilder } from '@nestjs/testing';
 
 import { randomUUID } from 'node:crypto';
-import { RedisService } from '#src/shared/redis/redis.service.js';
+import { RedisService } from '#redis/redis.service.js';
 import { RATE_LIMIT_CONFIG } from '#config/rate-limit.config.js';
-import { createRedisClient } from '#src/shared/redis/redis.provider.js';
+import { createRedisClient } from '#redis/redis.provider.js';
 import { createE2eTestApp } from './create-test-app.js';
-import { _env } from '#src/shared/config/env/env.config.js';
+import { _env } from '#config/env/env.config.js';
 import {
   composeOtpChallengeValue,
   computeOtpDigest,
 } from '#src/modules/enrollments/enrollments.otp-digest.js';
-import type { RedisClient } from '#src/shared/redis/inject-redis.decorator.js';
+import type { RedisClient } from '#redis/inject-redis.decorator.js';
 
 let inspectClient: RedisClient;
 

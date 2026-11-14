@@ -56,8 +56,9 @@ environments:
   `apps/api/env/.env.production` (prod, create it from `apps/api/env/.env.example`).
   Frontends currently have no env files.
 
-Values that depend on the Docker topology (the `redis` service hostname and
-the Redis password in production) are set under `environment:` in the Compose
+Values that depend on the Docker topology (the `redis` and `postgres` service
+hostnames — `REDIS_URL` and `DATABASE_URL` — and the Redis password in
+production) are set under `environment:` in the Compose
 files, which takes precedence over `env_file`. Never bake env files into
 images — they are excluded from every build context.
 

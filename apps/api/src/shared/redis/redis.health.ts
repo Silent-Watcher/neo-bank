@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { HealthIndicatorService, type HealthIndicatorResult } from '@nestjs/terminus';
 import { I18nService } from '@nestjs/i18n';
 
@@ -12,9 +12,17 @@ import { RedisService } from './redis.service.js';
  *
  * The probe is a PING on the shared client — no extra connections — and is
  * bounded by the client's `commandTimeout`.
+ *
+ * Client-facing responses carry only the generic, localized failure message:
+ * `/health` is unauthenticated, and raw driver error text would let callers
+ * fingerprint internal failure classes and disclose internal topology
+ * (SEC-01/Wave-14 parity with the PostgreSQL indicator). Raw errors go to
+ * the server-side log only.
  */
 @Injectable()
 export class RedisHealthIndicator {
+  private readonly logger = new Logger(RedisHealthIndicator.name);
+
   constructor(
     private readonly healthIndicatorService: HealthIndicatorService,
     private readonly redisService: RedisService,
@@ -28,7 +36,8 @@ export class RedisHealthIndicator {
       await this.redisService.ping();
       return indicator.up();
     } catch (error) {
-      return indicator.degraded({ message: this.failureMessage(error) });
+      this.logger.warn({ err: error }, 'Redis health probe failed.');
+      return indicator.degraded({ message: this.i18n.t('health.redisUnavailable') });
     }
   }
 
@@ -46,16 +55,8 @@ export class RedisHealthIndicator {
       await this.redisService.ping();
       return indicator.up();
     } catch (error) {
-      return indicator.down({ message: this.failureMessage(error) });
+      this.logger.warn({ err: error }, 'Redis health probe failed.');
+      return indicator.down({ message: this.i18n.t('health.redisUnavailable') });
     }
-  }
-
-  // Error messages from ioredis reference host/port (e.g.
-  // "connect ECONNREFUSED 127.0.0.1:6379"), never credentials or the
-  // full URL, so they are safe diagnostics for the health response.
-  // Those raw technical messages pass through untranslated; only the
-  // fallback for a non-Error failure is localized.
-  private failureMessage(error: unknown): string {
-    return error instanceof Error ? error.message : this.i18n.t('health.redisUnavailable');
   }
 }

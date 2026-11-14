@@ -8,7 +8,8 @@ import { MemoryProtectionModule } from '#src/shared/memory-protection/memory-pro
 import { MemoryProtectionGuard } from '#src/shared/memory-protection/memory-protection.guard.js';
 import { AppLoggerModule } from '#src/shared/logging/logger.module.js';
 import { i18nModule } from '#src/shared/i18n/i18n.module.js';
-import { RedisModule } from '#src/shared/redis/redis.module.js';
+import { RedisModule } from '#redis/redis.module.js';
+import { DatabaseModule } from '#database/database.module.js';
 import { RedisThrottlerGuard } from '#src/shared/throttler/redis-throttler.guard.js';
 import { throttlerModule } from '#src/shared/throttler/throttler.module.js';
 import { AppController } from './app.controller.js';
@@ -24,6 +25,7 @@ import { EnrollmentsModule } from '#modules/enrollments/enrollments.module.js';
     AppLoggerModule,
     TerminusModule,
     RedisModule,
+    DatabaseModule,
     MemoryProtectionModule,
     throttlerModule,
     EnrollmentsModule,

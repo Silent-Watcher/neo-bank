@@ -1,8 +1,8 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 
 import { TestRedis } from './testcontainers.js';
-import type { RedisClient } from '#src/shared/redis/inject-redis.decorator.js';
-import { createRedisClient } from '#src/shared/redis/redis.provider.js';
+import type { RedisClient } from '#redis/inject-redis.decorator.js';
+import { createRedisClient } from '#redis/redis.provider.js';
 import { throttleBlockKey, throttleHitKey } from '#src/shared/throttler/throttler.keys.js';
 import { RedisThrottlerStorage } from '#src/shared/throttler/redis-throttler.storage.js';
 

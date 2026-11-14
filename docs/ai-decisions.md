@@ -151,3 +151,47 @@ requires developer approval before any ADR is created.
 - **ADR Recommendation:** No — implementation detail of the already-approved
   ADR-026 configuration design; the trap itself is documented here and in the
   ADR-025 decision text.
+
+### 4. MikroORM CLI TypeScript loading: `@swc-node/register` and the `#config` alias to compiled output
+
+- **Context:** The `migration:*` CLI must load `mikro-orm.config.ts` (TypeScript, NodeNext, `verbatimModuleSyntax`) and reach the shared env-validation layer. MikroORM v7's CLI registers TS loaders in order (oxc, swc, tsx, jiti, tsimp, nub) but none was installed; the CLI cannot use Nest DI, so the URL comes from `_env`.
+- **Decision:** Install `@swc-node/register` (devDependency) so the CLI's `swc` loader slot pairs with the existing `@swc/core`; the CLI config imports `_env` through the package `#config/env/env.config.js` alias, which Node resolves to the compiled `dist/` output inside the CLI process — keeping the CLI config free of parent-relative imports. The `db:migration:*` scripts therefore run `pnpm build &&` first (judge finding CR-03), eliminating both fresh-clone crashes and stale-schema drift.
+- **Reasoning:** Reusing the project's SWC toolchain (ADR-003) instead of adding tsx/jiti/esbuild keeps one transpiler; peer ranges verified (`typescript >= 4.3 < 7` satisfies the 6.0.3 pin). The alias keeps the lint rule intact without a suppression comment.
+- **Alternatives:** `tsx`/`jiti` (new transpiler, rejected); a compiled-JS-only CLI config (build-before-every-command friction, rejected); a lint-suppressed parent-relative import (rejected — convention violation).
+- **Trade-offs:** One more devDependency bound to `@swc/core` version alignment; the CLI env chain executes from `dist/`, so the build prefix is load-bearing.
+- **Impact:** `apps/api/package.json` (devDependency, scripts), `mikro-orm.config.ts` (alias import), ONBOARDING (dependency notes).
+- **Reversibility:** Trivial — swap the loader or de-alias the import.
+- **ADR Recommendation:** No — tooling detail within the approved ADR-027 integration; documented here and in the dependency notes.
+
+### 5. Database test tiers: mirror the Redis tier, one shared e2e Postgres container, and a stubbed initializer for the real-Redis tier
+
+- **Context:** With the boot-time connection (ADR-027 amendment), every tier that boots the full `AppModule` needs a reachable PostgreSQL. The e2e tier boots the app against a validation-only `DATABASE_URL` placeholder in the redis tier, whose tests never touch the database.
+- **Decision:** (a) The new `test:db` tier mirrors the redis tier (per-file Testcontainers Postgres, sequential files, `MIKRO_ORM_MODULE_OPTIONS` override via a shared runtime-options builder). (b) The e2e globalSetup starts one shared Postgres container per run next to the shared Redis. (c) `createTestApp` gained an explicit `stubDatabaseConnect` option used by the rate-limit redis-spec (the only redis-tier file booting the full AppModule) so its boots stay instant instead of burning the bounded retry budget against the placeholder URL.
+- **Reasoning:** Mirroring an existing, proven tier minimizes new infrastructure; the stub is explicit per call site (not inferred from `redisConfig`, which would also stub the e2e apps) and documented on the option.
+- **Alternatives:** A Postgres container per redis-spec file (real but wasteful for a tier that never queries the DB); automatic stubbing whenever `redisConfig` is set (would silently stub e2e boots too — rejected); pointing the placeholder at a dead port (still burns the 15 s retry budget per boot).
+- **Trade-offs:** The redis tier no longer boots a fully real DB connection; the e2e tier continues to cover the real boot path end to end.
+- **Impact:** `create-test-app.ts`, `rate-limit.redis-spec.ts`, `e2e.global-setup.ts`, `database.db-spec.ts`.
+- **Reversibility:** Delete the option and stub call sites.
+- **ADR Recommendation:** No — testing strategy within the approved ADR-025/027 architecture.
+
+### 6. Health-probe behavior: bounded at 3000 ms, unconditional `connect()`, single query
+
+- **Context:** The v7 connection has no configurable connect timeout, `isConnected()` internally runs a `select 1` (doubling probe cost), and the Compose healthcheck timeout is 5 s — an inner bound of 5 s could race it and mark a live container unhealthy.
+- **Decision:** The indicator probes via a shared `withTimeout` helper (`database.timeout.ts`, extracted from the indicator's private copy) at 3000 ms and calls `orm.connect()` unconditionally before `checkConnection()` — one query per probe.
+- **Reasoning:** Judge findings CR-02/CR-05; `connect()` is idempotent and its dialect creation is synchronous, so concurrent probes cannot double-create the pool.
+- **Alternatives:** Keep the `isConnected()` guard (two queries per probe); raise the Compose timeout (moves the problem instead of removing it).
+- **Trade-offs:** A black-holed probe is reported as a timeout failure after 3 s rather than a driver-reported reason.
+- **Impact:** `database.health.ts`, `database.timeout.ts`, the compose healthcheck interplay (documented in the constant's comment).
+- **Reversibility:** Constants and call shape are trivially adjustable.
+- **ADR Recommendation:** No — implementation detail of the approved ADR-026/027 health semantics.
+
+### 7. Dev environment credential repair via `ALTER USER` instead of volume reset
+
+- **Context:** The pre-existing `postgres_dev_data` volume (created 2026-11-10) initialized with older credentials; `POSTGRES_PASSWORD` only applies on first init, so the running dev Postgres rejected the current env-file password. The volume predates any schema or data (no DB feature ever ran), but it is shared developer state.
+- **Decision:** Align the role to the current `docker/env/.env.docker.dev` value with `ALTER USER` executed inside the container (local-socket auth, value never printed), rather than deleting/recreating the volume. While fixing this, the password quoting mismatch flagged by judge finding CR-01 was also corrected in `.env.development`.
+- **Reasoning:** Non-destructive, fast, and keeps the volume, env file, and app config consistent; a volume reset would have achieved the same end state with an irreversible delete of shared state.
+- **Alternatives:** `docker volume rm` + re-init (destructive; identical outcome); matching the app to the volume's unknown old password (impossible).
+- **Trade-offs:** The role password is now maintained manually until the volume is re-initialized; a future volume reset must be followed by no action (init uses the env-file value).
+- **Impact:** Local dev environment only (no repository change beyond the CR-01 env fix).
+- **Reversibility:** Re-running `ALTER USER` with any value.
+- **ADR Recommendation:** No — local operations decision, recorded for traceability.

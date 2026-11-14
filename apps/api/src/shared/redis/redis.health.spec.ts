@@ -60,7 +60,8 @@ describe('RedisHealthIndicator', () => {
   });
 
   it('reports degraded — not down — when PING fails, keeping the check non-fatal', async () => {
-    // Arrange
+    // Arrange — the raw driver error must stay server-side (SEC-01 parity):
+    // the unauthenticated health response carries only the generic message.
     const indicator = await createIndicator(
       vi.fn().mockRejectedValue(new Error('connect ECONNREFUSED 127.0.0.1:6379')),
     );
@@ -72,7 +73,7 @@ describe('RedisHealthIndicator', () => {
     expect(result).toEqual({
       redis: {
         status: 'degraded',
-        message: 'connect ECONNREFUSED 127.0.0.1:6379',
+        message: 'Redis is unavailable.',
       },
     });
   });
@@ -114,7 +115,7 @@ describe('RedisHealthIndicator.checkReady (strict readiness variant)', () => {
     expect(result).toEqual({
       redis: {
         status: 'down',
-        message: 'connect ECONNREFUSED 127.0.0.1:6379',
+        message: 'Redis is unavailable.',
       },
     });
   });

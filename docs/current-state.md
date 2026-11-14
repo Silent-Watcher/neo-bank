@@ -1,14 +1,15 @@
 # Current Development State
 
-Snapshot of what exists in the repository. Last verified: 2026-11-13.
+Snapshot of what exists in the repository. Last verified: 2026-11-14.
 Legend: **Implemented** / **Partial** / **Planned** / **Unknown**.
 
 ## Maturity
 
 Early-stage pre-product. The backend has real infrastructure (config, logging,
-error contracts, request IDs, a Redis integration module) and one small
-feature; both frontends are untouched framework scaffolds. No database, no
-auth, no deployment setup.
+error contracts, request IDs, a Redis integration module, a PostgreSQL
+persistence layer) and one small feature; both frontends are untouched
+framework scaffolds. No auth, no deployment setup; the persistence layer is
+infrastructure-only (no entities yet).
 
 ## Applications
 
@@ -25,10 +26,12 @@ auth, no deployment setup.
   the MockServer addresses (ADR-024); always plain `http`, since no TLS or
   reverse proxy fronts the API.
 - Configuration system: Zod-validated env (ADR-004), env files in
-  `env/` (`.env.development`, `.env.test`, `.env.example`, `.env.redis-test`),
+  `env/` (`.env.development`, `.env.test`, `.env.example`, `.env.redis-test`,
+  `.env.db-test`, `.env.production`),
   namespaced `registerAs` factories, fail-fast validation. Validated variables:
   `APP_ENV`, `HOST`, `PORT`, `CORS_ORIGIN`, `TRUST_PROXY`, `BODY_LIMIT`,
-  `LOG_LEVEL`, `REDIS_URL`, `REDIS_USERNAME`, `REDIS_PASSWORD`, `REDIS_DB`,
+  `DATABASE_URL`, `LOG_LEVEL`, `REDIS_URL`, `REDIS_USERNAME`, `REDIS_PASSWORD`,
+  `REDIS_DB`,
   `REDIS_TLS`, `REDIS_CONNECT_TIMEOUT_MS`, `REDIS_COMMAND_TIMEOUT_MS`,
   `REDIS_MAX_RETRIES_PER_REQUEST`, `REDIS_SHUTDOWN_TIMEOUT_MS`,
   `RATE_LIMIT_SHORT_LIMIT`, `RATE_LIMIT_SHORT_TTL_SECONDS`,
@@ -46,6 +49,18 @@ auth, no deployment setup.
   reconnection, graceful bounded shutdown, and a Terminus indicator that
   reports `degraded` (HTTP 200) when Redis is unreachable. Consumers:
   enrollments OTP storage and global rate limiting.
+- PostgreSQL persistence (ADR-027): global `DatabaseModule` in
+  `src/shared/database/` with MikroORM v7 (7.2.9; `@mikro-orm/nestjs` 7.1.0,
+  `PostgreSqlDriver`, `autoLoadEntities`) reading `DATABASE_URL` from
+  validated config. MikroORM v7 initializes without connecting, so an
+  unreachable server never blocks startup; a bounded (5 s) Terminus
+  indicator named `postgres` reports `degraded` (HTTP 200) on `/health` and
+  `down` (HTTP 503) on `/health/ready`, and the connection closes on
+  application shutdown (`enableShutdownHooks()`). Schema changes go
+  exclusively through explicit migrations (folder
+  `src/shared/database/migrations/`, CLI config `mikro-orm.config.ts`,
+  scripts `pnpm db:migration:create/up/down`) — no schema synchronization.
+  Infrastructure level only: no entities exist yet.
 - Global HTTP rate limiting (ADR-015): official `@nestjs/throttler` (v6) with
   two named policies (`short`: 10 req/1s default; `long`: 100 req/1m default)
   backed by custom `RedisThrottlerStorage` using the shared Redis connection.
@@ -54,7 +69,7 @@ auth, no deployment setup.
   standard `Retry-After` and `X-RateLimit-*` headers on both success and 429.
   `@Throttle()`/`@SkipThrottle()` decorators with named throttler objects work
   correctly. Health/readiness endpoints skipped. No in-memory fallback —
-  Redis failure = HTTP 500 (fail-closed). `pnpm test:redis` runs 32 real-Redis
+  Redis failure = HTTP 500 (fail-closed). `pnpm test:redis` runs 60 real-Redis
   integration tests (atomicity, block regression, multi-instance sharing,
   proxy/IPv6 behavior, Redis failure).
 - Logging: Pino via nestjs-pino (ADR-008/009), header redaction,
@@ -76,7 +91,8 @@ auth, no deployment setup.
   `dist/i18n`; the English catalog registers compile-time-checked keys
   (`src/i18n/i18n.types.ts`). Localized surfaces: envelope `message`,
   Problem Details `title`/`detail`, OTP error details, Zod validation
-  messages, and the Redis health fallback — error codes, statuses, and all
+  messages, and the Redis/PostgreSQL health fallbacks — error codes,
+  statuses, and all
   machine-readable values unchanged. Missing keys `throw` in
   development/test and fall back to English with diagnostics in production.
   Responses carry `Content-Language` and `Vary: Accept-Language`. The
@@ -89,9 +105,9 @@ auth, no deployment setup.
   schemas generated from Zod with `z.toJSONSchema()`; shared envelope and
   Problem Details response schemas; all existing endpoints documented.
 - Liveness probe at `/health` (Terminus, version-neutral, outside the API
-  prefix, unthrottled) with a Redis indicator: healthy, or `degraded` with
-  HTTP 200 when Redis is unreachable — a degraded Redis never makes the
-  process look dead.
+  prefix, unthrottled) with Redis and PostgreSQL indicators: healthy, or
+  `degraded` with HTTP 200 when either is unreachable — a degraded
+  dependency never makes the process look dead.
 - Memory-based load shedding (ADR-026): `src/shared/memory-protection/`
   samples process RSS on a fixed interval
   (`MEMORY_PROTECTION_SAMPLE_INTERVAL_MS`, default 5000 ms) and maintains a
@@ -106,9 +122,10 @@ auth, no deployment setup.
   detail, `Retry-After` = seconds to the next sample); health endpoints and
   the Problem-Type docs page are exempt via `@SkipMemoryProtection()`.
 - Readiness probe at `/health/ready` (ADR-026; version-neutral, outside the
-  API prefix, unthrottled): Terminus over strict Redis (an unreachable Redis
-  fails readiness) plus a memory indicator (down while memory protection is
-  active) → HTTP 503 when any indicator is down, so orchestrators stop
+  API prefix, unthrottled): Terminus over strict Redis and PostgreSQL
+  indicators (an unreachable Redis or PostgreSQL fails readiness) plus a
+  memory indicator (down while memory protection is active) → HTTP 503 when
+  any indicator is down, so orchestrators stop
   routing new traffic to the instance. The liveness endpoint deliberately
   excludes the memory indicator.
 - Feature module `enrollments`: `POST /api/v1/enrollments/challenge` —
@@ -146,12 +163,14 @@ auth, no deployment setup.
   An additional per-phone hourly rate limit (5 sends / rolling 60 min) is
   enforced atomically via Redis sorted set. No registration or authentication
   steps yet.
-- Tests: Vitest unit (316 tests), e2e (15 files / 83 tests), Redis
-  integration (4 files / 60 tests via `pnpm test:redis`). All integration
+- Tests: Vitest unit (334 tests), e2e (15 files / 83 tests), Redis
+  integration (4 files / 60 tests via `pnpm test:redis`), database
+  integration (1 file / 4 tests via `pnpm test:db`, ADR-027). All integration
   and e2e tests use Testcontainers (`apps/api/test/testcontainers.ts`,
-  ADR-016): the Redis integration tier starts an isolated
-  `redis:8.2-alpine` container per test file, and the e2e tier shares one
-  container per test run via the Vitest globalSetup
+  ADR-016): the Redis and database integration tiers start isolated
+  containers per test file (`redis:8.2-alpine`, `postgres:17.6-alpine`), and
+  the e2e tier shares one Redis and one PostgreSQL container per test run
+  via the Vitest globalSetup
   (`apps/api/test/e2e.global-setup.ts`, ADR-025) — all with dynamic ports;
   no manual Docker Compose required.
 
@@ -163,8 +182,9 @@ auth, no deployment setup.
 
 **Planned / Not started**
 
-- Persistence, authentication/authorization, remaining banking features,
-  SMS provider integration.
+- Persistence features (entities/repositories — the persistence layer itself
+  is implemented at infrastructure level), authentication/authorization,
+  remaining banking features, SMS provider integration.
 
 ### `apps/web` — Next.js 16 customer app (scaffold)
 
@@ -192,7 +212,15 @@ None. The workspace contains only `apps/*`; no `packages/` directory exists.
 **Implemented:** Redis client integration in the API (global `RedisModule`,
 ioredis 6, degraded-mode health, standardized key naming); the enrollments
 challenge feature stores its OTP in Redis; global rate limiting uses the same
-connection via atomic Lua scripts. The development Compose stack runs
+connection via atomic Lua scripts. PostgreSQL persistence is integrated in
+the API (ADR-027, amended 2026-11-14): a global `DatabaseModule` with
+MikroORM v7 — the initial connection is established during bootstrap with
+bounded retries (5 attempts, capped backoff, per-attempt timeout; startup
+fails if the database cannot be reached, and permanent authentication or
+configuration errors are not retried), while post-boot outages keep
+degraded-liveness/strict-readiness health; explicit migrations only — at
+infrastructure level (no entities yet); the dev and prod Compose stacks
+inject `DATABASE_URL` into the API service. The development Compose stack runs
 `redis/redis-stack:latest` with bundled Redis Insight on port 8001
 (ADR-020); the API logs the host-accessible Insight URL at startup when the
 stack injects `REDIS_INSIGHT_URL`. It also runs MockServer
@@ -201,11 +229,13 @@ resilience testing: expectations registered through its control API simulate
 downstream failures (5xx responses, delays, failure-then-recovery sequences)
 against a real endpoint; nothing depends on the service, no outgoing traffic
 is redirected to it automatically, and the API only logs its injected
-addresses (host and Compose network) at startup. Testcontainers (ADR-016/025) provides isolated `redis:8.2-alpine` containers
-for integration and e2e tests — the Redis integration tier starts its own
-container per test file (dynamic ports, `beforeAll`/`afterAll`), while the
-e2e tier shares one container per test run via a Vitest globalSetup — no
-manual Docker Compose for either tier. Docker
+addresses (host and Compose network) at startup. Testcontainers (ADR-016/025) provides isolated `redis:8.2-alpine` and
+`postgres:17.6-alpine` containers
+for integration and e2e tests — the Redis and database integration tiers start their own
+container per test file (dynamic ports, `beforeAll`/`afterAll`; the database
+tier via `pnpm test:db`), while the
+e2e tier shares one Redis and one PostgreSQL container per test run via a Vitest globalSetup — no
+manual Docker Compose for any tier. Docker
 infrastructure (`docs/docker.md`): dev and prod Compose stacks with PostgreSQL
 and Redis, per-app dev/prod images (`turbo prune`, non-root, hot reloading in
 dev; Redis intentionally has no persistence volume). Centralized log
@@ -222,7 +252,7 @@ Beyond that, only the build/test toolchain
 itself: Turborepo local caching (`.turbo/`), Husky hooks, commitlint,
 lint-staged.
 
-**Planned / Not started:** database, SMS provider, remote Turborepo cache,
+**Planned / Not started:** SMS provider, remote Turborepo cache,
 CI pipeline, deployment targets, metrics (Prometheus), tracing (Tempo /
 OpenTelemetry), alerting — see `docs/observability/README.md` roadmap.
 
@@ -266,6 +296,6 @@ Per-app commands are listed in each `apps/<app>/ONBOARDING.md`.
 
 All ADRs live in [DECISIONS.md](../DECISIONS.md). Status as of this snapshot:
 
-- **Accepted:** ADR-001 (Turborepo), ADR-002 (Fastify), ADR-003 (SWC), ADR-004 (@nestjs/config + Zod), ADR-005 (URI versioning), ADR-006 (1 MiB body limit), ADR-007 (`api` prefix), ADR-008/009 (Pino / nestjs-pino), ADR-010 (UUIDv4 request IDs), ADR-011 (envelope exclusions), ADR-012 (ioredis without a wrapper), ADR-013 (Redis module architecture), ADR-014 (Swagger/OpenAPI, development-only), ADR-015 (Global HTTP rate limiting with Redis-backed @nestjs/throttler), ADR-016 (Testcontainers for integration and e2e testing), ADR-017 (OTP verification attempt lockout for enrollment security), ADR-018 (HMAC-SHA-256 digest storage for enrollment OTPs), ADR-019 (OTP verification hardening — conditional attempt counting and challenge identity), ADR-020 (development Redis service migrated to Redis Stack with bundled Redis Insight), ADR-021 (bilingual internationalization en/fa via the official @nestjs/i18n), ADR-022 (centralized logging with Grafana Alloy, Loki, and Grafana), ADR-023 (project-level multi-agent development workflow for ZCode + Claude Code), ADR-024 (MockServer for development-time resilience testing), ADR-025 (managing the e2e Redis with Testcontainers — one shared container per run), ADR-026 (memory-based load shedding and health-aware readiness).
+- **Accepted:** ADR-001 (Turborepo), ADR-002 (Fastify), ADR-003 (SWC), ADR-004 (@nestjs/config + Zod), ADR-005 (URI versioning), ADR-006 (1 MiB body limit), ADR-007 (`api` prefix), ADR-008/009 (Pino / nestjs-pino), ADR-010 (UUIDv4 request IDs), ADR-011 (envelope exclusions), ADR-012 (ioredis without a wrapper), ADR-013 (Redis module architecture), ADR-014 (Swagger/OpenAPI, development-only), ADR-015 (Global HTTP rate limiting with Redis-backed @nestjs/throttler), ADR-016 (Testcontainers for integration and e2e testing), ADR-017 (OTP verification attempt lockout for enrollment security), ADR-018 (HMAC-SHA-256 digest storage for enrollment OTPs), ADR-019 (OTP verification hardening — conditional attempt counting and challenge identity), ADR-020 (development Redis service migrated to Redis Stack with bundled Redis Insight), ADR-021 (bilingual internationalization en/fa via the official @nestjs/i18n), ADR-022 (centralized logging with Grafana Alloy, Loki, and Grafana), ADR-023 (project-level multi-agent development workflow for ZCode + Claude Code), ADR-024 (MockServer for development-time resilience testing), ADR-025 (managing the e2e Redis with Testcontainers — one shared container per run), ADR-026 (memory-based load shedding and health-aware readiness), ADR-027 (Use MikroORM v7 with PostgreSQL for Persistence).
 
 All architectural decisions are accepted and implemented. Do not build on rejected alternatives (e.g. do not introduce header versioning or a second logger).

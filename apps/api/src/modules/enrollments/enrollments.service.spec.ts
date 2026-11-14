@@ -36,8 +36,8 @@ vi.mock('node:crypto', async (importOriginal) => ({
   randomInt: randomIntMock,
 }));
 
-import { RedisService } from '#src/shared/redis/redis.service.js';
-import type { IssueOtpResult } from '#src/shared/redis/redis.service.js';
+import { RedisService } from '#redis/redis.service.js';
+import type { IssueOtpResult } from '#redis/redis.service.js';
 import { AppHttpException } from '#errors/app-http.exception.js';
 import { ErrorCode } from '#errors/error.code.js';
 import {

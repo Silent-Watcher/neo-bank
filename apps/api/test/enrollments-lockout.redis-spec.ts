@@ -2,10 +2,10 @@ import { randomUUID } from 'node:crypto';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { TestRedis } from './testcontainers.js';
-import type { RedisClient } from '#src/shared/redis/inject-redis.decorator.js';
-import { createRedisClient } from '#src/shared/redis/redis.provider.js';
-import { REDIS_CLIENT } from '#src/shared/redis/redis.constants.js';
-import { RedisService } from '#src/shared/redis/redis.service.js';
+import type { RedisClient } from '#redis/inject-redis.decorator.js';
+import { createRedisClient } from '#redis/redis.provider.js';
+import { REDIS_CLIENT } from '#redis/redis.constants.js';
+import { RedisService } from '#redis/redis.service.js';
 import {
   challengeAttemptsKey,
   challengeLockoutKey,

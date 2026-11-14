@@ -1268,3 +1268,77 @@ Introduce **memory-based load shedding**: a centralized, configuration-driven pr
 
 - `apps/api/src/shared/memory-protection/` (service, guard, indicator, decorator, config), `apps/api/src/shared/config/env/schema/memory-protection.env.ts`, `apps/api/src/modules/app/health.controller.ts` (`/health/ready`), `apps/api/src/modules/app/app.module.ts` (guard registration order), `apps/api/src/shared/errors/error.code.ts` (`ServiceUnavailable`)
 - `prompts/_039-memory-load-shedding.md`
+
+---
+
+## ADR-027: Use MikroORM v7 with PostgreSQL for Persistence
+
+- **Status:** Accepted
+- **Date:** 2026-11-14
+
+### Context
+
+The API's core domain — enrollments today, banking features that follow — needs durable relational persistence. PostgreSQL is already provisioned in both Compose stacks (pinned `postgres:17.6-alpine`, named volumes, `pg_isready` healthchecks, service-healthy startup ordering) but nothing connects to it. The persistence layer must fit the established architecture: NestJS 12 on Fastify, ESM with `#` subpath import aliases, Zod-validated configuration exposed only through `ConfigService` (ADR-004), global infrastructure modules owning their connection lifecycle behind an application-level abstraction (ADR-012/013), Terminus health reporting with degraded-liveness versus strict-readiness semantics (ADR-026), Testcontainers-based testing (ADR-016/025), and explicit SQL migrations — never schema synchronization. Type safety is strict end to end (`strict` TypeScript, no `any`, no unsafe assertions), and TypeScript is pinned to 6.0.3 because the Nest CLI requires the 6.x compiler API.
+
+An ORM is appropriate here rather than a raw client: the domain needs entity modeling, transactional integrity across related rows, and a migration workflow a team can review. The requirements are: decorator/entity-class modeling compatible with the existing SWC + `tsc` pipeline, per-request isolation for a shared `EntityManager` (identity map) without making every service request-scoped, first-class TypeScript typing, a NestJS integration that consumes configuration through `ConfigService`, explicit migrations, and ESM/NodeNext compatibility.
+
+### Decision
+
+Adopt **MikroORM v7** with the `@mikro-orm/postgresql` driver as the only database access layer, integrated through `@mikro-orm/nestjs`'s `MikroOrmModule.forRootAsync()` with the driver supplied beside `useFactory`, `autoLoadEntities: true`, and an explicit `ReflectMetadataProvider` (v7 moved decorators to `@mikro-orm/decorators/legacy` and no longer defaults to reflection metadata; the existing SWC `decoratorMetadata` + `emitDecoratorMetadata` pipeline already emits the metadata it reads — no compiler change).
+
+- **Data Mapper + Unit of Work + Identity Map:** entities are plain classes; change tracking happens in the unit of work and persistence is explicit (`em.flush()`, `em.transactional()`), giving reviewable transaction boundaries — the property a banking domain most needs.
+- **NestJS integration:** `forRootAsync` reads `DATABASE_URL` from the existing `ConfigService` (a new `DATABASE_CONFIG` namespace follows ADR-004; no parallel configuration mechanism). `registerRequestContext` middleware establishes a per-request forked `EntityManager` under the default singleton DI scope — the same consumption model as Redis (global module, injected services, no request-scoped cascade). Background/non-HTTP execution uses `@CreateRequestContext()` (from `@mikro-orm/decorators/legacy`) or an explicit `em.fork()`; this convention is documented for future features, and no background jobs are introduced by this decision.
+- **Startup semantics: bounded-retry initial connection at bootstrap** (amended 2026-11-14, see the Amendment below). The initial connection is established during bootstrap with a bounded retry; startup fails when the database cannot be reached. After a successful boot, an unreachable PostgreSQL degrades `/health` (HTTP 200) and fails `/health/ready` (503) via MikroORM's `checkConnection()`. The database URL itself is mandatory configuration and fails env validation at boot when missing or malformed (ADR-004).
+- **Migrations:** `@mikro-orm/migrations` with a single shared options builder used by both the NestJS runtime factory and the standalone CLI configuration (`MIKRO_ORM_CLI_CONFIG`; the CLI cannot use Nest DI, so its config loads the URL through the existing env-validation layer and Node `--env-file`). Migration paths live inside the database module (`src/shared/database/migrations/`), with `path` (compiled) and `pathTs` (source) matching the build output. Migration creation and execution stay explicit developer commands (`db:migration:create`, `db:migration:up`, `db:migration:down`); `schema:update`, schema synchronization, and generated schema commands are never introduced, and generated migrations are reviewed before execution.
+- **Explicit v7 precedence behavior:** explicit configuration values have precedence over environment variables in MikroORM v7, so the URL is always passed explicitly by the caller (ConfigService in the runtime, the validated env in the CLI) — deployment overrides never silently alter explicitly configured values.
+- **Scope of this change:** infrastructure only — the database module, configuration, health indicator, and migration plumbing. No entities, repositories, or business logic; the first entity lands with the feature that needs it.
+
+### Alternatives Considered
+
+- _TypeORM:_ the most established NestJS pairing and the largest community. Rejected: maintenance cadence has been slow for years, relation typing relies on `design:*` reflection that degrades under this project's SWC pipeline, and it lacks a comparable Unit of Work — change tracking is weaker exactly where a banking domain needs it strongest.
+- _Prisma:_ excellent type safety and schema workflow, actively maintained. Rejected: the schema-first `.prisma` DSL instead of entity classes conflicts with the decorator/`forFeature` module model this codebase is built around; no Identity Map or Unit of Work; the client's engine/runtime adds supply-chain surface; its NestJS integration is no longer official.
+- _Drizzle ORM:_ lightweight, SQL-adjacent, great typing. Rejected for this purpose: it is a query builder first, with no Unit of Work, no Identity Map, and no NestJS integration — change tracking, transactional aggregates, and relational lifecycle behavior would be hand-built (more code, more risk), violating the repository's simplicity rules in the opposite direction.
+- _Raw `pg` client or an internal micro-ORM:_ a hand-rolled data layer within the 200–300 line dependency-evaluation threshold is unrealistic for change tracking, transactions, and migration diffing; it would duplicate a solved problem and take ownership of connection pooling and injection risks ourselves. Rejected.
+
+### Consequences and Trade-offs
+
+**Positive**
+
+- Explicit persistence boundaries (`flush`, `transactional`) with per-request identity maps; typed entities without codegen; reviewable SQL migration artifacts.
+- A global `DatabaseModule` shaped like `RedisModule` — one mental model for all infrastructure; health/readiness semantics stay consistent with ADR-026.
+- `ReflectMetadataProvider` works with the existing SWC pipeline — no build or compiler change.
+
+**Negative**
+
+- A new dependency family (six `@mikro-orm/*` packages) with its own upgrade cadence; v7 is recent, so ecosystem references skew v6 and must be checked against v7 documentation.
+- `@mikro-orm/nestjs` is maintained by the MikroORM organization, not the Nest core team; integration-version alignment is our responsibility.
+- Reflection-based metadata has known ESM circular-import pitfalls (relation types must use `Rel<T>`/`Ref<T>`); future entities carry this rule.
+- The identity map makes out-of-HTTP contexts a documented convention (`@CreateRequestContext()` / `em.fork()`) rather than something the framework enforces.
+- An outage at boot delays startup by the bounded retry window (worst case ≈ 15 s of backoff plus per-attempt timeouts) before failing with a clear error; an outage after a successful boot surfaces only through health/readiness.
+
+### Security Assessment
+
+Dependency evaluation (per the dependency-evaluation skill) is completed at install time: the exact v7 dependency tree is reviewed from the lockfile (v7 no longer uses knex), lifecycle install scripts are checked, `pnpm audit` is run, and the latest stable v7 release is selected against Node 24, TypeScript 6.0.3, and NestJS 12. Results are reported with the implementation; anything unverifiable is stated there. No credentials are committed: `DATABASE_URL` values stay in gitignored env files and Compose interpolation files, and the health indicator passes through only host:port-class error text, never the URL.
+
+### Operational Implications
+
+- Compose healthchecks may keep using `/health`: a PostgreSQL outage **after a successful boot** degrades but never fails liveness, so a database outage cannot restart-loop the container. A database that is unavailable at boot prevents startup (bounded retry, then failure) — the Compose `depends_on: service_healthy` ordering plus the retry window absorbs ordinary startup races.
+- Orchestrators (future Kubernetes) should probe `/health/ready`; readiness fails while the database is unreachable.
+- Migration commands are operator actions against the Compose PostgreSQL service; the application never runs migrations at startup.
+
+### Amendment 2026-11-14: Initial Connection at Startup
+
+The non-blocking startup semantics from the original decision were amended during the graceful-shutdown and connection-resilience task (`prompts/_041`), with explicit developer approval: PostgreSQL is architecture-required for this API, so the application now establishes the initial connection during bootstrap and fails startup when it cannot.
+
+- `DatabaseConnectionInitializer` (`OnApplicationBootstrap`) calls `orm.connect()` — the supported API; no second ORM instance and no bypass of the database module. Retries are bounded: 5 attempts including the first, exponential backoff 1 s → 2 s → 4 s → 8 s (capped), and a 5 s per-attempt timeout so a silently dropping host cannot stall the loop. No new environment variables; the limits are named constants.
+- Permanent configuration and authentication failures (PostgreSQL SQLSTATE `28P01` invalid password, `28000` invalid authorization, `3D000` invalid catalog) are not retried — startup fails immediately with a meaningful error.
+- If all attempts fail, startup fails: the application never serves HTTP without its required database, and no infinite retry loop exists.
+- After a successful boot, runtime behavior is unchanged: a later PostgreSQL outage degrades `/health` (HTTP 200) and fails `/health/ready` (503); the pg pool re-establishes per-acquisition connections on its own.
+- The root "an external service must not become a mandatory startup dependency" rule remains in force for every other service — Redis keeps its non-blocking connect — with PostgreSQL as the explicit, architecture-required exception decided here.
+
+### References
+
+- `apps/api/src/shared/database/` (module, options builder, CLI config, health indicator, migrations), `apps/api/src/shared/config/env/schema/db.env.ts`, `apps/api/src/shared/config/database.config.ts`, `apps/api/src/modules/app/health.controller.ts`, `apps/api/package.json` (`db:migration:*`, `test:db`), `apps/api/env/.env.example` (`DATABASE_URL`), `docker/compose.app.dev.yml` / `docker/compose.app.prod.yml` (API `DATABASE_URL` override)
+- DECISIONS.md ADR-004 (env validation), ADR-012/013 (Redis integration model), ADR-016/025 (Testcontainers), ADR-026 (health semantics)
+- Official documentation: https://mikro-orm.io/docs, https://mikro-orm.io/docs/usage-with-nestjs, https://docs.nestjs.com/data/mikroorm
+- `prompts/_040-mikroorm-postgres-integration.md`

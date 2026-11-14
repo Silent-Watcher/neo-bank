@@ -1,7 +1,7 @@
 import request from 'supertest';
 import { describe, expect, it } from 'vitest';
 
-import { RedisService } from '#src/shared/redis/redis.service.js';
+import { RedisService } from '#redis/redis.service.js';
 import { createE2eTestApp } from './create-test-app.js';
 
 // Global rate limiting makes Redis a hard dependency for guarded routes, and

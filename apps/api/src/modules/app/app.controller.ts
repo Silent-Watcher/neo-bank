@@ -1,7 +1,7 @@
 import { Controller, Get } from '@nestjs/common';
 import { ApiOkResponse, ApiOperation, ApiTags } from '@nestjs/swagger';
 
-import { successEnvelopeSchema } from '#src/shared/swagger/openapi.schemas.js';
+import { successEnvelopeSchema } from '#swagger/openapi.schemas.js';
 import { AppService } from './app.service.js';
 
 @ApiTags('app')

@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import request from 'supertest';
 
 import { createE2eTestApp } from './create-test-app.js';
-import { RedisService } from '#src/shared/redis/redis.service.js';
+import { RedisService } from '#redis/redis.service.js';
 
 describe('Health (e2e)', () => {
   it('returns 200 with the health payload wrapped in the envelope', async () => {

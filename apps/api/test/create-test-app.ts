@@ -9,12 +9,16 @@ import { Logger } from 'nestjs-pino';
 import { inject } from 'vitest';
 
 import type { RedisConfig } from '#config/redis.config.js';
-import { AppModule } from '#src/modules/app/app.module.js';
-import { REDIS_CLIENT } from '#src/shared/redis/redis.constants.js';
-import { createRedisClient } from '#src/shared/redis/redis.provider.js';
-import serverConfig from '#src/shared/config/server.config.js';
+import { AppModule } from '#modules/app/app.module.js';
+import { REDIS_CLIENT } from '#redis/redis.constants.js';
+import { createRedisClient } from '#redis/redis.provider.js';
+import { DatabaseConnectionInitializer } from '#database/database.connect.js';
+import { buildRuntimeMikroOrmOptions } from '#database/mikro-orm.options.js';
+import serverConfig from '#config/server.config.js';
 import { fastifyGenReqId } from '#src/shared/http/request-id.js';
 import { registerRequestIdLifecycle } from '#src/shared/http/request-id.lifecycle.js';
+import { MIKRO_ORM_MODULE_OPTIONS } from '@mikro-orm/nestjs';
+import { PostgreSqlDriver } from '@mikro-orm/postgresql';
 
 // Mirrors the bootstrap configuration in src/main.ts so e2e tests exercise
 // the application exactly as it boots in production. Extra controllers are
@@ -31,6 +35,14 @@ export interface CreateTestAppOptions {
   configureModule?: (builder: TestingModuleBuilder) => void;
   adapterTrustProxy?: boolean;
   redisConfig?: RedisConfig;
+  /**
+   * Stubs the boot-time PostgreSQL connection (ADR-027 amendment) for suites
+   * that never touch the database (the real-Redis tier): with the initializer
+   * stubbed, boots stay instant instead of burning the bounded retry budget
+   * against the tier's validation-only DATABASE_URL placeholder. Suites that
+   * exercise the database (e2e, test:db) must NOT set this.
+   */
+  stubDatabaseConnect?: boolean;
 }
 
 export async function createTestApp(
@@ -49,6 +61,11 @@ export async function createTestApp(
     // client itself is supplied — the same mechanism the test:redis suites
     // use. RedisService still owns the connection lifecycle for this client.
     moduleBuilder.overrideProvider(REDIS_CLIENT).useValue(createRedisClient(options.redisConfig));
+  }
+  if (options?.stubDatabaseConnect) {
+    moduleBuilder.overrideProvider(DatabaseConnectionInitializer).useValue({
+      onApplicationBootstrap: async () => undefined,
+    });
   }
   options?.configureModule?.(moduleBuilder);
   const module = await moduleBuilder.compile();
@@ -108,15 +125,33 @@ export async function createTestApp(
 /**
  * E2E-suite entry point: the identical application with Redis pointed at the
  * shared Testcontainers container started by test/e2e.global-setup.ts
- * (ADR-025, one container per test execution). The container's connection
- * config travels through Vitest's provide/inject channel, so calling this
- * outside the e2e run (which provides it) fails fast with a clear error.
- * The test:redis suites keep calling createTestApp directly with their own
- * per-file containers.
+ * (ADR-025, one container per test execution) and PostgreSQL pointed at the
+ * shared Testcontainers container from the same global setup (ADR-027).
+ * The containers' connection config travels through Vitest's provide/inject
+ * channel, so calling this outside the e2e run (which provides it) fails
+ * fast with a clear error. The test:redis and test:db suites keep calling
+ * createTestApp directly with their own per-file containers.
  */
 export async function createE2eTestApp(
   beforeInit?: (app: NestFastifyApplication) => void,
   options?: Omit<CreateTestAppOptions, 'redisConfig'>,
 ): Promise<NestFastifyApplication> {
-  return createTestApp(beforeInit, { ...options, redisConfig: inject('e2eRedisConfig') });
+  const databaseUrl = inject('e2ePostgresUrl');
+  return createTestApp(beforeInit, {
+    ...options,
+    redisConfig: inject('e2eRedisConfig'),
+    configureModule: (builder) => {
+      // The ORM options themselves are supplied (not the DATABASE_CONFIG
+      // namespace token — @nestjs/config's ConfigService holds the registerAs
+      // factory result and does not observe provider overrides on it). The
+      // shape comes from the shared runtime builder; the driver rides along
+      // exactly as the runtime module supplies it.
+      builder.overrideProvider(MIKRO_ORM_MODULE_OPTIONS).useValue({
+        driver: PostgreSqlDriver,
+        ...buildRuntimeMikroOrmOptions(databaseUrl),
+      });
+      // Spec-provided overrides keep precedence (applied after this one).
+      options?.configureModule?.(builder);
+    },
+  });
 }

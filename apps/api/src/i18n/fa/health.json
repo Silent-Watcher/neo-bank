@@ -1,5 +1,6 @@
 {
   "redisUnavailable": "سرویس Redis در دسترس نیست.",
+  "databaseUnavailable": "سرویس PostgreSQL در دسترس نیست.",
   "memoryProtected": "سرویس تحت فشار حافظه است و موقتاً درخواست جدید نمی‌پذیرد.",
   "notReady": "سرویس هنوز آماده دریافت ترافیک نیست."
 }

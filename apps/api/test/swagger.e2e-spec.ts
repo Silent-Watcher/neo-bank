@@ -1,7 +1,7 @@
 import request from 'supertest';
 import { describe, expect, it } from 'vitest';
 
-import { setupSwagger, SWAGGER_DOCS_PATH } from '#src/shared/swagger/swagger.setup.js';
+import { setupSwagger, SWAGGER_DOCS_PATH } from '#swagger/swagger.setup.js';
 import { createE2eTestApp } from './create-test-app.js';
 
 // e2e runs with APP_ENV=test, where bootstrap registers no Swagger routes:

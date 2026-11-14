@@ -5,7 +5,7 @@ import { I18nService } from '@nestjs/i18n';
 
 import { AppHttpException } from '#errors/app-http.exception.js';
 import { ErrorCode } from '#errors/error.code.js';
-import { RedisService } from '#src/shared/redis/redis.service.js';
+import { RedisService } from '#redis/redis.service.js';
 import { ENROLLMENTS_CONFIG } from '#config/enrollments.config.js';
 import type { EnrollmentsConfig } from '#config/enrollments.config.js';
 

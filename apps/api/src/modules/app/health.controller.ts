@@ -12,11 +12,9 @@ import { I18nService } from '@nestjs/i18n';
 // @SkipThrottle() targets the "default" name only and would leave them active.
 import { SkipThrottle } from '@nestjs/throttler';
 
-import {
-  problemDetailsSchema,
-  successEnvelopeSchema,
-} from '#src/shared/swagger/openapi.schemas.js';
-import { RedisHealthIndicator } from '#src/shared/redis/redis.health.js';
+import { problemDetailsSchema, successEnvelopeSchema } from '#swagger/openapi.schemas.js';
+import { RedisHealthIndicator } from '#redis/redis.health.js';
+import { DatabaseHealthIndicator } from '#database/database.health.js';
 import { MemoryHealthIndicator } from '#src/shared/memory-protection/memory.health.indicator.js';
 import { SkipMemoryProtection } from '#src/shared/memory-protection/skip-memory-protection.decorator.js';
 
@@ -58,6 +56,7 @@ export class HealthController {
   constructor(
     private readonly health: HealthCheckService,
     private readonly redisHealth: RedisHealthIndicator,
+    private readonly databaseHealth: DatabaseHealthIndicator,
     private readonly memoryHealth: MemoryHealthIndicator,
     private readonly i18n: I18nService,
   ) {}
@@ -65,7 +64,7 @@ export class HealthController {
   @ApiOperation({
     summary: 'Application liveness probe',
     description:
-      'Infrastructure probe outside the API prefix and versioning. The overall status is ok, degraded (e.g. Redis unreachable — HTTP stays 200), or error (HTTP 503). Deliberately independent of the memory-protection state: a memory-pressured process is still alive and must not be restarted.',
+      'Infrastructure probe outside the API prefix and versioning. The overall status is ok, degraded (e.g. Redis or PostgreSQL unreachable — HTTP stays 200), or error (HTTP 503). Deliberately independent of the memory-protection state: a memory-pressured process is still alive and must not be restarted.',
   })
   @ApiOkResponse({
     description: 'Terminus health result, wrapped in the standard response envelope.',
@@ -84,13 +83,16 @@ export class HealthController {
       // unreachable: a failed probe degrades the overall status while HTTP
       // stays 200, so the process never looks dead because of Redis.
       () => this.redisHealth.check(),
+      // Same degraded contract for PostgreSQL (ADR-027): a failed probe
+      // degrades the overall status while HTTP stays 200.
+      () => this.databaseHealth.check(),
     ]);
   }
 
   @ApiOperation({
     summary: 'Application readiness probe',
     description:
-      'Reports whether this instance should currently receive traffic (ADR-026). Returns 503 while memory protection is active (memory indicator down) or while Redis is unreachable (strict redis indicator down), 200 otherwise. Orchestrators remove the instance from routing on 503; direct traffic is rejected by the memory protection guard.',
+      'Reports whether this instance should currently receive traffic (ADR-026). Returns 503 while memory protection is active (memory indicator down) or while Redis or PostgreSQL is unreachable (strict indicators down), 200 otherwise. Orchestrators remove the instance from routing on 503; direct traffic is rejected by the memory protection guard.',
   })
   @ApiOkResponse({
     description: 'All readiness indicators are up; wrapped in the standard response envelope.',
@@ -111,6 +113,10 @@ export class HealthController {
         // because Redis-backed routes cannot be served. The liveness endpoint
         // reports the same outage as degraded (200) on purpose.
         () => this.redisHealth.checkReady(),
+        // Strict PostgreSQL reporting (ADR-027): an unreachable database fails
+        // readiness (503). The liveness endpoint reports the same outage as
+        // degraded (200) on purpose.
+        () => this.databaseHealth.checkReady(),
         // Memory protection active → down → 503 (ADR-026).
         () => this.memoryHealth.check(),
       ]);

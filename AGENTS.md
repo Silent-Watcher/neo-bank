@@ -240,7 +240,17 @@ Do not introduce unexplained string literals for application states, domain valu
 ## Imports and Type Safety
 
 - **Import aliases:** Use the Node.js native `#...` subpath aliases for cross-directory imports instead of parent-relative imports. If a required alias does not exist, define it consistently for Node.js runtime, TypeScript, and tests before using it.
+- **Type-only imports:** Import a symbol that is used only as a type with a dedicated `import type ... from ...` statement. Never mix a `type` modifier into a value import list; keep the value import and the type import as separate statements.
 - **Type safety from the start:** Design all new functions, methods, classes, and other code to be type-safe from the initial implementation. Do not write loosely typed code first and postpone type safety until a type-checking error appears. Use appropriate parameter, return, and data types; avoid `any`, unsafe type assertions, and suppressions of type errors. When handling untrusted or insufficiently typed values, prefer `unknown` with proper type narrowing. Follow the project's existing TypeScript conventions without introducing unnecessary annotations or abstractions.
+
+## Import Readability and Subpath Aliases
+
+- When a directory or module is imported repeatedly through long or deeply nested paths, evaluate whether a Node.js `#` subpath import alias would improve readability and maintainability. A signal to evaluate — not an automatic requirement — is roughly five or more imports of the same directory from outside it, the same deep path referenced across independent modules, or import paths that have become noticeably repetitive.
+- Do not create aliases for every directory: an alias must represent a meaningful, reusable internal boundary. Use the actual codebase as the reference for what the threshold means in practice.
+- Before introducing an alias, inspect the existing alias conventions (`package.json` `imports` with the `types`/`default` conditions, `apps/api/test/subpath-import-aliases.ts`) and ensure compatibility with Node.js ESM, TypeScript, the build, and every test tier.
+- When an alias appears beneficial, present the current import patterns, the proposed alias, the affected files, and the implementation approach to the user, and obtain approval before applying it. Identify these opportunities proactively during development instead of waiting for a dedicated task.
+- After approval, update all relevant configurations and imports consistently (`package.json` `imports`, the Vitest alias shim, and every importing file), keeping value and type-only imports in separate statements per the type-only-import rule above.
+- Avoid duplicate aliases, overlapping mappings, unnecessary wildcard rules, and barrel files; preserve the existing project structure and module boundaries.
 
 ## Monorepo
 
@@ -254,10 +264,31 @@ Do not introduce unexplained string literals for application states, domain valu
 
 - Evaluate existing project capabilities before introducing a new dependency; prefer native capabilities plus a small internal abstraction over third-party wrappers unless a wrapper provides concrete value.
 - Do not add a dependency without weighing maintenance cost, lock-in, and alignment with existing conventions (configuration, logging, testing).
-- An external service must not become a mandatory startup dependency unless the architecture explicitly requires it: the application must start and serve non-dependent operations when the service is unreachable.
+- An external service must not become a mandatory startup dependency unless the architecture explicitly requires it: the application must start and serve non-dependent operations when the service is unreachable. (PostgreSQL is the one explicitly architecture-required exception — see "Database Connection Resilience" below and the ADR-027 amendment.)
 - Each integration module owns its connection lifecycle (initiation and shutdown through the framework's lifecycle hooks) and must not leak that responsibility to consumers.
 - Integrations must use bounded connection and command timeouts, capped retries without retry storms, predictable failure behavior, no unbounded queues, and no unhandled promise rejections.
 - Report dependency degradation honestly in health checks; never mask an outage as healthy, and never let an optional dependency's outage make the process look dead.
+
+## Resource Lifecycle and Graceful Shutdown
+
+- Every new resource that opens connections, sockets, timers, workers, or other long-lived handles must have an appropriate initialization and cleanup lifecycle.
+- Whenever a feature or infrastructure module introduces a resource that requires cleanup, implement its graceful shutdown as part of the same task.
+- Do not leave open connections, workers, timers, listeners, or background processes after application shutdown.
+- Use NestJS lifecycle hooks (`OnApplicationBootstrap`, `OnModuleDestroy`, `BeforeApplicationShutdown`, `OnApplicationShutdown`) and existing framework integrations where appropriate.
+- Enable application shutdown hooks so termination signals are handled correctly (`enableShutdownHooks()` is already in `src/main.ts` — keep it).
+- Avoid duplicate cleanup logic when an integration already manages its own resource lifecycle (e.g. `@mikro-orm/nestjs` closes the ORM connection in `onApplicationShutdown`; never close it manually as well).
+- Stop accepting new work and allow in-flight work to finish before closing resources that it depends on.
+- Keep shutdown logic simple and consistent with the existing architecture; do not introduce a generic lifecycle management framework.
+
+## Database Connection Resilience
+
+- PostgreSQL connection initialization must use bounded retries for temporary connection failures (see `src/shared/database/database.connect.ts`: 5 attempts including the first, capped exponential backoff, per-attempt timeout).
+- Retry attempts must have a limited count and reasonable backoff; the limits are named constants, not per-parameter environment variables.
+- Permanent configuration and authentication errors (pg SQLSTATE `28P01`, `28000`, `3D000`) must not be retried; startup fails immediately with a meaningful error.
+- The application must fail startup clearly if the required database connection cannot be established after the configured attempts; never serve HTTP without the required database connection; never enter an infinite retry loop.
+- Never implement blanket automatic retries for database queries, writes, or transactions; never automatically replay operations that could produce duplicate side effects (an operation whose result is ambiguous is never retried).
+- Use MikroORM and PostgreSQL driver capabilities wherever possible instead of introducing custom infrastructure; no circuit breakers, bulkheads, retry decorators, custom pools, or reconnection orchestrators.
+- Keep database connection resilience simple; extend it only when a concrete requirement appears.
 
 ## Error Response Security
 

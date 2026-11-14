@@ -108,3 +108,92 @@ export async function startTestRedis(options?: {
   const config = await redis.start(options);
   return { redis, config };
 }
+
+/**
+ * Testcontainers-based PostgreSQL instance for integration and E2E tests
+ * (ADR-027).
+ *
+ * Provides a real PostgreSQL server with dynamic port mapping, matching the
+ * project's production image (`postgres:17.6-alpine`, the same pin as the
+ * Compose stacks). The connection is returned as a PostgreSQL URL, the shape
+ * `DATABASE_CONFIG` and the MikroORM options builder consume.
+ */
+export class TestPostgres {
+  private container: StartedTestContainer | null = null;
+  private url: string | null = null;
+
+  /**
+   * Starts a PostgreSQL container.
+   *
+   * @returns Promise resolving to the `postgresql://` URL of the running container
+   */
+  async start(options?: {
+    image?: string;
+    username?: string;
+    password?: string;
+    database?: string;
+  }): Promise<string> {
+    const image = options?.image ?? 'postgres:17.6-alpine';
+    const username = options?.username ?? 'neo_bank';
+    const password = options?.password ?? 'test-password';
+    const database = options?.database ?? 'neo_bank';
+
+    this.container = await new GenericContainer(image)
+      .withEnvironment({
+        POSTGRES_USER: username,
+        POSTGRES_PASSWORD: password,
+        POSTGRES_DB: database,
+      })
+      .withExposedPorts(5432)
+      // The message appears twice during first-boot initialization (before
+      // and after the temporary server restart); waiting for two occurrences
+      // means real startup completed.
+      .withWaitStrategy(Wait.forLogMessage('database system is ready to accept connections', 2))
+      .start();
+
+    const host = this.container.getHost();
+    const port = this.container.getMappedPort(5432);
+
+    this.url = `postgresql://${username}:${password}@${host}:${port}/${database}`;
+
+    return this.url;
+  }
+
+  /**
+   * Returns the connection URL for the running container.
+   * Must be called after `start()`.
+   */
+  getUrl(): string {
+    if (!this.url) {
+      throw new Error('TestPostgres not started. Call start() first.');
+    }
+    return this.url;
+  }
+
+  /**
+   * Stops and removes the container.
+   * Safe to call multiple times.
+   */
+  async stop(): Promise<void> {
+    if (this.container) {
+      await this.container.stop();
+      this.container = null;
+      this.url = null;
+    }
+  }
+}
+
+/**
+ * Convenience function to start a PostgreSQL container and get its URL.
+ * Use in `beforeAll` with corresponding `stop()` in `afterAll`.
+ */
+export async function startTestPostgres(options?: {
+  image?: string;
+  username?: string;
+  password?: string;
+  database?: string;
+}): Promise<{ postgres: TestPostgres; url: string }> {
+  const postgres = new TestPostgres();
+  const url = await postgres.start(options);
+  return { postgres, url };
+}

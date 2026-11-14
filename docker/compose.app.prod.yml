@@ -36,6 +36,11 @@ services:
       REDIS_URL: redis://redis:6379
       REDIS_USERNAME: default
       REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD is required in docker/env/.env.docker.prod}
+      # PostgreSQL connection URL (ADR-027): the container reaches the
+      # database by service name on the container port; credentials come
+      # from docker/env/.env.docker.prod (compose `environment` takes
+      # precedence over the deployment-provided value in the app env file).
+      DATABASE_URL: postgresql://${POSTGRES_USER:-neo_bank}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required in docker/env/.env.docker.prod}@postgres:5432/${POSTGRES_DB:-neo_bank}
     ports:
       - '${API_PORT:-3001}:3001'
     depends_on:

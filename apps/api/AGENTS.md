@@ -18,6 +18,8 @@ neutral `/health` probe on Fastify, port 3001 in development/test.
   (root rule; alias map in `package.json` → `imports`).
 - SWC transpiles (`.swcrc`, ADR-003); type safety is enforced separately by
   `pnpm typecheck` (`tsc --noEmit`).
+- MikroORM v7 on PostgreSQL for persistence (ADR-027) — global integration
+  in `src/shared/database/`; see "Database Rules" below.
 - Zod 4 for input and environment validation; Vitest for unit and e2e tests;
   Oxlint with `no-console`, `no-process-env`, and
   `import/no-relative-parent-imports` as errors.
@@ -31,7 +33,9 @@ neutral `/health` probe on Fastify, port 3001 in development/test.
   Zod schemas, and co-located specs per feature. Registered in
   `src/modules/app/app.module.ts`.
 - **Shared infrastructure:** `src/shared/` — `config/` (Zod env schemas +
-  `registerAs` factories), `logging/` (nestjs-pino), `redis/` (global
+  `registerAs` factories), `logging/` (nestjs-pino), `database/` (global
+  DatabaseModule: MikroORM v7 PostgreSQL connection with bounded-retry
+  bootstrap connect, health indicator, migrations — ADR-027), `redis/` (global
   RedisModule: ioredis client provider, `RedisService`,
   `@InjectRedis()`, health indicator), `memory-protection/` (ADR-026
   memory-based load shedding: RSS sampler with a hysteresis state machine,
@@ -64,6 +68,9 @@ neutral `/health` probe on Fastify, port 3001 in development/test.
   application interface. Redis connection settings are mandatory, but the
   server being unreachable degrades health (HTTP 200), never blocks startup
   or crashes the process.
+- **Database:** global `DatabaseModule` in `src/shared/database/` (ADR-027)
+  owns the single MikroORM v7 PostgreSQL instance and its lifecycle;
+  entity, migration, and health conventions are in "Database Rules" below.
 - **Swagger/OpenAPI:** `@nestjs/swagger`, set up by `setupSwagger` in
   `src/shared/swagger/swagger.setup.ts` and gated to `APP_ENV=development`
   in `main.ts` (ADR-014). The UI is at `/docs`, the document at
@@ -196,6 +203,39 @@ Constraints:
   result and does not observe provider overrides on that token). Tests that
   exercise the fail-closed path inject an unroutable client directly.
 
+## Database Rules
+
+- Persistence is MikroORM v7 on PostgreSQL (ADR-027): the global
+  `DatabaseModule` in `src/shared/database/` owns the single ORM instance
+  and its lifecycle. Feature modules never configure connections, drivers,
+  or entity discovery paths themselves.
+- Register feature entities with `MikroOrmModule.forFeature([Entity])`
+  inside the feature module — the global module runs with
+  `autoLoadEntities`, so no central entity list exists. Entities live in
+  the feature's own `entities/` folder, one entity per file,
+  `<name>.entity.ts` (the MikroORM CLI discovers them through the globs in
+  `mikro-orm.options.ts`).
+- Schema changes go exclusively through explicit SQL migrations: generate
+  with `pnpm db:migration:create`, apply with `pnpm db:migration:up`,
+  revert with `pnpm db:migration:down`. Never run `mikro-orm schema:update`
+  and never configure `synchronize` anywhere.
+- Outside an HTTP request context there is no request-scoped
+  `EntityManager`: use `em.fork()` or the `@CreateRequestContext()`
+  decorator (from `@mikro-orm/decorators/legacy`) for background work.
+- Never inject another feature's repositories or EntityManagers; reach
+  another feature's data only through that feature's public service API.
+- PostgreSQL is optional at runtime, like Redis: MikroORM v7 initializes
+  without connecting, so an unreachable server never blocks startup —
+  `/health` reports `degraded` (HTTP 200) and `/health/ready` fails with
+  HTTP 503 (same contract as Redis). The integration closes the connection
+  on application shutdown (`enableShutdownHooks()` in `main.ts`).
+- Database integration tests use Testcontainers (`pnpm test:db`,
+  `test/database.db-spec.ts`, image `postgres:17.6-alpine`): each
+  `*.db-spec.ts` file boots the real AppModule against its own container
+  and overrides `MIKRO_ORM_MODULE_OPTIONS` (overriding the
+  `DATABASE_CONFIG` `registerAs` token does not propagate through
+  `ConfigService` — the same caveat as the Redis config token).
+
 ## Directory Structure
 
 ```
@@ -206,6 +246,8 @@ src/
     enrollments/           # feature modules: controller + service + schema + specs
   shared/
     config/                # config.ts wiring + env/ Zod schemas + factories
+    database/              # global DatabaseModule (ADR-027): MikroOrmModule.forRootAsync,
+                           # health indicator, shared ORM options + CLI config, migrations/
     memory-protection/     # ADR-026 load shedding: RSS sampler (hysteresis),
                            # MemoryProtectionGuard, @SkipMemoryProtection,
                            # memory health indicator
@@ -217,15 +259,20 @@ src/
     enums/ errors/ filters/ http/ interceptors/ logging/ pipes/
 test/
   create-test-app.ts       # e2e app factory mirroring main.ts bootstrap
-                           # (createE2eTestApp wires the shared e2e Redis)
+                           # (createE2eTestApp wires the shared e2e Redis
+                           # and PostgreSQL)
   e2e.global-setup.ts      # Vitest globalSetup: one shared Testcontainers
-                           # Redis per e2e run (ADR-025, provide/inject)
-  testcontainers.ts        # Testcontainers helpers: TestRedis (start/stop/getConfig)
+                           # Redis + one shared PostgreSQL per e2e run
+                           # (ADR-025/027, provide/inject)
+  testcontainers.ts        # Testcontainers helpers: TestRedis, TestPostgres
+                           # (start/stop/getConfig)
   *.e2e-spec.ts            # supertest-based e2e suites
   *.redis-spec.ts          # real-Redis integration tests via Testcontainers (pnpm test:redis)
+  *.db-spec.ts             # real-PostgreSQL integration tests via Testcontainers (pnpm test:db)
   subpath-import-aliases.ts # Vitest resolution of # aliases (keep in sync)
 env/                       # .env.development / .env.test / .env.example /
-                           # .env.redis-test (gitignored except example)
+                           # .env.redis-test / .env.db-test / .env.production
+                           # (gitignored except example)
 ```
 
 ## Naming Conventions
@@ -265,12 +312,15 @@ env/                       # .env.development / .env.test / .env.example /
   `test/create-test-app.ts` for endpoint contracts (envelope, Problem
   Details, routing). Both layers are a project requirement for features
   (root rule).
-- Unit tests mock infrastructure (RedisService); real-Redis tests use
-  Testcontainers (ADR-016) — `test/testcontainers.ts` provides the `TestRedis`
-  class. The Redis integration tier runs per test file; the e2e tier shares
-  one container per run (Vitest globalSetup `test/e2e.global-setup.ts`,
-  ADR-025) via `createE2eTestApp()`. Tests exercising fail-closed behavior
-  inject an unroutable client.
+- Unit tests mock infrastructure (RedisService, DatabaseHealthIndicator);
+  real-infrastructure tests use Testcontainers (ADR-016) —
+  `test/testcontainers.ts` provides the `TestRedis` and `TestPostgres`
+  classes. The Redis and database integration tiers run per test file
+  (`*.redis-spec.ts` via `pnpm test:redis`, `*.db-spec.ts` via
+  `pnpm test:db`); the e2e tier shares one Redis and one PostgreSQL
+  container per run (Vitest globalSetup `test/e2e.global-setup.ts`,
+  ADR-025/027) via `createE2eTestApp()`. Tests exercising fail-closed
+  behavior inject an unroutable client.
 - Do not start dev servers to verify intermediate steps; run the checks when
   the feature is complete (root rule).
 
@@ -283,14 +333,18 @@ pnpm lint         # oxlint
 pnpm format       # oxfmt --write .
 pnpm typecheck    # tsc --noEmit
 pnpm test         # Vitest unit tests (mocks, no Docker)
-pnpm test:e2e     # supertest e2e suite (one shared Testcontainers Redis per run)
+pnpm test:e2e     # supertest e2e suite (one shared Testcontainers Redis + PostgreSQL per run)
 pnpm test:redis   # real-Redis integration suite via Testcontainers
+pnpm test:db      # real-PostgreSQL integration suite via Testcontainers (per test file)
+pnpm db:migration:create # MikroORM CLI: generate a migration from entity changes
+pnpm db:migration:up     # apply pending migrations
+pnpm db:migration:down   # revert the most recent migration
 ```
 
 ## Constraints
 
 - Follow the decision records in [../../DECISIONS.md](../../DECISIONS.md) —
-  all ADRs ADR-001 through ADR-026 are **Accepted** and implemented; do not
+  all ADRs ADR-001 through ADR-027 are **Accepted** and implemented; do not
   build against their rejected alternatives.
 - New architectural decisions follow the ADR-first workflow in the root
   [AGENTS.md](../../AGENTS.md): propose the ADR, get explicit user approval,

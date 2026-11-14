@@ -1321,3 +1321,146 @@ secret-exposure weaknesses. Re-review verdict recorded below.
 deliberate 503s still warn, genuine Errors unchanged); SEC-02–05 dispositions
 reviewer-concurred ("nothing above was downgraded to obtain approval"); no
 OPEN code-level security weakness remains in scope.
+
+---
+
+## Wave 13 — MikroORM v7 + PostgreSQL integration, first code review (2026-11-14)
+
+Review scope: the _040 integration (config layer, `src/shared/database/`, health wiring, CLI config, tests, compose overrides, env files) plus the follow-up _041 shutdown/resilience implementation. Verdict: `CHANGES_REQUIRED` — 2 WARNING, 4 SUGGESTION, 0 Critical. All six findings investigated; every remediation is an implementation detail of the already-approved ADR-027 (and its approved amendment), so none required a separate approval gate. All six resolved.
+
+### CR-01 — Quoted password embedded mid-URL in `.env.development`
+
+- **Status:** Resolved
+- **Severity:** WARNING (High impact on the affected workflow)
+- **Category:** Correctness
+- **Locations:** `apps/api/env/.env.development` (`DATABASE_URL`)
+- **Technical explanation:** `--env-file` strips surrounding quotes only when the whole value is quoted; a password quoted mid-URL stays literal, so host-local development authenticated with the quote characters included while the Compose container used the unquoted value. `new URL()` accepts `"` in userinfo, so the Zod schema cannot catch it.
+- **Judge recommendation:** remove the inner quotes; quote only the whole value if ever needed.
+- **Investigation results:** confirmed; additionally the role itself had been aligned with the quoted value by an earlier `ALTER USER`, compounding the mismatch (caught by the scenario-B verification run).
+- **Agreed resolution:** `.env.development` rewritten with the unquoted password; the postgres role re-aligned to the same unquoted value. Quoting guidance added to `docker/env/.env.docker.example`.
+
+### CR-02 — Health probe runs two `select 1` per probe
+
+- **Status:** Resolved
+- **Severity:** SUGGESTION (Low, Performance)
+- **Category:** Performance
+- **Locations:** `src/shared/database/database.health.ts` (`probe`)
+- **Technical explanation:** `isConnected()` internally executes `checkConnection()` in v7, so guarding with it doubled the highest-frequency endpoints' query cost; the class doc also misstated the cost.
+- **Judge recommendation:** call `connect()` unconditionally, then `checkConnection()` once.
+- **Investigation results:** confirmed against `AbstractSqlConnection.js` (v7 `isConnected()` → `checkConnection()`); `connect()` is idempotent and its dialect creation is synchronous, so the unconditional call is safe under concurrent probes.
+- **Agreed resolution:** applied; comment updated to state the one-query contract. Specs updated accordingly.
+
+### CR-03 — CLI `db:migration:*` scripts have no build prerequisite
+
+- **Status:** Resolved
+- **Severity:** WARNING (Medium operational)
+- **Category:** Edge Case (stale compiled output)
+- **Locations:** `apps/api/package.json` scripts, `#config/*` alias (`default` → `dist/`)
+- **Technical explanation:** the CLI loads the TS config via the swc loader, but `#` specifiers resolve through Node's package-imports map to `dist/`; without a build the scripts crash on a fresh clone or silently validate against a stale schema.
+- **Judge recommendation:** add a build prerequisite or document it.
+- **Investigation results:** both options viable; the build prefix is ~1–2 s (SWC) and eliminates both failure modes.
+- **Agreed resolution:** `pnpm build &&` prefixed to all three `db:migration:*` scripts.
+
+### CR-04 — Compose interpolation cannot percent-encode the password into the URL
+
+- **Status:** Resolved
+- **Severity:** SUGGESTION (Low, Edge Case)
+- **Category:** Edge Case (configuration)
+- **Locations:** `docker/compose.app.dev.yml`, `docker/compose.app.prod.yml` (`DATABASE_URL`), `docker/env/.env.docker.example`
+- **Technical explanation:** an operator password containing `@ : / ? # %` breaks or mangles the interpolated URL, and Zod validation cannot reliably reject every mangling.
+- **Judge recommendation:** document the URL-safety constraint where the password is defined.
+- **Investigation results:** the constraint is a documented requirement, not a code change.
+- **Agreed resolution:** constraint added to the `POSTGRES_PASSWORD` comment in `docker/env/.env.docker.example` (hex output suggested).
+
+### CR-05 — Probe timeout equals the Compose healthcheck timeout
+
+- **Status:** Resolved
+- **Severity:** SUGGESTION (Low, Edge Case)
+- **Category:** Edge Case (timeout tuning)
+- **Locations:** `database.health.ts` (`DATABASE_HEALTH_PROBE_TIMEOUT_MS`), Compose api healthcheck (`timeout: 5s`)
+- **Technical explanation:** with Redis and PostgreSQL both black-holed, liveness latency could reach ~5 s — exactly the outer Docker timeout — and mark a live container unhealthy.
+- **Judge recommendation:** keep the inner bound strictly below the outer timeout.
+- **Investigation results:** confirmed; Terminus executes indicators concurrently so worst case ≈ the largest inner bound.
+- **Agreed resolution:** probe timeout lowered to 3000 ms with a comment stating the relationship; spec assertions updated.
+
+### CR-06 — Runtime ORM options shape duplicated across module and two test helpers
+
+- **Status:** Resolved
+- **Severity:** SUGGESTION (Low, Syntax/Code Quality)
+- **Category:** Syntax/Code Quality
+- **Locations:** `database.module.ts`, `test/create-test-app.ts`, `test/database.db-spec.ts`
+- **Technical explanation:** three hand-built copies of `{driver, ...options, autoLoadEntities}` silently drift when the runtime factory changes.
+- **Judge recommendation:** export a single runtime options builder and use it everywhere.
+- **Investigation results:** applied as `buildRuntimeMikroOrmOptions(url)` next to `buildMikroOrmOptions` (which remains CLI-only); the driver still rides along in overrides that replace the whole options object, matching the module's beside-`useFactory` supply.
+- **Agreed resolution:** applied.
+
+**Wave 13 summary:** 6 findings — 2 WARNING (both resolved: CR-01 real credential-mismatch bug fixed, CR-03 fresh-clone/stale-schema tooling trap fixed), 4 SUGGESTION (all resolved). No Critical, no security-category findings; the reviewer explicitly verified the v7 API usage, probe concurrency, Terminus semantics, secret handling, env schema, test override mechanics, and i18n parity against installed dependency sources.
+
+**Wave 13 re-review (same reviewer):** verdict `CHANGES_REQUIRED` on the _041 shutdown/connection-resilience code. CR-01…CR-06 all verified **FIXED** with file-level evidence. Two new findings:
+
+### CR-07 — Initializer treats `orm.connect()` as the dialing operation
+
+- **Status:** Resolved
+- **Severity:** BLOCKER (as reported)
+- **Category:** Correctness
+- **Locations:** `src/shared/database/database.connect.ts` (attempt body), `test/database.db-spec.ts` (startup-failure scenario)
+- **Technical explanation:** the reviewer's source reading: v7 `orm.connect()` → `DatabaseDriver.connect()` → `AbstractSqlConnection.connect()` → `initClient()` (synchronous lazy-pool creation) + `onConnect()` (no-op without the schema-generator extension) — concluding the retry machinery is unreachable and boot would succeed without the database. **Investigation result — premise disproven by executed verification:** the attempt _did_ dial the server in every real run. The dial comes from the registered **Migrator extension**: `Migrator.init()` (`@mikro-orm/migrations` `Migrator.js:47-52`) calls `this.#schemaGenerator.ensureDatabase()`, which executes `PostgreSqlSchemaHelper.databaseExists` (`SchemaHelper.js:780`) — the exact frame chain in the captured ECONNREFUSED stacks (`/tmp/scenario-c.log`). Evidence: Scenario B (2 refused attempts → established on attempt 3 after Postgres started), Scenario C (exactly 5 failures → `PostgreSQL connection failed after 5 attempts`, exit 1, HTTP never started), Scenario D (28P01 → immediate non-retried failure), and the `test:db` startup-failure test passing against a real closed port (4/4). The reviewer's own restriction ("no tests were executed") is where the premise went wrong.
+- **Judge recommendation:** make each attempt contact the server explicitly — `connect()` + `checkConnection()`, throwing the preserved pg error so classification and tests stay valid.
+- **Agreed resolution:** the hardening is **accepted on its own merits**: the implicit dial depended on a Migrator side effect that may change across versions, so the attempt now connects and explicitly verifies via `checkConnection()`, throwing `result.error ?? new Error(result.reason)` (SQLSTATE classification intact). Failure modes in the unit specs moved onto `checkConnection`, a `{ok:false,error}`-shape classification test was added, and comments state the deliberate contract. The dispute and the executed evidence are recorded here so the finding is neither silently discarded nor silently accepted as a defect.
+
+### CR-08 — Failed-boot scenario leaks a half-initialized app
+
+- **Status:** Resolved
+- **Severity:** SUGGESTION (Low)
+- **Category:** Edge Case (test hygiene / partial-failure resources)
+- **Locations:** `test/database.db-spec.ts` (startup-failure scenario), `test/create-test-app.ts`
+- **Technical explanation:** `createTestApp` cannot hand back an app when `init()` rejects, so providers initialized before the failure (Redis client reconnect loop, ORM pool) stayed alive for the worker's lifetime.
+- **Judge recommendation:** give the scenario a teardown path (or document the leak).
+- **Agreed resolution:** the scenario boots inline (`Test.createTestingModule` + Fastify adapter, init before any HTTP behavior matters) and calls `app.close()` in a `finally`, shutting down the partially initialized providers.
+
+**Wave 13 third round:** the CR-07 hardening and CR-08 teardown were re-submitted for review. Verdict: **`APPROVED`** — CR-07 **RESOLVED** (explicit `checkConnection()` per attempt verified against the installed sources as server contact independent of the side effect; SQLSTATE classification preserved via `result.error`; attempt timeout bounds connect + check; rewritten specs match the control flow) and CR-08 **RESOLVED** (inline boot + `finally` teardown verified to run the shutdown lifecycle on the partially initialized providers). No new issues introduced. The reviewer also issued a **factual record correction**: the round-2 CR-07 premise was wrong — `ensureDatabase: true` is the factory default, `AbstractSqlPlatform.init` registers the schema-generator extension, and `Connection.onConnect → SqlSchemaGenerator.ensureDatabase → databaseExists` is the connect-time dial path (the `Migrator.init` call sites attributed in the dispute record are migration operations, not connect) — confirming the material dispute: the implicit dial existed, the shipped behavior satisfied the contract, and the hardening removes the dependence on that library default. Two round trips per successful boot attempt (ORM default probe + verification `select 1`) were assessed inherent to leaving the ORM default in place and not actionable.
+
+---
+
+## Wave 14 — PostgreSQL integration security review (2026-11-14)
+
+Review scope: identical to Wave 13 (database module, config layer, health wiring, tests, compose wiring, env files) from an attacker's perspective, with CWE classification. Verdict: `SECURITY_CHANGES_REQUIRED` — 2 LOW, 1 INFORMATIONAL, 0 Critical/High/Medium. Clean areas explicitly verified: credential flow (no URL/password in logs, validation errors, or Problem Details), injection surface (constant `select 1`, fixed SQLSTATE set), retry bounds, test-only wiring isolation, compose credential handling, exact-pinned ORM dependencies.
+
+### SEC-01 — Unauthenticated `/health` disclosed internal DB failure state via raw error passthrough
+
+- **Status:** Resolved
+- **Severity:** LOW
+- **Category:** Security
+- **CWE:** CWE-209 (secondary CWE-200)
+- **Locations:** `src/shared/database/database.health.ts` (`failureMessage` passthrough), consumed by `GET /health`
+- **Technical explanation:** the raw pg error message (and `checkConnection` reason) reached the unauthenticated liveness body: `28P01` leaked the DB username, `3D000` the database name, `ECONNREFUSED` the internal hostname/port — letting callers fingerprint internal failure classes, violating the repository's own indistinguishable-failures rule.
+- **Judge recommendation:** generic localized message client-side; raw reason/error server-side logs only.
+- **Agreed resolution:** applied — the indicator now reports only `health.databaseUnavailable` (localized) for every failure class on both endpoints, and logs the raw reason/error through the Pino logger. Specs updated to assert the generic contract.
+
+### SEC-02 — Health probes create uncancellable pool backlog on black-hole failures
+
+- **Status:** Resolved
+- **Severity:** LOW
+- **Category:** Security
+- **CWE:** CWE-400
+- **Locations:** `database.health.ts` (`probe`), `database.timeout.ts` (abandon-not-cancel), `mikro-orm.options.ts` (no pool timeout)
+- **Technical explanation:** pg's `connectionTimeoutMillis` defaults to 0 (indefinite); timed-out probes left pending pool acquisitions/queued queries that nothing cancels, and the health endpoints are exempt from both guards — the one request class able to grow process memory without shedding, plus connection-slot pressure on PostgreSQL.
+- **Judge recommendation:** set the pool timeout via the existing `driverOptions` knob; optionally serialize probes or cache results.
+- **Agreed resolution:** applied — `driverOptions.connectionTimeoutMillis = 5000` in `buildMikroOrmOptions` (verified to flow `driverOptions → createKyselyDialect → mapOptions → new Pool`), bounded above the 3s probe so callers experience the probe timeout while the pool still reclaims every abandoned attempt. Probe serialization/caching not implemented (YAGNI: the bounded pool removes the unbounded growth; revisit only with evidence).
+
+### SEC-03 — Development Compose publishes PostgreSQL/Redis ports on all host interfaces
+
+- **Status:** Await Approval
+- **Severity:** INFORMATIONAL
+- **Category:** Security
+- **CWE:** CWE-16 (Configuration)
+- **Locations:** `docker/compose.app.dev.yml` (postgres/redis/insight host port bindings)
+- **Technical explanation:** the same file binds MockServer to loopback deliberately; the password-protected database ports default to `0.0.0.0`, exposing dev infrastructure to LAN networks. No realistic attack path with authentication enabled — hardening only.
+- **Judge recommendation:** bind dev infrastructure ports to `127.0.0.1` like MockServer.
+- **Agreed resolution:** presented to the developer for approval (developer workflow choice: other LAN devices may rely on host access).
+
+**Related note (outside this wave's scope):** `RedisHealthIndicator` passes raw ioredis error messages through the same health contract (topology disclosure class as SEC-01). Recorded for the developer's decision — same remediation pattern applies.
+
+**Wave 14 summary:** 3 findings — 2 LOW resolved (generic health messages; pool-level connection timeout), 1 informational awaiting developer approval (loopback dev port bindings). Redis indicator parity flagged for the same decision. No Critical/High/Medium; credential flow, injection, retry bounds, test isolation, and supply chain verified clean.
+
+**Wave 14 resolutions (developer-approved):** SEC-01 parity applied — `RedisHealthIndicator` now reports only the generic localized `health.redisUnavailable` message with raw errors logged server-side (specs updated; e2e asserts statuses only, unaffected). SEC-03 applied — dev Compose postgres/redis/insight host ports bound to `127.0.0.1` (MockServer precedent). Final security status after remediation: all findings Resolved; re-review of the two LOW remediations is available on request — the changes follow the reviewer's own recommendations verbatim and are covered by updated specs.

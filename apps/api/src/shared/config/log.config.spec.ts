@@ -15,6 +15,7 @@ describe('logConfig factory', () => {
   function stubBaseEnv() {
     vi.stubEnv('HOST', '0.0.0.0');
     vi.stubEnv('PORT', '3000');
+    vi.stubEnv('DATABASE_URL', 'postgres://localhost:5432/neo_bank');
     vi.stubEnv('REDIS_URL', 'redis://localhost:6379');
     vi.stubEnv('REDIS_USERNAME', '');
     vi.stubEnv('REDIS_PASSWORD', '');

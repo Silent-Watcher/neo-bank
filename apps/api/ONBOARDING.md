@@ -14,8 +14,11 @@ using atomic `SET NX EX`, and a verify endpoint consumes the stored code
 atomically with attempt counting via a single Lua script; verification
 failures are deliberately generic and indistinguishable; both endpoints
 have rate limits aligned with the OTP window). Delivery via SMS and the
-registration steps after verification are not implemented yet. It has no
-database; Redis is its only external store.
+registration steps after verification are not implemented yet. A PostgreSQL
+persistence layer (MikroORM v7, [ADR-027](../../DECISIONS.md)) is integrated
+at infrastructure level — connection, health checks, and migrations — but it
+holds no entities yet; Redis remains the only store feature code currently
+uses.
 
 Within the monorepo it is the `apps/api` workspace; the web and admin
 frontends do not call it yet. Architectural context:
@@ -37,10 +40,17 @@ feature coverage is minimal.
 | Pino / nestjs-pino                       | Structured logging; request-scoped context, header redaction                                            |
 | @nestjs/terminus                         | `/health` (liveness) and `/health/ready` (readiness) endpoints                                          |
 | ioredis 6                                | Redis client behind the shared `RedisService` ([ADR-012](../../DECISIONS.md)/[013](../../DECISIONS.md)) |
+| MikroORM v7 (`@mikro-orm/*`)             | PostgreSQL persistence: ORM integration, migrations, health indicator ([ADR-027](../../DECISIONS.md))   |
 | @nestjs/swagger + @fastify/static        | OpenAPI docs; Swagger UI at `/docs`, **development only** ([ADR-014](../../DECISIONS.md))               |
 | Vitest + supertest                       | Unit and e2e testing                                                                                    |
-| Testcontainers                           | Real Redis in integration & e2e tests (ADR-016/025); see `test/testcontainers.ts`                       |
+| Testcontainers                           | Real Redis and PostgreSQL in integration & e2e tests (ADR-016/025); see `test/testcontainers.ts`        |
 | Oxlint / Oxfmt                           | Linting and formatting (no ESLint/Prettier)                                                             |
+
+Dependency notes: `@mikro-orm/postgresql` pulls `pg` (8.23.1) and,
+transitively, `kysely` (0.29.8) — neither is a direct dependency.
+`@mikro-orm/cli` and `@swc-node/register` are devDependencies used only by
+the migration CLI, which loads its TypeScript configuration through SWC
+(reusing the existing `@swc/core`).
 
 ## 3. Prerequisites
 
@@ -52,6 +62,11 @@ feature coverage is minimal.
   one: connection settings are validated at boot, and an unreachable server
   only degrades `/health`. Guarded routes fail closed (HTTP 500) when Redis
   is unreachable — no in-memory fallback.
+- A PostgreSQL server is needed for persistence work (entities, migrations)
+  and for the database integration tests, but the API starts without one:
+  `DATABASE_URL` is validated at boot, and an unreachable server only
+  degrades `/health` while `/health/ready` returns 503
+  ([ADR-027](../../DECISIONS.md)).
 
 ## 4. Getting Started
 
@@ -66,40 +81,47 @@ cp env/.env.example env/.env.development
 # edit values if needed; defaults work for local development
 ```
 
-| Variable                               | Meaning                                                                                                                                                                  | Default behavior if unset                         |
-| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------- |
-| `APP_ENV`                              | `development` \| `production` \| `test`                                                                                                                                  | required                                          |
-| `HOST`, `PORT`                         | Bind address and port                                                                                                                                                    | required (dev/test files set `3001`)              |
-| `CORS_ORIGIN`                          | Comma-separated allowed origins                                                                                                                                          | CORS disabled; required when `APP_ENV=production` |
-| `TRUST_PROXY`                          | Trust proxy headers (`true`/`false`)                                                                                                                                     | `false`                                           |
-| `BODY_LIMIT`                           | Max request body bytes                                                                                                                                                   | `1048576` (1 MiB)                                 |
-| `REDIS_INSIGHT_URL`                    | Host-accessible Redis Insight URL; startup log prints it only when set (ADR-020)                                                                                         | unset (injected by the dev Compose stack)         |
-| `MOCKSERVER_HOST_URL`                  | Host-machine MockServer address; the startup log prints it in development only when set (ADR-024)                                                                        | unset (injected by the dev Compose stack)         |
-| `MOCKSERVER_DOCKER_URL`                | Compose-network MockServer address; the startup log prints it in development only when set (ADR-024)                                                                     | unset (injected by the dev Compose stack)         |
-| `LOG_LEVEL`                            | Pino level                                                                                                                                                               | `info`                                            |
-| `LOG_PRETTY`                           | Explicit pretty-print override (`true`/`false`); the dev Compose stack sets `false` so containers emit JSON for centralized logging                                      | unset → pretty only in development                |
-| `REDIS_URL`                            | Redis URL (`redis://` or `rediss://`)                                                                                                                                    | required                                          |
-| `REDIS_USERNAME`, `REDIS_PASSWORD`     | Redis ACL credentials                                                                                                                                                    | required; empty value = no authentication         |
-| `REDIS_DB`                             | Logical database index (0–15)                                                                                                                                            | server default                                    |
-| `REDIS_TLS`                            | Force TLS for `redis://` (`true`/`false`)                                                                                                                                | `false` (`rediss://` always uses TLS)             |
-| `REDIS_CONNECT_TIMEOUT_MS`             | Connection timeout (ms)                                                                                                                                                  | `10000`                                           |
-| `REDIS_COMMAND_TIMEOUT_MS`             | Per-command timeout (ms)                                                                                                                                                 | `5000`                                            |
-| `REDIS_MAX_RETRIES_PER_REQUEST`        | Command retry budget                                                                                                                                                     | `3`                                               |
-| `REDIS_SHUTDOWN_TIMEOUT_MS`            | Graceful-QUIT window (ms)                                                                                                                                                | `2000`                                            |
-| `RATE_LIMIT_SHORT_LIMIT`               | Short-window max requests                                                                                                                                                | `10`                                              |
-| `RATE_LIMIT_SHORT_TTL_SECONDS`         | Short-window TTL in seconds                                                                                                                                              | `1`                                               |
-| `RATE_LIMIT_LONG_LIMIT`                | Long-window max requests                                                                                                                                                 | `100`                                             |
-| `RATE_LIMIT_LONG_TTL_MINUTES`          | Long-window TTL in minutes                                                                                                                                               | `1`                                               |
-| `ENROLLMENTS_MAX_VERIFY_ATTEMPTS`      | Max failed OTP verify attempts per window                                                                                                                                | `5`                                               |
-| `ENROLLMENTS_LOCKOUT_TTL_SECONDS`      | Lockout window after max attempts (s)                                                                                                                                    | `900` (15 min)                                    |
-| `ENROLLMENTS_OTP_HMAC_SECRET`          | HMAC-SHA-256 key for OTP digest storage (ADR-018); required, no default — generate with `openssl rand -hex 32` (64 hex chars = 32 bytes), identical across API instances | —                                                 |
-| `MEMORY_PROTECTION_ENABLED`            | Memory-based load shedding on/off, exactly `true`/`false` (ADR-026)                                                                                                      | `true`                                            |
-| `MEMORY_PROTECTION_MAX_RSS_MB`         | Process RSS (MB) that activates protection: non-exempt requests get 503 while active                                                                                     | `1024`                                            |
-| `MEMORY_PROTECTION_RECOVERY_RSS_MB`    | Recovery threshold (MB); must stay below the max threshold (validated at boot, hysteresis)                                                                               | `768`                                             |
-| `MEMORY_PROTECTION_SAMPLE_INTERVAL_MS` | RSS sampling interval (ms); the 503 `Retry-After` is derived from it                                                                                                     | `5000`                                            |
-| `MEMORY_PROTECTION_STABLE_SAMPLES`     | Consecutive below-recovery samples required to deactivate protection                                                                                                     | `3`                                               |
+| Variable                               | Meaning                                                                                                                                                                                                                                                                                                                            | Default behavior if unset                         |
+| -------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------- |
+| `APP_ENV`                              | `development` \| `production` \| `test`                                                                                                                                                                                                                                                                                            | required                                          |
+| `HOST`, `PORT`                         | Bind address and port                                                                                                                                                                                                                                                                                                              | required (dev/test files set `3001`)              |
+| `CORS_ORIGIN`                          | Comma-separated allowed origins                                                                                                                                                                                                                                                                                                    | CORS disabled; required when `APP_ENV=production` |
+| `TRUST_PROXY`                          | Trust proxy headers (`true`/`false`)                                                                                                                                                                                                                                                                                               | `false`                                           |
+| `BODY_LIMIT`                           | Max request body bytes                                                                                                                                                                                                                                                                                                             | `1048576` (1 MiB)                                 |
+| `DATABASE_URL`                         | PostgreSQL connection URL (`postgres://` or `postgresql://`, ADR-027); the connection is established during bootstrap with bounded retries and startup fails if the server cannot be reached (auth/config errors fail immediately) — after a successful boot, an outage degrades `/health` (HTTP 200), `/health/ready` returns 503 | required                                          |
+| `REDIS_INSIGHT_URL`                    | Host-accessible Redis Insight URL; startup log prints it only when set (ADR-020)                                                                                                                                                                                                                                                   | unset (injected by the dev Compose stack)         |
+| `MOCKSERVER_HOST_URL`                  | Host-machine MockServer address; the startup log prints it in development only when set (ADR-024)                                                                                                                                                                                                                                  | unset (injected by the dev Compose stack)         |
+| `MOCKSERVER_DOCKER_URL`                | Compose-network MockServer address; the startup log prints it in development only when set (ADR-024)                                                                                                                                                                                                                               | unset (injected by the dev Compose stack)         |
+| `LOG_LEVEL`                            | Pino level                                                                                                                                                                                                                                                                                                                         | `info`                                            |
+| `LOG_PRETTY`                           | Explicit pretty-print override (`true`/`false`); the dev Compose stack sets `false` so containers emit JSON for centralized logging                                                                                                                                                                                                | unset → pretty only in development                |
+| `REDIS_URL`                            | Redis URL (`redis://` or `rediss://`)                                                                                                                                                                                                                                                                                              | required                                          |
+| `REDIS_USERNAME`, `REDIS_PASSWORD`     | Redis ACL credentials                                                                                                                                                                                                                                                                                                              | required; empty value = no authentication         |
+| `REDIS_DB`                             | Logical database index (0–15)                                                                                                                                                                                                                                                                                                      | server default                                    |
+| `REDIS_TLS`                            | Force TLS for `redis://` (`true`/`false`)                                                                                                                                                                                                                                                                                          | `false` (`rediss://` always uses TLS)             |
+| `REDIS_CONNECT_TIMEOUT_MS`             | Connection timeout (ms)                                                                                                                                                                                                                                                                                                            | `10000`                                           |
+| `REDIS_COMMAND_TIMEOUT_MS`             | Per-command timeout (ms)                                                                                                                                                                                                                                                                                                           | `5000`                                            |
+| `REDIS_MAX_RETRIES_PER_REQUEST`        | Command retry budget                                                                                                                                                                                                                                                                                                               | `3`                                               |
+| `REDIS_SHUTDOWN_TIMEOUT_MS`            | Graceful-QUIT window (ms)                                                                                                                                                                                                                                                                                                          | `2000`                                            |
+| `RATE_LIMIT_SHORT_LIMIT`               | Short-window max requests                                                                                                                                                                                                                                                                                                          | `10`                                              |
+| `RATE_LIMIT_SHORT_TTL_SECONDS`         | Short-window TTL in seconds                                                                                                                                                                                                                                                                                                        | `1`                                               |
+| `RATE_LIMIT_LONG_LIMIT`                | Long-window max requests                                                                                                                                                                                                                                                                                                           | `100`                                             |
+| `RATE_LIMIT_LONG_TTL_MINUTES`          | Long-window TTL in minutes                                                                                                                                                                                                                                                                                                         | `1`                                               |
+| `ENROLLMENTS_MAX_VERIFY_ATTEMPTS`      | Max failed OTP verify attempts per window                                                                                                                                                                                                                                                                                          | `5`                                               |
+| `ENROLLMENTS_LOCKOUT_TTL_SECONDS`      | Lockout window after max attempts (s)                                                                                                                                                                                                                                                                                              | `900` (15 min)                                    |
+| `ENROLLMENTS_OTP_HMAC_SECRET`          | HMAC-SHA-256 key for OTP digest storage (ADR-018); required, no default — generate with `openssl rand -hex 32` (64 hex chars = 32 bytes), identical across API instances                                                                                                                                                           | —                                                 |
+| `MEMORY_PROTECTION_ENABLED`            | Memory-based load shedding on/off, exactly `true`/`false` (ADR-026)                                                                                                                                                                                                                                                                | `true`                                            |
+| `MEMORY_PROTECTION_MAX_RSS_MB`         | Process RSS (MB) that activates protection: non-exempt requests get 503 while active                                                                                                                                                                                                                                               | `1024`                                            |
+| `MEMORY_PROTECTION_RECOVERY_RSS_MB`    | Recovery threshold (MB); must stay below the max threshold (validated at boot, hysteresis)                                                                                                                                                                                                                                         | `768`                                             |
+| `MEMORY_PROTECTION_SAMPLE_INTERVAL_MS` | RSS sampling interval (ms); the 503 `Retry-After` is derived from it                                                                                                                                                                                                                                                               | `5000`                                            |
+| `MEMORY_PROTECTION_STABLE_SAMPLES`     | Consecutive below-recovery samples required to deactivate protection                                                                                                                                                                                                                                                               | `3`                                               |
 
 Startup fails fast with a readable Zod error if validation fails.
+
+The test-tier env files (`env/.env.test`, `env/.env.redis-test`,
+`env/.env.db-test`) are gitignored and contain validation-only
+placeholders: `pnpm test:db` loads `.env.db-test`, whose `DATABASE_URL`
+is never used to connect — each database spec connects to its own
+Testcontainers container ([ADR-027](../../DECISIONS.md)).
 
 **Run locally:**
 
@@ -113,8 +135,9 @@ Verify with `curl http://localhost:3001/health`.
 
 ```sh
 pnpm test         # unit tests (Vitest) — mocks infrastructure, no Docker
-pnpm test:e2e     # e2e tests (one shared Testcontainers Redis per run; needs Docker)
+pnpm test:e2e     # e2e tests (one shared Testcontainers Redis + PostgreSQL per run; needs Docker)
 pnpm test:redis   # Redis integration tests (Testcontainers starts real Redis per test file)
+pnpm test:db      # database integration tests (Testcontainers starts real PostgreSQL per test file)
 ```
 
 **Build:**
@@ -136,6 +159,9 @@ src/
     enrollments/           # first feature module (OTP endpoint)
   shared/
     config/                # config.ts wiring, env/ Zod schemas, registerAs factories
+    database/              # global DatabaseModule (ADR-027): MikroORM v7 PostgreSQL
+                           # connection, health indicator, shared ORM options, CLI
+                           # config, migrations/
     enums/                 # AppEnv enum
     errors/                # AppHttpException, ErrorCode, Problem Details helpers
     filters/               # global Problem Details error filter
@@ -152,8 +178,9 @@ src/
                            # @InjectRedis(), degraded-mode health indicator
     swagger/               # dev-only OpenAPI setup + shared response schemas
 test/                      # e2e specs + create-test-app.ts + e2e.global-setup.ts
-                           # (shared e2e Redis) + Vitest alias map
-env/                       # .env.development / .env.test / .env.example
+                           # (shared e2e Redis and PostgreSQL) + Vitest alias map
+env/                       # .env.development / .env.test / .env.redis-test /
+                           # .env.db-test / .env.production / .env.example
 ```
 
 **Where new features go:** create `src/modules/<feature>/` with a module,
@@ -196,16 +223,23 @@ assert the envelope and Problem Details contracts. New top-level `#` import
 aliases must also be added to `test/subpath-import-aliases.ts` or tests
 will not resolve them.
 
-**Real infrastructure in tests (ADR-016/025):** Tests that need Redis use
-Testcontainers (`test/testcontainers.ts`). The Redis integration tier
+**Real infrastructure in tests (ADR-016/025/027):** Tests that need Redis or
+PostgreSQL use Testcontainers (`test/testcontainers.ts`, which provides
+`TestRedis` and `TestPostgres`). The Redis integration tier
 (`pnpm test:redis`) starts its own `redis:8.2-alpine` container per test
-file with a dynamic port in `beforeAll` and stops it in `afterAll`; the e2e
-tier (`pnpm test:e2e`) shares one container per test run, started by the
-Vitest globalSetup (`test/e2e.global-setup.ts`) and injected into the specs
-through `createE2eTestApp()`. No manual Docker Compose needed; unit tests
+file with a dynamic port in `beforeAll` and stops it in `afterAll`; the
+database integration tier (`pnpm test:db`, loads `env/.env.db-test`) starts
+its own `postgres:17.6-alpine` container per test file the same way; the
+e2e tier (`pnpm test:e2e`) shares one Redis and one PostgreSQL container
+per test run, started by the Vitest globalSetup
+(`test/e2e.global-setup.ts`) and injected into the specs through
+`createE2eTestApp()`. No manual Docker Compose needed; unit tests
 keep mocking infrastructure. Redis-tier specs override both `REDIS_CONFIG`
 **and** `REDIS_CLIENT` in the testing module so the throttler and all
-consumers share the container's connection.
+consumers share the container's connection; database-tier specs (and the
+e2e setup) override `MIKRO_ORM_MODULE_OPTIONS` instead — overriding the
+`DATABASE_CONFIG` `registerAs` token does not propagate through
+`ConfigService`, the same caveat as the Redis config token.
 
 **API documentation is mandatory:** every endpoint implemented or changed
 must get its Swagger/OpenAPI documentation in the same task — see the
@@ -237,8 +271,18 @@ tooling (lint, format, Turbo tasks) comes from the root; see
   startup: `/health` then reports `degraded` with HTTP 200 and the client
   reconnects on its own. See `src/shared/redis/` and the API
   [AGENTS.md](./AGENTS.md) Redis rules.
+- **Database:** MikroORM v7 on PostgreSQL
+  ([ADR-027](../../DECISIONS.md), amended 2026-11-14); entities register per
+  feature with `MikroOrmModule.forFeature`, and schema changes go only
+  through migrations (`pnpm db:migration:*`) — never `schema:update` or
+  `synchronize`. The initial connection is established during bootstrap with
+  bounded retries; startup fails when the database cannot be reached
+  (permanent authentication/configuration errors fail immediately). After a
+  successful boot, a PostgreSQL outage degrades `/health` (HTTP 200) and
+  `/health/ready` returns 503. See `src/shared/database/` and
+  the API [AGENTS.md](./AGENTS.md) database rules.
 - All ADRs ([../../DECISIONS.md](../../DECISIONS.md)) ADR-001 through
-  ADR-026 are **Accepted** and implemented — follow them; don't
+  ADR-027 are **Accepted** and implemented — follow them; don't
   reintroduce alternatives.
 
 ## 8. Useful Commands
@@ -248,8 +292,12 @@ pnpm dev                       # dev server with watch + env/.env.development
 pnpm build                     # production build (SWC → dist/)
 pnpm start                     # run the built app
 pnpm test                      # unit tests (mocks infrastructure, no Docker)
-pnpm test:e2e                  # e2e tests (one shared Testcontainers Redis per run; needs Docker)
+pnpm test:e2e                  # e2e tests (one shared Testcontainers Redis + PostgreSQL per run; needs Docker)
 pnpm test:redis                # Redis integration tests (Testcontainers starts real Redis per test file)
+pnpm test:db                   # database integration tests (Testcontainers starts real PostgreSQL per test file)
+pnpm db:migration:create       # MikroORM CLI: generate a migration from entity changes
+pnpm db:migration:up           # apply pending migrations
+pnpm db:migration:down         # revert the most recent migration
 pnpm lint                      # Oxlint
 pnpm format                    # Oxfmt (write)
 pnpm format:check              # Oxfmt (check only)

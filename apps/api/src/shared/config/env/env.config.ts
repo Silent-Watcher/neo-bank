@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import { EnvValidationError } from '#errors/env-validation.error.js';
+import { dbEnvSchema } from './schema/db.env.js';
 import { enrollmentsEnvSchema } from './schema/enrollments.env.js';
 import { logEnvSchema } from './schema/log.env.js';
 import {
@@ -15,6 +16,7 @@ export const envSchema = z
   .object({
     ...serverEnvSchema.shape,
     ...logEnvSchema.shape,
+    ...dbEnvSchema.shape,
     ...redisEnvSchema.shape,
     ...rateLimitEnvSchema.shape,
     ...enrollmentsEnvSchema.shape,

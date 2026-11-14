@@ -91,7 +91,8 @@ repository (not a Turbo task), so formatting is repository-wide.
   package under `packages/` (none exists yet).
 - **API module boundaries:** feature code lives under
   `apps/api/src/modules/<feature>/`; cross-cutting infrastructure (config,
-  logging, Redis, errors, filters, interceptors, pipes, HTTP helpers, i18n)
+  logging, database, Redis, errors, filters, interceptors, pipes, HTTP
+  helpers, i18n)
   lives under `apps/api/src/shared/` and is exposed through Node.js `#`
   subpath import aliases. See `apps/api/AGENTS.md` for the details.
 - **Configuration boundary (API):** `process.env` may be read only once, in
@@ -125,7 +126,14 @@ repository (not a Turbo task), so formatting is repository-wide.
   only degrades the `/health` endpoint (HTTP 200) and never blocks startup.
   Consumers: the enrollments challenge (OTP storage) and global HTTP rate
   limiting (ADR-015) — both use the shared connection and the standardized
-  key naming convention.
+  key naming convention. PostgreSQL persistence follows a similar pattern
+  (ADR-027, amended 2026-11-14): a global `DatabaseModule`
+  (`apps/api/src/shared/database/`) owns the single MikroORM v7 instance;
+  the initial connection is established during bootstrap with bounded
+  retries and startup fails when the database cannot be reached, while
+  post-boot outages apply the identical health contract (degraded `/health`,
+  strict `/health/ready`). It is infrastructure-only so far — no entities
+  exist.
 - **Applications ↔ observability:** none at runtime. The monitoring stack
   (`docker/compose.monitoring.yml`, ADR-022) is a separate Compose project with its
   own network; Grafana Alloy collects container stdout/stderr through the
@@ -136,7 +144,9 @@ repository (not a Turbo task), so formatting is repository-wide.
 
 - No shared packages: types, validation schemas, and API contracts cannot be
   shared between the API and frontends yet; they would be duplicated today.
-- No persistence layer: the API is stateless and in-memory only.
+- The persistence layer is infrastructure-only: MikroORM v7 and PostgreSQL
+  are wired in (ADR-027) with migrations configured, but no entities exist
+  yet, so no data is persisted.
 - No authentication/authorization anywhere.
 - The frontends are scaffolds: no routing beyond the index page, no state
   management, no styling system, no tests.

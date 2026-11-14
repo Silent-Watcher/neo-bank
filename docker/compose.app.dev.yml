@@ -35,6 +35,11 @@ services:
       REDIS_URL: redis://redis:6379
       REDIS_USERNAME: default
       REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD is required in docker/env/.env.docker.dev}
+      # PostgreSQL connection URL (ADR-027): the container reaches the
+      # database by service name on the container port; credentials come
+      # from docker/env/.env.docker.dev (compose `environment` takes
+      # precedence over the host-local DATABASE_URL in the app env file).
+      DATABASE_URL: postgresql://${POSTGRES_USER:-neo_bank}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required in docker/env/.env.docker.dev}@postgres:5432/${POSTGRES_DB:-neo_bank}
       # Host-accessible Redis Insight URL (ADR-020), logged at API startup.
       # Set only here: the API never advertises an address it cannot know
       # exists, so local non-Docker development and production log nothing.
@@ -144,7 +149,10 @@ services:
     volumes:
       - postgres_dev_data:/var/lib/postgresql/data
     ports:
-      - '${POSTGRES_PORT:-5432}:5432'
+      # Bound to loopback (SEC-03, Wave 14): dev infrastructure must not be
+      # reachable from LAN peers; host-local tools connect through 127.0.0.1,
+      # containers use the internal network.
+      - '127.0.0.1:${POSTGRES_PORT:-5432}:5432'
     healthcheck:
       test: ['CMD-SHELL', 'pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}']
       interval: 5s
@@ -165,9 +173,12 @@ services:
         --appendonly no
         --requirepass ${REDIS_PASSWORD:?REDIS_PASSWORD is required in docker/env/.env.docker.dev}
     ports:
-      - '${REDIS_PORT:-6379}:6379'
+      # Bound to loopback (SEC-03, Wave 14): same rationale as the postgres
+      # port — dev infrastructure stays off the LAN; containers use the
+      # internal network.
+      - '127.0.0.1:${REDIS_PORT:-6379}:6379'
       # Redis Insight, bundled in the Stack image (ADR-020): development only.
-      - '${REDIS_INSIGHT_PORT:-8001}:8001'
+      - '127.0.0.1:${REDIS_INSIGHT_PORT:-8001}:8001'
     healthcheck:
       test: ['CMD-SHELL', 'redis-cli -a "$$REDIS_PASSWORD" ping | grep PONG']
       interval: 5s

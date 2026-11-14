@@ -12,6 +12,18 @@
       "types": "./src/shared/config/*",
       "default": "./dist/shared/config/*"
     },
+    "#database/*": {
+      "types": "./src/shared/database/*",
+      "default": "./dist/shared/database/*"
+    },
+    "#redis/*": {
+      "types": "./src/shared/redis/*",
+      "default": "./dist/shared/redis/*"
+    },
+    "#swagger/*": {
+      "types": "./src/shared/swagger/*",
+      "default": "./dist/shared/swagger/*"
+    },
     "#modules/*": {
       "types": "./src/modules/*",
       "default": "./dist/modules/*"
@@ -49,10 +61,19 @@
     "test:watch": "vitest",
     "test:e2e": "node --env-file=env/.env.test node_modules/vitest/vitest.mjs run --config test/vitest-e2e.config.ts",
     "test:redis": "node --env-file=env/.env.redis-test node_modules/vitest/vitest.mjs run --config test/vitest-redis.config.ts",
+    "test:db": "node --env-file=env/.env.db-test node_modules/vitest/vitest.mjs run --config test/vitest-db.config.ts",
+    "db:migration:create": "pnpm build && MIKRO_ORM_CLI_CONFIG=./src/shared/database/mikro-orm.config.ts node --env-file=env/.env.development node_modules/@mikro-orm/cli/cli.js migration:create",
+    "db:migration:up": "pnpm build && MIKRO_ORM_CLI_CONFIG=./src/shared/database/mikro-orm.config.ts node --env-file=env/.env.development node_modules/@mikro-orm/cli/cli.js migration:up",
+    "db:migration:down": "pnpm build && MIKRO_ORM_CLI_CONFIG=./src/shared/database/mikro-orm.config.ts node --env-file=env/.env.development node_modules/@mikro-orm/cli/cli.js migration:down",
     "clean": "rm -rf dist"
   },
   "dependencies": {
     "@fastify/static": "^10.1.8",
+    "@mikro-orm/core": "7.2.9",
+    "@mikro-orm/decorators": "7.2.9",
+    "@mikro-orm/migrations": "7.2.9",
+    "@mikro-orm/nestjs": "7.1.0",
+    "@mikro-orm/postgresql": "7.2.9",
     "@nestjs/common": "12.2.0",
     "@nestjs/config": "^12.0.1",
     "@nestjs/core": "12.2.0",
@@ -71,8 +92,10 @@
     "zod": "^4.6.7"
   },
   "devDependencies": {
+    "@mikro-orm/cli": "7.2.9",
     "@nestjs/cli": "12.0.10",
     "@nestjs/testing": "12.2.0",
+    "@swc-node/register": "1.12.1",
     "@swc/core": "1.16.20",
     "@types/node": "24.10.1",
     "@types/supertest": "6.0.3",

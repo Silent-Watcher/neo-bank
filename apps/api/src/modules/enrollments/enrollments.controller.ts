@@ -14,7 +14,7 @@ import {
   problemDetailsSchema,
   successEnvelopeSchema,
   toJsonSchemaObject,
-} from '#src/shared/swagger/openapi.schemas.js';
+} from '#swagger/openapi.schemas.js';
 
 import type { ChallengeRequestBody, VerifyRequestBody } from './enrollments.schema.js';
 import { challengeRequestSchema, verifyRequestSchema } from './enrollments.schema.js';

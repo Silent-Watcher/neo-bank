@@ -14,7 +14,7 @@ import {
   buildStartupUrl,
   resolveStartupAddresses,
 } from './shared/http/startup-url.js';
-import { setupSwagger, SWAGGER_DOCS_PATH } from './shared/swagger/swagger.setup.js';
+import { setupSwagger, SWAGGER_DOCS_PATH } from '#swagger/swagger.setup.js';
 
 // Single source of truth for the API's externally visible base path: the
 // registrations below compose their values from these constants, and the

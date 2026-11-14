@@ -9,6 +9,10 @@ export const subpathImportAliases = [
     find: '#config/',
     replacement: fileURLToPath(new URL('../src/shared/config/', import.meta.url)),
   },
+  {
+    find: '#database/',
+    replacement: fileURLToPath(new URL('../src/shared/database/', import.meta.url)),
+  },
   { find: '#enums/', replacement: fileURLToPath(new URL('../src/shared/enums/', import.meta.url)) },
   {
     find: '#errors/',
@@ -24,4 +28,12 @@ export const subpathImportAliases = [
     replacement: fileURLToPath(new URL('../src/shared/interceptors/', import.meta.url)),
   },
   { find: '#modules/', replacement: fileURLToPath(new URL('../src/modules/', import.meta.url)) },
+  {
+    find: '#redis/',
+    replacement: fileURLToPath(new URL('../src/shared/redis/', import.meta.url)),
+  },
+  {
+    find: '#swagger/',
+    replacement: fileURLToPath(new URL('../src/shared/swagger/', import.meta.url)),
+  },
 ];

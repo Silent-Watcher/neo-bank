@@ -1,4 +1,4 @@
-import { buildRedisKey } from '#src/shared/redis/redis-keys.js';
+import { buildRedisKey } from '#redis/redis-keys.js';
 
 /**
  * Redis key for a challenge OTP: `neo-bank:enrollments:challenge:otp:<phone>`

@@ -4,11 +4,11 @@ import request from 'supertest';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 
 import { TestRedis } from './testcontainers.js';
-import type { RedisClient } from '#src/shared/redis/inject-redis.decorator.js';
-import { REDIS_CLIENT } from '#src/shared/redis/redis.constants.js';
+import type { RedisClient } from '#redis/inject-redis.decorator.js';
+import { REDIS_CLIENT } from '#redis/redis.constants.js';
 import { REDIS_CONFIG } from '#config/redis.config.js';
 import type { RedisConfig } from '#config/redis.config.js';
-import { createRedisClient } from '#src/shared/redis/redis.provider.js';
+import { createRedisClient } from '#redis/redis.provider.js';
 import { createTestApp } from './create-test-app.js';
 
 // Rate-limit HTTP e2e tests against real Redis via Testcontainers.
@@ -122,6 +122,7 @@ function createAppWithTestRedis(
   return createTestApp(undefined, {
     controllers,
     adapterTrustProxy: options?.adapterTrustProxy,
+    stubDatabaseConnect: true,
     configureModule: (builder) =>
       builder
         .overrideProvider(REDIS_CONFIG)
@@ -544,6 +545,7 @@ describe('Global rate limiting (e2e, real Redis via Testcontainers)', () => {
       });
       const app = await createTestApp(undefined, {
         controllers: [ThrottleTestController],
+        stubDatabaseConnect: true,
         configureModule: (builder) => builder.overrideProvider(REDIS_CLIENT).useValue(unreachable),
       });
 

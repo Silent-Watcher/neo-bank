@@ -23,7 +23,8 @@ vi.mock('#config/env/env.config.js', () => ({
   },
 }));
 
-import { RedisHealthIndicator } from '#src/shared/redis/redis.health.js';
+import { RedisHealthIndicator } from '#redis/redis.health.js';
+import { DatabaseHealthIndicator } from '#database/database.health.js';
 import { MemoryHealthIndicator } from '#src/shared/memory-protection/memory.health.indicator.js';
 import { HealthController } from './health.controller.js';
 
@@ -45,6 +46,14 @@ describe('HealthController', () => {
       redis: { status: 'up' },
     }),
   };
+  const databaseHealth = {
+    check: vi.fn<() => Promise<HealthIndicatorResult>>().mockResolvedValue({
+      postgres: { status: 'up' },
+    }),
+    checkReady: vi.fn<() => Promise<HealthIndicatorResult>>().mockResolvedValue({
+      postgres: { status: 'up' },
+    }),
+  };
   const memoryHealth = {
     check: vi.fn<() => HealthIndicatorResult>().mockResolvedValue({
       memory: { status: 'up' },
@@ -63,6 +72,7 @@ describe('HealthController', () => {
       providers: [
         { provide: HealthCheckService, useValue: health },
         { provide: RedisHealthIndicator, useValue: redisHealth },
+        { provide: DatabaseHealthIndicator, useValue: databaseHealth },
         { provide: MemoryHealthIndicator, useValue: memoryHealth },
         { provide: I18nService, useValue: i18n },
       ],
@@ -72,15 +82,17 @@ describe('HealthController', () => {
   });
 
   describe('liveness (GET /health)', () => {
-    it('includes only the Redis indicator — memory protection must not affect liveness', async () => {
+    it('includes the Redis and PostgreSQL indicators — memory protection must not affect liveness', async () => {
       // Arrange & Act
       await controller.check();
 
       // Assert
       const indicators = health.check.mock.calls[0][0];
-      expect(indicators).toHaveLength(1);
+      expect(indicators).toHaveLength(2);
       await indicators[0]();
+      await indicators[1]();
       expect(redisHealth.check).toHaveBeenCalledTimes(1);
+      expect(databaseHealth.check).toHaveBeenCalledTimes(1);
       expect(memoryHealth.check).not.toHaveBeenCalled();
     });
 
@@ -94,17 +106,20 @@ describe('HealthController', () => {
   });
 
   describe('readiness (GET /health/ready)', () => {
-    it('includes the strict Redis indicator and the memory indicator', async () => {
+    it('includes the strict Redis, strict PostgreSQL, and memory indicators', async () => {
       // Arrange & Act
       await controller.checkReady();
 
       // Assert
       const indicators = health.check.mock.calls[0][0];
-      expect(indicators).toHaveLength(2);
+      expect(indicators).toHaveLength(3);
       await indicators[0]();
       await indicators[1]();
+      await indicators[2]();
       expect(redisHealth.checkReady).toHaveBeenCalledTimes(1);
       expect(redisHealth.check).not.toHaveBeenCalled();
+      expect(databaseHealth.checkReady).toHaveBeenCalledTimes(1);
+      expect(databaseHealth.check).not.toHaveBeenCalled();
       expect(memoryHealth.check).toHaveBeenCalledTimes(1);
     });
 

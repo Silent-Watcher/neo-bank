@@ -3,8 +3,9 @@ import { minutes, seconds, ThrottlerModule } from '@nestjs/throttler';
 
 import type { RateLimitConfig } from '#config/rate-limit.config.js';
 import { RATE_LIMIT_CONFIG } from '#config/rate-limit.config.js';
-import { RedisModule, type RedisClient } from '#src/shared/redis/redis.module.js';
-import { REDIS_CLIENT } from '#src/shared/redis/redis.constants.js';
+import { RedisModule } from '#redis/redis.module.js';
+import type { RedisClient } from '#redis/redis.module.js';
+import { REDIS_CLIENT } from '#redis/redis.constants.js';
 import { RedisThrottlerStorage } from './redis-throttler.storage.js';
 
 /**
