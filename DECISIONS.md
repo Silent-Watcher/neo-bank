@@ -1342,3 +1342,68 @@ The non-blocking startup semantics from the original decision were amended durin
 - DECISIONS.md ADR-004 (env validation), ADR-012/013 (Redis integration model), ADR-016/025 (Testcontainers), ADR-026 (health semantics)
 - Official documentation: https://mikro-orm.io/docs, https://mikro-orm.io/docs/usage-with-nestjs, https://docs.nestjs.com/data/mikroorm
 - `prompts/_040-mikroorm-postgres-integration.md`
+
+---
+
+## ADR-028: Use pgAdmin 4 as the Development-Only PostgreSQL Web UI
+
+- **Status:** Accepted
+- **Date:** 2026-11-15
+
+### Context
+
+PostgreSQL is now a first-class part of the stack (ADR-027) and schema work happens through explicit migrations reviewed by developers. Redis already has a development web UI (Redis Insight, bundled in the dev Stack image, ADR-020); PostgreSQL has no equivalent — developers inspect and exercise the database through raw `psql` and the host port. As entities and migrations arrive, a browser-based PostgreSQL client (browsing schemas, running exploratory queries, following migration results) becomes the natural companion tool. The tool must follow the same pattern as the existing development-only services: defined exclusively in the dev Compose stack, loopback-bound, version-pinned, and completely absent from production. It must reuse the existing PostgreSQL service — never a second database instance — and register it automatically so a fresh setup needs no manual server registration in the UI.
+
+### Decision
+
+Adopt **pgAdmin 4** (`dpage/pgadmin4:9.19`, version-pinned; the latest stable release at adoption time, digest `sha256:3591b3d02910dcd817dec6fcaa681c278ba6966945283dd0ea0042731c330c83`, identical to `latest`/`9.19.0`/`2026-10-27-2` on Docker Hub) as the development-only PostgreSQL web UI:
+
+- **Development stack only:** the service is defined exclusively in `docker/compose.app.dev.yml` (`pgadmin` service); the production Compose files cannot inherit it. Host port `${PGADMIN_PORT:-5050}` maps to the image-default internal port 80 and is explicitly bound to `127.0.0.1` (SEC-03 convention: dev infrastructure stays off the LAN). The shared `x-logging` anchor applies.
+- **Reuses the existing PostgreSQL:** the registered server points at the compose service name `postgres:5432` with `POSTGRES_USER`/`POSTGRES_PASSWORD`/`POSTGRES_DB` from the same interpolation source the `postgres` service uses — one source of truth, no duplicated credentials. No second PostgreSQL instance exists.
+- **Automatic server registration via a rendered `servers.json`:** pgAdmin does not substitute environment variables in `servers.json` (upstream gap, pgadmin-org/pgadmin4#8663), so the container entrypoint is prepended with a minimal Python render step (`docker/pgadmin/render_servers.py`, mounted read-only) that replaces `${VAR}` placeholders in `docker/pgadmin/servers.json.template` (mounted read-only) with the container's environment variables, validates the resulting JSON, and then execs the image's original entrypoint. A missing variable or invalid JSON aborts startup with a clear error. This is the only justified deviation from "no custom entrypoints": the official mechanism cannot inject the password.
+- **No master-password prompt:** `PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED=False` suppresses the master-password dialog so the flow after login is prompt-free; the server password comes from the rendered definition.
+- **Persistence:** a named volume `pgadmin_data` mounted at `/var/lib/pgadmin` (the image's documented data directory) stores pgAdmin's configuration database, so the registration and any user-created UI state survive container recreation. Server definitions load from `servers.json` on first launch (no `PGADMIN_REPLACE_SERVERS_ON_STARTUP`), so manual UI changes persist afterwards.
+- **Startup ordering:** `depends_on.postgres.condition: service_healthy` reuses the existing `pg_isready` healthcheck — PostgreSQL healthy → pgAdmin starts. Nothing depends on pgAdmin: like Redis Insight (ADR-020) and MockServer (ADR-024), it is a manual development tool, and no application traffic flows through it.
+- **Credentials:** the initial pgAdmin administrator (`PGADMIN_DEFAULT_EMAIL` / `PGADMIN_DEFAULT_PASSWORD`) is required interpolation configuration (`:?` error syntax) documented in `docker/env/.env.docker.example` and populated only in the gitignored `docker/env/.env.docker.dev`; nothing is hardcoded in tracked files.
+- **Not a test dependency:** Testcontainers-based tests (ADR-016/025) never use the dev Compose stack; pgAdmin has no role in any test tier.
+
+### Alternatives Considered
+
+- _Redis Insight–style zero-config bundled UI:_ not available for PostgreSQL in this stack; a separate image is required. Rejected (non-option).
+- _Postgres-compatible lightweight web clients (Adminer, pgweb, dbgate):_ smaller images, but pgAdmin is the reference PostgreSQL client with the deepest schema/migration/internals support, official container documentation, and dedicated maintenance from the PostgreSQL project; the alternatives trade capability and documentation quality for footprint. Rejected.
+- _Plain `servers.json` without the render step (manual password entry):_ registration would still be automatic, but the user must type the password once per fresh volume and the credentials would not flow from the single interpolation source. Rejected — the render step is two lines of entrypoint and removes the manual step without adding dependencies.
+- _Declarative replacement on every start (`PGADMIN_REPLACE_SERVERS_ON_STARTUP=True`):_ would overwrite manual UI edits on every recreation. Rejected: user-created state must survive recreations.
+
+### Consequences and Trade-offs
+
+**Positive**
+
+- Zero-manual-step PostgreSQL access after `pnpm docker:app:dev`: login → the "Neo Bank Development PostgreSQL" server is registered and connects.
+- Strictly development-only: production Compose files, images, and configuration are unchanged; the UI is loopback-only.
+- One credential source: the registered server uses the exact `POSTGRES_*` values the `postgres` service runs with.
+- Alloy (ADR-022) collects the container's stdout automatically — no extra wiring.
+
+**Negative**
+
+- One additional development container (~500 MB image, moderate Python memory footprint).
+- The entrypoint override and the two mounted files are custom surface to maintain across pgAdmin upgrades.
+- If `POSTGRES_PASSWORD` rotates, pgAdmin's stored connection password goes stale until the definition is re-rendered or re-entered (documented troubleshooting).
+- `PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED=False` matters only on fresh setups: switching the setting later clears saved passwords (pgAdmin semantics).
+
+### Security Assessment
+
+Development-only exposure: the UI is bound to `127.0.0.1` and never defined in production Compose files; the initial administrator credentials are required interpolation values kept out of tracked files, and no real credential literals are committed anywhere. Authentication stays enabled (no `PGADMIN_CONFIG_*` bypass of login). The rendered `servers.json` is transient container-local scratch (`/tmp`) and never reaches tracked files; pgAdmin persists the imported connection password inside its configuration database on the `pgadmin_data` volume by design (development-only credentials; deleting the volume purges them). No privileged mode, no added capabilities, both mounts read-only. PostgreSQL reachability is unchanged: containers already share the compose network, and the host-side port binding is untouched.
+
+### Operational Implications
+
+- Start/stop with the existing dev-stack commands (`pnpm docker:app:dev` / `docker:app:dev:down`); pgAdmin is reachable at `http://localhost:5050` (default `PGADMIN_PORT`).
+- Troubleshooting: a failed render (missing `POSTGRES_*` variable) aborts startup with an explicit error; a stale password after a `POSTGRES_PASSWORD` change is fixed by recreating the container (fresh definitions only load on a fresh volume) or re-entering the password in the UI.
+- The dev orchestrator (`docker/compose.yml`) includes the dev app stack unchanged, so `pnpm docker:dev` brings pgAdmin up as well.
+
+### References
+
+- `docker/compose.app.dev.yml` (pgadmin service, pgadmin_data volume), `docker/pgadmin/` (servers.json.template, render_servers.py), `docker/env/.env.docker.example` (PGADMIN_PORT, PGADMIN_DEFAULT_EMAIL, PGADMIN_DEFAULT_PASSWORD)
+- `docs/docker.md` (pgAdmin section, ports table), `docs/current-state.md` (infrastructure list)
+- Related ADRs: ADR-020 (Redis Insight precedent), ADR-022 (Alloy log collection), ADR-024 (development-only service precedent), ADR-027 (PostgreSQL in the stack)
+- Official documentation: https://www.pgadmin.org/docs/pgadmin4/latest/container_deployment.html, image: https://hub.docker.com/r/dpage/pgadmin4, upstream env-substitution gap: https://github.com/pgadmin-org/pgadmin4/issues/8663
+- `prompts/_044-pgadmin-dev-infrastructure.md`

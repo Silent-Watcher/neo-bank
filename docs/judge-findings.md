@@ -1464,3 +1464,94 @@ Review scope: identical to Wave 13 (database module, config layer, health wiring
 **Wave 14 summary:** 3 findings — 2 LOW resolved (generic health messages; pool-level connection timeout), 1 informational awaiting developer approval (loopback dev port bindings). Redis indicator parity flagged for the same decision. No Critical/High/Medium; credential flow, injection, retry bounds, test isolation, and supply chain verified clean.
 
 **Wave 14 resolutions (developer-approved):** SEC-01 parity applied — `RedisHealthIndicator` now reports only the generic localized `health.redisUnavailable` message with raw errors logged server-side (specs updated; e2e asserts statuses only, unaffected). SEC-03 applied — dev Compose postgres/redis/insight host ports bound to `127.0.0.1` (MockServer precedent). Final security status after remediation: all findings Resolved; re-review of the two LOW remediations is available on request — the changes follow the reviewer's own recommendations verbatim and are covered by updated specs.
+
+---
+
+## Wave 6 — ADR-028 pgAdmin dev-infrastructure review (2026-11-15)
+
+Context: code-reviewer gate over the ADR-028 implementation (compose service,
+render script, template, env files, docs, ADR). Verdict CHANGES_REQUIRED with
+three warnings (CR-01–CR-03) and two suggestions (CR-04–CR-05). All five
+findings investigated and accepted; none changes the approved design
+(ADR-028), so per the root AGENTS.md "minor implementation details" exception
+they were applied directly, re-validated at runtime (recreated container,
+render + registration re-check), and re-reviewed by the same reviewer.
+
+### F1 — Credential values interpolated into JSON without escaping (CR-01)
+
+- **Status:** Resolved (2026-11-15)
+- **Severity:** Medium (reviewer warning)
+- **Category:** Correctness / Edge Case
+- **Locations:** `docker/pgadmin/render_servers.py` (substitution), `docker/pgadmin/servers.json.template` (`Password` placeholder)
+- **Technical explanation:** the substitution inserted raw environment values into JSON text and only validated afterwards. A `POSTGRES_PASSWORD` containing `"` or `\` — permitted by the documented interpolation constraint, which excludes only `@ : / ? # %` for `DATABASE_URL` — would either break the JSON with a raw traceback or, in a contrived embedding, silently register a truncated password or altered keys.
+- **Failure scenario:** a developer picks a password the env-file guidance permits but that contains a double quote → the pgadmin container dies at startup with a `JSONDecodeError` traceback instead of the documented explicit error; the silent variant registers a broken connection discovered only at first use.
+- **Judge recommendation:** escape every substituted value for JSON string context (`json.dumps(value)[1:-1]`) and wrap `json.loads` in try/except re-raising as `SystemExit` naming the template.
+- **Investigation results:** valid. The documented password constraint exists for `DATABASE_URL` interpolation and does not exclude `"`/`\`, so the render must be robust for any value. Escaping is a pure robustness fix inside the approved Option-A mechanism: values still flow exclusively from the environment and the rendered output remains JSON.
+- **Agreed resolution:** applied — substitutions are JSON-escaped via `json.dumps(...)[1:-1]`; `json.JSONDecodeError` is re-raised as `SystemExit` with the parse error; the write is guarded against `OSError` with the destination path in the message (no secret content is ever printed).
+
+### F2 — Prompt record referenced by ADR-028 did not exist (CR-02)
+
+- **Status:** Resolved (2026-11-15)
+- **Severity:** Medium (reviewer warning)
+- **Category:** Correctness (project process)
+- **Locations:** `DECISIONS.md` ADR-028 References; `prompts/_044-pgadmin-dev-infrastructure.md`
+- **Technical explanation:** the ADR referenced the feature record before it was created (the record was scheduled for the finalization phase of the same task, so the reference dangled at review time).
+- **Failure scenario:** committed ADR pointing at a nonexistent file; the feature's record missing from the deliverable.
+- **Judge recommendation:** create the record before committing.
+- **Investigation results:** valid — record creation had not happened yet at review time.
+- **Agreed resolution:** applied — `prompts/_044-pgadmin-dev-infrastructure.md` created in the same task with the original request, phases, decisions, and validation results.
+
+### F3 — Contradictory claims about password persistence in the named volume (CR-03)
+
+- **Status:** Resolved (2026-11-15)
+- **Severity:** Medium (reviewer warning)
+- **Category:** Correctness (documentation)
+- **Locations:** `DECISIONS.md` ADR-028 Security Assessment; `docker/compose.app.dev.yml` (`PGADMIN_SERVER_JSON_FILE` comment); contradicted by `docs/docker.md` (stale-password troubleshooting)
+- **Technical explanation:** the rendered `/tmp` file never reaches the volume, but pgAdmin imports the server definition — including the password — into its configuration database (SQLite under `/var/lib/pgadmin`) on first launch; that is exactly how registration survives recreation. The ADR/compose wording ("keeps the password out of the persistent volume") was therefore wrong and inconsistent with `docs/docker.md`'s stale-password note.
+- **Failure scenario:** a future reader reasons about volume lifecycle (backups, `down -v` semantics) from the wrong fact.
+- **Judge recommendation:** reword the ADR Security Assessment and compose comment: the rendered file is transient container-local scratch, and pgAdmin persists the imported password in its config DB on the volume by design.
+- **Investigation results:** valid; `docs/docker.md` already stated the correct fact — the ADR/compose wording was inaccurate, not the design.
+- **Agreed resolution:** applied — both wordings corrected to the factual model (transient render file; imported password persisted inside the configuration database on `pgadmin_data` by design; deleting the volume purges it).
+
+### F4 — Render script hardcodes the output path, contradicting its documented contract (CR-04)
+
+- **Status:** Resolved (2026-11-15)
+- **Severity:** Low (reviewer suggestion)
+- **Category:** Syntax / Code Quality
+- **Locations:** `docker/pgadmin/render_servers.py` (`RENDERED_PATH`); `docker/compose.app.dev.yml` (`PGADMIN_SERVER_JSON_FILE`)
+- **Technical explanation:** the docstring claimed the file is written "to the path `PGADMIN_SERVER_JSON_FILE` points at" while the path was hardcoded, duplicating the compose value in a second place; changing the compose variable would leave pgAdmin reading a nonexistent file with no render error.
+- **Failure scenario:** latent misconfiguration after a path change — auto-registration silently skipped.
+- **Judge recommendation:** derive the path from `os.environ.get('PGADMIN_SERVER_JSON_FILE', '/tmp/servers.json')`.
+- **Investigation results:** valid; restores the documented contract and a single source of truth for the path.
+- **Agreed resolution:** applied — the script reads `PGADMIN_SERVER_JSON_FILE` with the `/tmp/servers.json` default, and an unwritable destination aborts with an explicit error.
+
+### F5 — `.env.docker.dev` comment cites variables not present in the file (CR-05)
+
+- **Status:** Resolved (2026-11-15)
+- **Severity:** Low (reviewer suggestion)
+- **Category:** Syntax / Code Quality
+- **Locations:** `docker/env/.env.docker.dev` (pgAdmin comment block; gitignored file)
+- **Technical explanation:** the comment said the omitted `PGADMIN_PORT` matches `REDIS_INSIGHT_PORT/MOCKSERVER_PORT` "above", but those variables are not defined in the dev file (they also rely on compose defaults).
+- **Failure scenario:** developer confusion about the file's structure.
+- **Judge recommendation:** reword or drop the comparison.
+- **Investigation results:** valid.
+- **Agreed resolution:** applied — comment reworded to state the omission without implying the variables are defined in the file.
+
+**Wave 6 summary:** 5 findings — 3 Medium resolved (JSON escaping, missing prompt record, volume/password wording contradiction), 2 Low resolved (path contract, env-comment wording). No Critical/High. The approved ADR-028 design is unchanged; fixes were re-validated by recreating the container and re-checking the render and registration, and the revised render script was re-reviewed.
+
+### Wave 6 security review (2026-11-15) — SECURITY_APPROVED_WITH_INFORMATIONAL_FINDINGS
+
+Independent security gate over the remediated implementation. Four
+informational findings, none with a realistic exploit path beyond an already
+compromised host or container; positively confirmed sound: no credential
+literals in any tracked file, injection through credential values into the
+render not possible (single-pass `re.sub` with literal-function replacement +
+JSON-string escaping + re-validation), shell injection through the static
+`sh -c` entrypoint not possible, and all render failure paths are
+secret-free (relevant because Alloy/ADR-022 collects the container's stdout
+into Loki).
+
+- **SEC-01 (informational, CWE-494):** image pinned by tag only; the verified digest is recorded in ADR-028 as documentation but not enforced at pull time. **Won't Fix (convention):** every service in the stack is tag-pinned only; digest-pinning compose references repo-wide is a separate developer decision, not a pgAdmin-specific gap. Recorded as an optional stack-wide hardening candidate.
+- **SEC-02 (informational, CWE-256):** `PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED=False` removes the user-chosen key encrypting saved server passwords, so at-rest protection of the imported password on `pgadmin_data` degrades to filesystem access. **Won't Fix (accepted trade-off):** UI authentication stays enabled; an attacker with volume read access already has the same password in plaintext via `docker inspect` or the postgres container; dev-only credentials; deleting the volume purges them. Removing the override would reintroduce a manual prompt (the UX the design rejected).
+- **SEC-03 (informational, CWE-312):** the dev PostgreSQL password exists in plaintext in the container environment, the transient `/tmp/servers.json`, and (encrypted) in pgAdmin's config DB on the volume. **Won't Fix (accepted, documented):** mirrors the accepted exposure of every other dev service carrying the same credentials in env; container is non-root, mounts read-only, the rendered file is per-container scratch, and ADR-028/`docs/docker.md` document the volume-purge path.
+- **SEC-04 (informational, CWE-521):** no password-generation guidance for `PGADMIN_DEFAULT_PASSWORD` in the tracked example file, while the admin login is reachable from sibling containers (lateral-movement hardening). **Resolved (2026-11-15):** the example-file comment now carries the same `openssl rand -hex 24` generation hint as `POSTGRES_PASSWORD` and notes sibling-container reachability.

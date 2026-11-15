@@ -195,3 +195,14 @@ requires developer approval before any ADR is created.
 - **Impact:** Local dev environment only (no repository change beyond the CR-01 env fix).
 - **Reversibility:** Re-running `ALTER USER` with any value.
 - **ADR Recommendation:** No — local operations decision, recorded for traceability.
+
+### 8. pgAdmin server-definition render target: `/tmp` + documented `PGADMIN_SERVER_JSON_FILE` override (ADR-028 task)
+
+- **Context:** ADR-028's approved mechanism renders `servers.json` at container startup from a mounted template. pgAdmin's default read path is `/pgadmin4/servers.json`, but the image runs as uid 5050 and that directory is not writable by it — the first runtime boot failed with `PermissionError` (judge Wave 6 CR-04 later also tied the path to the documented override contract).
+- **Decision:** Render to `/tmp/servers.json` (per-container scratch) and set the documented `PGADMIN_SERVER_JSON_FILE=/tmp/servers.json` environment variable; the render script derives its output path from that variable with `/tmp/servers.json` as the default (single source of truth).
+- **Reasoning:** `/tmp` is writable by the container user, exists in the image, and is per-container ephemeral — the rendered file (which contains the dev PostgreSQL password) never lands in tracked files or in the `pgadmin_data` volume; pgAdmin's own first-launch import into its configuration database on the volume remains the only persisted copy, which `docs/docker.md` documents. Alternatives rejected on impact: running the container as root (widens privileges for no benefit), a tmpfs mount for a writable `/pgadmin4` path (extra compose machinery for the same outcome), and writing into the volume (would persist a second, plain-text password copy).
+- **Alternatives:** Render directly to `/pgadmin4/servers.json` via a root-writable mount or `user: root` (privilege widening — rejected); tmpfs mount at `/pgadmin4/rendered` + `PGADMIN_SERVER_JSON_FILE` (equivalent outcome, more compose surface — rejected); write the rendered file into the persistent volume (second plain-text credential copy — rejected).
+- **Trade-offs:** The definition is re-rendered on every container start (idempotent and intentional); the file lives in container scratch, invisible to host-side inspection of the volume.
+- **Impact:** `docker/pgadmin/render_servers.py` (default path + `PGADMIN_SERVER_JSON_FILE` handling), `docker/compose.app.dev.yml` (one environment line).
+- **Reversibility:** Trivial — change `DEFAULT_RENDERED_PATH`/the compose variable together (they share one source of truth by contract).
+- **ADR Recommendation:** No — implementation detail within the approved ADR-028 mechanism (the ADR never specified the render target); recorded here and in the Wave 6 tracker entry.

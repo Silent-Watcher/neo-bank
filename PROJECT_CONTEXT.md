@@ -105,7 +105,8 @@ Core contracts:
   `docker/compose.prod.all.yml`, interpolation env files in `docker/env/`,
   per-app images via `turbo prune`), PostgreSQL + Redis; dev Redis is Redis
   Stack with bundled Redis Insight :8001 (ADR-020); dev-only MockServer :1080
-  for resilience testing against simulated downstream failures (ADR-024).
+  for resilience testing against simulated downstream failures (ADR-024);
+  dev-only pgAdmin :5050 for PostgreSQL administration (ADR-028).
   Ops: `docs/docker.md`.
 - **Database:** PostgreSQL persistence layer in the API (MikroORM v7,
   ADR-027) — infrastructure level only (no entities yet); the dev/prod
@@ -140,7 +141,7 @@ Core contracts:
 | `apps/*/ONBOARDING.md`                      | Developer onboarding, stack tables, env vars, commands                    |
 | `docs/architecture.md`                      | Detailed architecture, boundaries, workspace relationships                |
 | `docs/current-state.md`                     | Feature/state snapshot (verified per feature)                             |
-| `DECISIONS.md`                              | ADR-001…ADR-027, all Accepted                                             |
+| `DECISIONS.md`                              | ADR-001…ADR-028, all Accepted                                             |
 | `docs/docker.md`                            | Docker stacks: setup, env files, commands                                 |
 | `docs/observability/README.md`              | Monitoring stack operations                                               |
 | `docs/observability/manual-testing.md`      | Reproducible monitoring verification scenarios                            |

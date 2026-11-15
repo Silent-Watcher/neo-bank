@@ -2,8 +2,9 @@
 
 Docker support for the monorepo: development environments with hot reloading
 and production images for all three applications, plus PostgreSQL and Redis
-as infrastructure services and a development-only MockServer for resilience
-testing (ADR-024).
+as infrastructure services, a development-only MockServer for resilience
+testing (ADR-024), and a development-only pgAdmin for PostgreSQL
+administration (ADR-028).
 
 **Note on automated testing (ADR-016):** Integration and e2e tests use
 Testcontainers (`apps/api/test/testcontainers.ts`) to start isolated
@@ -20,11 +21,12 @@ development Compose stack remains for local development
 | `apps/<app>/Dockerfile.prod`           | Production image (multi-stage, non-root, minimal)                                                               |
 | `apps/<app>/Dockerfile.*.dockerignore` | Per-Dockerfile build-context ignores (used _instead of_ the root file, not merged with it)                      |
 | `docker/compose.yml`                   | Development orchestrator: `include:` of the dev app stack and the monitoring stack into one `docker compose up` |
-| `docker/compose.app.dev.yml`           | Dev app stack: hot-reloading apps plus PostgreSQL, Redis, and MockServer (dev-only, ADR-024) (`neo-bank-dev`)   |
+| `docker/compose.app.dev.yml`           | Dev app stack: hot-reloading apps plus PostgreSQL, Redis, MockServer, pgAdmin (ADR-024/028) (`neo-bank-dev`)    |
 | `docker/compose.app.prod.yml`          | Production app stack: hardened images, internal networks (`neo-bank-prod` project)                              |
 | `docker/compose.prod.all.yml`          | Production orchestrator: `include:` of the production app stack and the monitoring stack                        |
 | `docker/compose.monitoring.yml`        | Monitoring stack: Grafana, Loki, Alloy (`neo-bank-monitoring` project)                                          |
 | `monitoring/`                          | Config as code for the monitoring stack (Alloy pipeline, Loki, Grafana provisioning)                            |
+| `docker/pgadmin/`                      | pgAdmin config as code (servers.json.template + render_servers.py, ADR-028)                                     |
 | `.dockerignore`                        | Root build-context ignore                                                                                       |
 | `docker/env/.env.docker.example`       | Template for the interpolation files below                                                                      |
 | `docker/env/.env.docker.dev`           | Interpolation values for the development Compose files (gitignored)                                             |
@@ -123,6 +125,7 @@ operational guide.
 | Redis         | 6379                 | `${REDIS_PORT}` (default 6379)             | **no** (internal network only)           |
 | Redis Insight | 8001                 | `${REDIS_INSIGHT_PORT}` (default 8001)     | **no** (development only)                |
 | MockServer    | 1080                 | `127.0.0.1:${MOCKSERVER_PORT}` (def. 1080) | **no** (development only)                |
+| pgAdmin       | 80                   | `127.0.0.1:${PGADMIN_PORT}` (def. 5050)    | **no** (development only)                |
 | Grafana       | 3000                 | `127.0.0.1:${GRAFANA_PORT}` (default 3002) | **no** (monitoring stack; loopback only) |
 | Loki          | 3100                 | `127.0.0.1:${LOKI_PORT}` (default 3100)    | **no** (monitoring stack; loopback only) |
 
@@ -292,6 +295,59 @@ ADR-016): MockServer is a manual, interactive development tool. The
 monitoring stack's Alloy collects its stdout like any other dev container
 (ADR-022).
 
+## pgAdmin (development only)
+
+The development stack runs [pgAdmin 4](https://www.pgadmin.org/)
+(`dpage/pgadmin4:9.19`, version-pinned, ADR-028), a development-only web UI
+for administering the dev stack's PostgreSQL. The service is defined only in
+`docker/compose.app.dev.yml`; the production Compose files cannot inherit it,
+nothing depends on it, and the automated tests never use the dev Compose
+stack (ADR-016).
+
+**Run / stop** — pgAdmin is part of the dev app stack, so the usual commands
+bring it up and tear it down; it starts only after PostgreSQL is healthy
+(`depends_on` `service_healthy`, reusing the `postgres` service's existing
+`pg_isready` healthcheck):
+
+```sh
+pnpm docker:app:dev        # dev app stack (includes pgAdmin)
+pnpm docker:dev            # dev orchestrator: app stack + monitoring
+pnpm docker:app:dev:down   # stop the dev app stack
+pnpm docker:dev:down       # stop the dev orchestrator
+```
+
+**Addresses** — the UI is at `http://localhost:${PGADMIN_PORT}` (default
+`5050`; the variable is documented in `docker/env/.env.docker.example`), bound
+to `127.0.0.1` like the other development tools (internal port 80 is the
+image default). Sign in with `PGADMIN_DEFAULT_EMAIL` and
+`PGADMIN_DEFAULT_PASSWORD` from `docker/env/.env.docker.dev` — both are
+required (no defaults).
+
+**Automatic server registration** — pgAdmin does not substitute environment
+variables in `servers.json` (upstream gap pgadmin-org/pgadmin4#8663), so the
+container entrypoint is prepended with a render step
+(`docker/pgadmin/render_servers.py`): it replaces the `${POSTGRES_DB}` /
+`${POSTGRES_USER}` / `${POSTGRES_PASSWORD}` placeholders in
+`docker/pgadmin/servers.json.template` with the same interpolation values the
+`postgres` service uses (single source of truth), validates the result as
+JSON, and writes the file pgAdmin reads on first launch. A "Neo Bank
+Development PostgreSQL" server (group "Development", host `postgres`, port
+5432, maintenance DB from `POSTGRES_DB`) then appears in the UI without
+manual setup. `PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED` is set to `False`
+so pgAdmin does not prompt for a master password (the server password comes
+from the rendered definition).
+
+**Persistence and troubleshooting** — pgAdmin's configuration lives in the
+named `pgadmin_data` volume (mounted at `/var/lib/pgadmin`); definitions load
+on first launch only (no `PGADMIN_REPLACE_SERVERS_ON_STARTUP`), so manual UI
+edits persist across restarts. Two known failure modes:
+
+- A missing interpolation variable aborts container startup with an explicit
+  render error instead of registering a broken server definition.
+- After rotating `POSTGRES_PASSWORD`, the password stored in pgAdmin's
+  configuration database goes stale — update it in the server definition or
+  delete the volume to re-render from the template.
+
 ## Data Persistence
 
 - **PostgreSQL** persists in a named Docker volume
@@ -302,6 +358,9 @@ monitoring stack's Alloy collects its stdout like any other dev container
   stored in Redis is lost when its container is recreated. This is
   intentional: nothing in the current architecture relies on Redis data
   surviving a restart.
+- **pgAdmin** (development only) persists its configuration database in a
+  named Docker volume (`pgadmin_data`, mounted at `/var/lib/pgadmin`), so
+  registered server definitions and UI settings survive container recreation.
 
 In production Redis requires authentication (`--requirepass` with
 `REDIS_PASSWORD` from its interpolation file, passed to the API through its
