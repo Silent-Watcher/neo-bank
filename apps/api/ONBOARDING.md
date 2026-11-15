@@ -16,9 +16,13 @@ failures are deliberately generic and indistinguishable; both endpoints
 have rate limits aligned with the OTP window). Delivery via SMS and the
 registration steps after verification are not implemented yet. A PostgreSQL
 persistence layer (MikroORM v7, [ADR-027](../../DECISIONS.md)) is integrated
-at infrastructure level — connection, health checks, and migrations — but it
-holds no entities yet; Redis remains the only store feature code currently
-uses.
+at infrastructure level — connection, health checks, and migrations — and a
+shared abstract `BaseEntity` ([ADR-029](../../DECISIONS.md)) defines the
+columns every future entity inherits; no feature entities exist yet, and
+Redis remains the only store feature code currently uses. The UTC-first
+date/time storage policy has its own guide:
+[../../docs/utc-datetime.md](../../docs/utc-datetime.md)
+([ADR-030](../../DECISIONS.md)).
 
 Within the monorepo it is the `apps/api` workspace; the web and admin
 frontends do not call it yet. Architectural context:
@@ -37,6 +41,7 @@ feature coverage is minimal.
 | Zod 4                                    | Validation for HTTP input and environment variables                                                     |
 | @nestjs/config                           | Configuration namespaces via `registerAs` + `ConfigService`                                             |
 | @nestjs/i18n                             | Bilingual en/fa translations: locale resolution, JSON catalogs ([ADR-021](../../DECISIONS.md))          |
+| nestjs-cls 7                             | Per-request AsyncLocalStorage context (actor store) via `ClsModule` ([ADR-031](../../DECISIONS.md))     |
 | Pino / nestjs-pino                       | Structured logging; request-scoped context, header redaction                                            |
 | @nestjs/terminus                         | `/health` (liveness) and `/health/ready` (readiness) endpoints                                          |
 | ioredis 6                                | Redis client behind the shared `RedisService` ([ADR-012](../../DECISIONS.md)/[013](../../DECISIONS.md)) |
@@ -158,10 +163,13 @@ src/
     app/                   # AppModule wiring, health check, Problem Type docs page
     enrollments/           # first feature module (OTP endpoint)
   shared/
+    actor-context/         # per-request actor context (ADR-029/031): nestjs-cls
+                           # ClsModule + typed actor-store bridge for audit attribution
     config/                # config.ts wiring, env/ Zod schemas, registerAs factories
     database/              # global DatabaseModule (ADR-027): MikroORM v7 PostgreSQL
                            # connection, health indicator, shared ORM options, CLI
-                           # config, migrations/
+                           # config, migrations/, shared BaseEntity (base.entity.ts)
+    datetime/              # UTC boundary helper: calendarDayUtcRange (ADR-030)
     enums/                 # AppEnv enum
     errors/                # AppHttpException, ErrorCode, Problem Details helpers
     filters/               # global Problem Details error filter
@@ -281,8 +289,13 @@ tooling (lint, format, Turbo tasks) comes from the root; see
   successful boot, a PostgreSQL outage degrades `/health` (HTTP 200) and
   `/health/ready` returns 503. See `src/shared/database/` and
   the API [AGENTS.md](./AGENTS.md) database rules.
+- **Timestamps are UTC (ADR-030):** `timestamptz(3)` columns store absolute
+  instants, PostgreSQL containers run pinned to `TZ: UTC`, and user-timezone
+  conversion happens only at the presentation boundary via IANA zones
+  (`calendarDayUtcRange` for calendar-day ranges) — see
+  [../../docs/utc-datetime.md](../../docs/utc-datetime.md).
 - All ADRs ([../../DECISIONS.md](../../DECISIONS.md)) ADR-001 through
-  ADR-027 are **Accepted** and implemented — follow them; don't
+  ADR-030 are **Accepted** and implemented — follow them; don't
   reintroduce alternatives.
 
 ## 8. Useful Commands

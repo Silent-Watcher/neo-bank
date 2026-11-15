@@ -217,3 +217,36 @@ requires developer approval before any ADR is created.
 - **Impact:** `apps/api/src/shared/{filters,interceptors,logging}`, `apps/admin/src/main.tsx`, `README.md` (scan command + admin config note), `prompts/_045`.
 - **Reversibility:** Trivial — annotations only; re-introducing the raw idioms is a one-line revert each.
 - **ADR Recommendation:** No — tool usage and annotation-level fixes; no architectural decision.
+
+### 10. Explicit string-mode `BigIntType` instances instead of the `type: 'bigint'` string form (shared BaseEntity task)
+
+- **Context:** The BaseEntity needs BIGINT columns whose TypeScript representation is `string`. MikroORM 7.2.9 offers the string form (`type: 'bigint'`) and the documented explicit form (`type: new BigIntType('string')`). Source verification showed the string form's runtime hydration mode depends on metadata the pipelines provide: `ReflectMetadataProvider` skips `runtimeType` inference when an explicit type is set, and the vitest transformer (oxc via Vite 8) emits no `design:type` for initialized fields — the metadata-unit test failed with hydration mode resolving to JS `bigint` for the audit columns, which would have corrupted the string contract at runtime.
+- **Decision:** Declare every BIGINT property (`id`, `createdBy`, `updatedBy`) with an explicit fresh `new BigIntType('string')` instance (plus explicit `autoincrement: true` on the PK, since the base `bigserial` inference path checks `columnTypes[0] === 'bigint'`, which the explicit type bypasses), and assert the resolved runtime type in the metadata spec.
+- **Reasoning:** The explicit instance is deterministic across tsc, SWC (production build), and oxc (test transform) regardless of `design:type` emission, is the pattern the version-matched official documentation shows for string-mapped BIGINTs, and converts every direction explicitly (including `toJSON`/`fromJSON` validation). Per-property instances avoid the type object's discovery-mutated state (`customType.meta`/`.prop`) being shared across three properties.
+- **Alternatives:** `type: 'bigint'` + relying on the discovery mode-sync for the PK and on design:type for the rest (transformer-dependent — failed the metadata test — rejected); `declare`-keyword field declarations (swc/oxc drop decorated declarations entirely — rejected); `columnType: 'bigint'` (same string-form ambiguity — rejected).
+- **Trade-offs:** Three small `new` allocations at module load; a slightly more verbose decorator.
+- **Impact:** `apps/api/src/shared/database/base.entity.ts`, `apps/api/src/shared/database/base.entity.spec.ts`, the fixture entity's explicit typing, `prompts/_047` (decision 1), Wave 15 tracker context.
+- **Reversibility:** Trivial — swap the decorator type per property.
+- **ADR Recommendation:** No — implementation detail within the approved ADR-029 design (the ADR mandates BIGINT→string, not the decorator form).
+
+### 11. `Opt<T> | null` property typing and a probe-controller lock+flush boundary (shared BaseEntity task)
+
+- **Context:** Base-entity fields with initializers (`createdAt = new Date()`, `updatedAt = null`, …) are required in `em.create()` input data by MikroORM's `RequiredEntityData` unless marked optional; `Opt<T> = T & Brand` is not distributive over unions, so `Opt<Date | null>` fails to typecheck against a `null` initializer. Separately, the db-tier optimistic-locking tests showed `flush()` itself raises `OptimisticLockError` when the versioned UPDATE loses a concurrent race — mapping only `em.lock` would leak a raw 500 to the client.
+- **Decision:** Initialized base properties are typed `Opt<T> | null` (or `Opt<T>` for non-nullable) — optional in `em.create` input while preserving `Date | null` reads — and the documented production pattern for update workflows wraps both `em.lock` and `flush()` inside the `mapOptimisticLockError` boundary (implemented in the test-only probe controller; mirrored in `apps/api/AGENTS.md`).
+- **Reasoning:** `Opt` cannot wrap unions, and the `?` optional marker would widen reads to include `undefined`, breaking the `Date | null` contract; the lock+flush boundary is the only shape that covers the verified flush race (proven by the concurrent-race db-spec where exactly one request must get 409).
+- **Alternatives:** `?: Date | null` optional markers (widens the read type — rejected); `[OptionalProps]` on the base (uncertain inheritance through the inlined-abstract discovery pass; `Opt` is the documented mechanism — rejected); mapping only `em.lock` (leaks flush-race 500s — rejected).
+- **Trade-offs:** The `Opt` brand appears in the declared types (purely phantom at runtime); update services must remember to include the flush inside the mapped try block (convention, documented).
+- **Impact:** `apps/api/src/shared/database/base.entity.ts`, `apps/api/test/fixtures/test-article.controller.ts`, `apps/api/AGENTS.md` (locking pattern), `prompts/_047` (decisions 2 and 4).
+- **Reversibility:** Trivial — typing and a try-block boundary.
+- **ADR Recommendation:** No — typing-level and convention-level details inside the approved ADR-029 mechanism.
+
+### 12. Test-tier decisions for the BaseEntity suite (shared BaseEntity task)
+
+- **Context:** The db tier boots the real AppModule with no Redis; the global throttler guard guards every route, so a fixture probe over HTTP would fail against the placeholder Redis; fixture entities must be discoverable without leaking into production discovery; and the Intl formatter cache in the new `utc-datetime` helper had to be hardened after the security gate (SEC-01).
+- **Decision:** db-specs override `ThrottlerStorage` with the official in-memory `ThrottlerStorageService` (test-scoped only); fixture entities ride in the explicit `entities` option of the `MIKRO_ORM_MODULE_OPTIONS` override together with `BaseEntity` (the MikroORM rule for explicit entity lists); the `wallClockFormatter` cache canonicalizes zones via `resolvedOptions().timeZone` before caching.
+- **Reasoning:** Reuses the documented test-override mechanism without touching production modules or `create-test-app.ts`; the in-memory storage keeps the guard functional per the tier's contract ("Redis is never contacted here"); canonicalization bounds the cache to the finite canonical zone set and was the security judge's recommendation.
+- **Alternatives:** Excluding probe paths from the throttler in production config (production surface change for a test need — rejected); a `forFeature` test module import (requires `create-test-app.ts` API changes — rejected); capping/evicting the formatter cache (canonicalization is simpler and also deduplicates link aliases — judge-endorsed — rejected alternatives).
+- **Trade-offs:** db-specs that add probe routes must remember the storage override (two specs carry it); one transient small allocation per `calendarDayUtcRange` call.
+- **Impact:** `apps/api/test/base-entity.db-spec.ts`, `apps/api/src/shared/datetime/utc-datetime.ts`, `docs/judge-findings.md` (Wave 15 SEC-01), `prompts/_047` (decisions 4–5).
+- **Reversibility:** Trivial — test-config-only changes; the canonicalization is one line.
+- **ADR Recommendation:** No — test strategy and a judge-remediation hardening; no architectural decision.

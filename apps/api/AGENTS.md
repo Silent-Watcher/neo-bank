@@ -215,26 +215,67 @@ Constraints:
   the feature's own `entities/` folder, one entity per file,
   `<name>.entity.ts` (the MikroORM CLI discovers them through the globs in
   `mikro-orm.options.ts`).
+- Every entity extends the shared abstract `BaseEntity`
+  (`src/shared/database/base.entity.ts`, ADR-029): `id` (BIGINT/`bigserial`,
+  TypeScript `string`), `createdAt`/`updatedAt` (`timestamptz(3)`),
+  `createdBy`/`updatedBy` (nullable BIGINT scalars, no foreign keys),
+  `version` (optimistic locking), `deletedAt` (soft-delete surface only).
+  Child entities never redefine base properties and never manually assign
+  ORM-managed fields (`createdAt`, `updatedAt`, `version`, audit
+  attribution) — the `onCreate`/`onUpdate` callbacks and the Unit of Work
+  own them. Declare BIGINT identifiers with an explicit
+  `new BigIntType('string')` so values stay strings regardless of the
+  compiler pipeline.
+- Actor attribution resolves from the per-request CLS context
+  (`src/shared/actor-context/`, ADR-029 as refined by ADR-031): the global
+  `actorContextModule` mounts `nestjs-cls`'s `ClsMiddleware` for every route
+  and `getActorId()` reads the store anywhere in the request chain — through
+  DI (`@Inject(ClsService)`) or the non-DI bridge (ORM audit callbacks use
+  the latter). `NULL` means the system performed the operation. Actor IDs
+  never come from client input — when authentication lands, the module's
+  extraction seam (`resolveActorId` in `actor-context.module.ts`) reads only
+  the verified principal. Keep the store shape minimal; MikroORM's
+  `RequestContext` (per-request EntityManager fork) is a separate mechanism
+  and stays untouched.
+- Optimistic locking is MikroORM-owned (`@Property({ version: true })`).
+  Update workflows accept the client's expected version as a DTO field and
+  call `await em.lock(entity, LockMode.OPTIMISTIC, { lockVersion })` inside
+  the try block that also wraps `flush()` (both can raise the lock error),
+  mapping failures through `mapOptimisticLockError` from
+  `src/shared/errors/optimistic-lock.mapper.ts` → `ErrorCode.VersionConflict`
+  (HTTP 409). Never assign the client's version to the entity and never
+  increment versions manually.
+- Timestamps follow the UTC-first policy (ADR-030, `docs/utc-datetime.md`):
+  `timestamptz` columns (precision 3 where `Date` is canonical), UTC-pinned
+  PostgreSQL containers, and user-timezone conversion only at the
+  presentation boundary via IANA identifiers — calendar-day/range queries
+  use `calendarDayUtcRange` from `src/shared/datetime/utc-datetime.ts`.
 - Schema changes go exclusively through explicit SQL migrations: generate
   with `pnpm db:migration:create`, apply with `pnpm db:migration:up`,
   revert with `pnpm db:migration:down`. Never run `mikro-orm schema:update`
   and never configure `synchronize` anywhere.
 - Outside an HTTP request context there is no request-scoped
   `EntityManager`: use `em.fork()` or the `@CreateRequestContext()`
-  decorator (from `@mikro-orm/decorators/legacy`) for background work.
+  decorator (from `@mikro-orm/decorators/legacy`) for background work. Such
+  work runs without an actor context and is attributed to the system
+  (`createdBy`/`updatedBy` stay `NULL`).
 - Never inject another feature's repositories or EntityManagers; reach
   another feature's data only through that feature's public service API.
-- PostgreSQL is optional at runtime, like Redis: MikroORM v7 initializes
-  without connecting, so an unreachable server never blocks startup —
-  `/health` reports `degraded` (HTTP 200) and `/health/ready` fails with
-  HTTP 503 (same contract as Redis). The integration closes the connection
+- PostgreSQL is architecture-required: the initial connection is established
+  during bootstrap with bounded retries and startup fails when the database
+  cannot be reached (ADR-027 amendment). After a successful boot, an
+  unreachable PostgreSQL degrades `/health` (HTTP 200) and fails
+  `/health/ready` with HTTP 503. The integration closes the connection
   on application shutdown (`enableShutdownHooks()` in `main.ts`).
 - Database integration tests use Testcontainers (`pnpm test:db`,
-  `test/database.db-spec.ts`, image `postgres:17.6-alpine`): each
+  image `postgres:17.6-alpine`): each
   `*.db-spec.ts` file boots the real AppModule against its own container
   and overrides `MIKRO_ORM_MODULE_OPTIONS` (overriding the
   `DATABASE_CONFIG` `registerAs` token does not propagate through
-  `ConfigService` — the same caveat as the Redis config token).
+  `ConfigService` — the same caveat as the Redis config token). Test-only
+  fixture entities ride in the explicit `entities` option together with
+  `BaseEntity` (the MikroORM rule for explicit entity lists) — never
+  registered in production discovery.
 
 ## Directory Structure
 
@@ -344,7 +385,7 @@ pnpm db:migration:down   # revert the most recent migration
 ## Constraints
 
 - Follow the decision records in [../../DECISIONS.md](../../DECISIONS.md) —
-  all ADRs ADR-001 through ADR-027 are **Accepted** and implemented; do not
+  all ADRs ADR-001 through ADR-030 are **Accepted** and implemented; do not
   build against their rejected alternatives.
 - New architectural decisions follow the ADR-first workflow in the root
   [AGENTS.md](../../AGENTS.md): propose the ADR, get explicit user approval,

@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { APP_FILTER, APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { TerminusModule } from '@nestjs/terminus';
 import { configModule } from '#config/config.js';
+import { actorContextModule } from '#src/shared/actor-context/actor-context.module.js';
 import { ProblemDetailsFilter } from '#filters/problem-details.filter.js';
 import { ResponseEnvelopeInterceptor } from '#interceptors/response-envelope.interceptor.js';
 import { MemoryProtectionModule } from '#src/shared/memory-protection/memory-protection.module.js';
@@ -21,6 +22,10 @@ import { EnrollmentsModule } from '#modules/enrollments/enrollments.module.js';
 @Module({
   imports: [
     configModule,
+    // Opens the per-request actor context (ADR-031) ahead of every guard,
+    // interceptor, and handler, so audit attribution resolves for any ORM
+    // write in the request chain.
+    actorContextModule,
     i18nModule,
     AppLoggerModule,
     TerminusModule,

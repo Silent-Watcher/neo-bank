@@ -4,12 +4,14 @@
     "invalidRequestId": "Invalid Request Id",
     "otpRateLimitExceeded": "Too Many Requests",
     "otpVerificationFailed": "Verification Failed",
-    "rateLimited": "Too Many Requests"
+    "rateLimited": "Too Many Requests",
+    "versionConflict": "Version Conflict"
   },
   "details": {
     "unexpected": "An unexpected error occurred.",
     "rateLimited": "Too many requests. Retry later.",
-    "serviceOverloaded": "The service is temporarily under heavy load. Please retry shortly."
+    "serviceOverloaded": "The service is temporarily under heavy load. Please retry shortly.",
+    "versionConflict": "The record was modified since it was loaded. Reload it and try again."
   },
   "status": {
     "badRequest": "Bad Request",

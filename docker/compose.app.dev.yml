@@ -146,6 +146,10 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-neo_bank}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required in docker/env/.env.docker.dev}
       POSTGRES_DB: ${POSTGRES_DB:-neo_bank}
+      # UTC-first storage policy (ADR-030): the effective server TimeZone is
+      # pinned explicitly — initdb derives it from the container timezone, so
+      # SHOW TimeZone always returns UTC regardless of image or env drift.
+      TZ: UTC
     volumes:
       - postgres_dev_data:/var/lib/postgresql/data
     ports:

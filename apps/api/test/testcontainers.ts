@@ -143,6 +143,9 @@ export class TestPostgres {
         POSTGRES_USER: username,
         POSTGRES_PASSWORD: password,
         POSTGRES_DB: database,
+        // UTC-first storage policy (ADR-030): test containers match the
+        // Compose stacks so SHOW TimeZone returns UTC everywhere.
+        TZ: 'UTC',
       })
       .withExposedPorts(5432)
       // The message appears twice during first-boot initialization (before

@@ -39,6 +39,12 @@ export function buildMikroOrmOptions<D extends IDatabaseDriver = IDatabaseDriver
     // ADR-027 is infrastructure-only: no entities exist yet, so discovery
     // must not warn. The first feature entity can drop this override.
     discovery: { warnWhenNoEntities: false },
+    // UTC-first storage policy (ADR-030): forces UTC serialization for
+    // timezone-less datetime columns. Verified supported in 7.2.9 (and the
+    // installed default) — set explicitly to document the policy; it does
+    // not replace the TIMESTAMPTZ column types, which store absolute
+    // instants regardless.
+    forceUtcTimezone: true,
     clientUrl,
     // ADR-027: schema changes go exclusively through explicit SQL
     // migrations — no schema synchronization is configured anywhere, and

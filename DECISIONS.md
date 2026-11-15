@@ -1407,3 +1407,196 @@ Development-only exposure: the UI is bound to `127.0.0.1` and never defined in p
 - Related ADRs: ADR-020 (Redis Insight precedent), ADR-022 (Alloy log collection), ADR-024 (development-only service precedent), ADR-027 (PostgreSQL in the stack)
 - Official documentation: https://www.pgadmin.org/docs/pgadmin4/latest/container_deployment.html, image: https://hub.docker.com/r/dpage/pgadmin4, upstream env-substitution gap: https://github.com/pgadmin-org/pgadmin4/issues/8663
 - `prompts/_044-pgadmin-dev-infrastructure.md`
+
+---
+
+## ADR-029: Shared MikroORM BaseEntity with Actor Audit Context and Native Optimistic Locking
+
+- **Status:** Accepted
+- **Date:** 2026-11-15
+
+### Context
+
+ADR-027 established the MikroORM v7 + PostgreSQL persistence layer as infrastructure only: zero entities, zero migrations, zero tables. Every future entity needs the same shared persistence columns — primary key, creation/update timestamps, audit attribution, a concurrency version, and a future soft-delete timestamp — before the first table exists. Establishing the convention now means the first feature migration is born consistent; retrofitting later would require data backfill and destructive schema surgery. Additionally, no request-context or actor-identity mechanism exists (no authentication has landed), so audit attribution needs an isolated, minimal mechanism that yields `NULL` (system semantics) until identity arrives. All required ORM capabilities were verified against the exact installed sources (core/decorators/postgresql/sql 7.2.9, nestjs 7.1.0) before this decision: `@MappedSuperclass` no longer exists in v7 (the equivalent is `@Entity({ abstract: true })` — abstract entities are inlined into children during discovery), `BigIntType` syncs its runtime mode from the declared TypeScript `string` type, single numeric primary keys default to autoincrement (`bigserial`), `onCreate`/`onUpdate` property callbacks run exactly on create/real-update changesets, `@Property({ version: true })` atoms `version = version + 1` into the UPDATE SQL with the old version in the WHERE clause, `em.lock(entity, LockMode.OPTIMISTIC, { lockVersion })` implements client-provided expected-version checks, and `defineBaseEntityProperties` propagates base-class checks/indexes/uniques to every concrete entity.
+
+### Decision
+
+Every API entity extends a shared abstract `BaseEntity` (`apps/api/src/shared/database/base.entity.ts`, decorated `@Entity({ abstract: true })` so it generates no table); feature entities never redefine its properties.
+
+- **Primary key:** `id` is PostgreSQL `bigint` via `bigserial` (the verified v7 native default for a single numeric PK), typed as TypeScript `string` (`BigIntType` mode `'string'` — values beyond `Number.MAX_SAFE_INTEGER` stay exact). PostgreSQL has no unsigned integers; a propagated class-level `@Check` constraint (`id > 0`) preserves the positive-identifier invariant on every concrete table.
+- **Timestamps:** `createdAt` (`@Property` with `onCreate` and a field initializer) is non-nullable and immutable through normal updates; `updatedAt` (`@Property({ onUpdate })`, initializer `null`) starts `NULL` and is bumped by the ORM only when a real update changeset exists — never initialized to `createdAt`, never manually assigned. All timestamps are `timestamptz(3)` (ADR-030).
+- **Audit attribution:** `createdBy`/`updatedBy` are nullable `bigint` scalars (TypeScript `string | null`) with **no foreign keys and no ORM relations** — no Users table exists, and the columns must not imply one. Values are resolved centrally from an AsyncLocalStorage actor context (`apps/api/src/shared/actor-context/`): `createdBy` via the property `onCreate` callback (`getActorId()`), `updatedBy` via `onUpdate` (`NULL` means the system performed the operation). A global NestJS middleware opens the context per request; the actor-extraction seam returns `null` until authentication lands and will then read only the verified principal attached by the auth layer — never client-supplied DTO fields or raw request headers. Background work and system operations run without a context and produce `NULL` attribution by design.
+- **Optimistic locking:** `version` uses `@Property({ version: true })` (initializer `1`) — MikroORM owns the increment (`version = version + 1` in the UPDATE statement, old version in the WHERE clause, `OptimisticLockError` on row-count mismatch). Application services never increment versions manually and never write a client's expected version onto the entity. When a feature's update workflow receives the client's expected version (a dedicated DTO field), it calls `await em.lock(entity, LockMode.OPTIMISTIC, { lockVersion: expectedVersion })` before mutating, and maps `OptimisticLockError` to the shared conflict response through `apps/api/src/shared/errors/optimistic-lock.mapper.ts` (`ErrorCode.VersionConflict`, HTTP 409, bilingual Problem Details per ADR-021).
+- **Soft delete surface:** `deletedAt` is a nullable `timestamptz(3)` column only — no filters, subscribers, repository overrides, or restore flows (explicitly out of scope).
+- **Scope:** all ordinary writes go through MikroORM's EntityManager/UnitOfWork; raw SQL write paths and bulk updates are out of scope for lifecycle guarantees. Test-only fixture entities may exist under `apps/api/test/` and are never registered in production discovery.
+
+### Alternatives Considered
+
+- _Per-entity field duplication:_ every feature declares its own `id`/timestamps/audit columns. Rejected: guaranteed drift, exactly what a shared base prevents.
+- _UUID primary keys:_ rejected — the requirement mandates BIGINT identifiers; no existing tables constrain the choice.
+- _A `MappedSuperclass` decorator shim:_ does not exist in v7; `@Entity({ abstract: true })` is the verified equivalent.
+- _Subscriber-based audit (global `subscribers` with `beforeCreate`/`beforeUpdate`):_ equally verified, but property-level `onCreate`/`onUpdate` callbacks achieve identical semantics with less machinery and stay co-located with the fields.
+- _`GENERATED BY DEFAULT AS IDENTITY` instead of `bigserial`:_ PostgreSQL-modern, but in 7.2.9 it is reachable only through the column-metadata `generated` option used for computed columns — undocumented as an entity-level PK API. `bigserial` is the platform's verified native path.
+- _Database triggers for auditing/versioning:_ rejected — duplicates ORM responsibilities the prompt and ADR-027 delegate to the Unit of Work.
+- _`@nestjs/cls` dependency:_ rejected — a ~15-line `AsyncLocalStorage` module covers the need; no extra dependency for the same behavior.
+
+### Consequences and Trade-offs
+
+**Positive**
+
+- Every table is born with consistent PK, timestamp, audit, version, and soft-delete-surface columns; the first feature migration carries them at birth.
+- Concurrent updates cannot silently overwrite each other; conflicts surface as a stable, bilingual 409 contract.
+- Actor context is request-isolated, works for system/background operations (NULL attribution), and is ready for authentication to fill the seam.
+- No new dependency; no new environment variables; no schema synchronization.
+
+**Negative**
+
+- BIGINT identifiers surface as strings in serialization (deliberate, matches the BIGINT requirement).
+- Audit columns are unenforced scalar values (no FK, no Users table) — correctness rests on the actor-context convention, not the database.
+- Property lifecycle callbacks fire only through the standard Unit of Work: raw SQL and bulk-update write paths bypass them (documented out of scope).
+- No-op updates skip `updatedAt`/`updatedBy` entirely (no changeset — verified ORM behavior; acceptable).
+- Test-only fixture entities require the base entity listed explicitly when the `entities` option is used in test overrides.
+
+### Security Assessment
+
+Actor IDs never originate from client input: the extraction seam resolves only the verified principal once authentication exists, and until then everything is attributed to the system (`NULL`). Version conflicts are surfaced through the centralized exception architecture with a generic, localized message — the response distinguishes only "conflict", never internal state (current version is not disclosed beyond the 409 code). The `id > 0` check documents the positive-identifier invariant without exposing attack surface. No secrets, credentials, or internal identifiers appear in the new response paths.
+
+### Operational Implications
+
+- No startup-behavior change: the database module, connection resilience, and health semantics are untouched.
+- The first real feature entity generates the first migration carrying all base columns; migrations remain the only schema path (ADR-027).
+- `discovery.warnWhenNoEntities: false` stays until the first production entity lands (runtime still discovers zero entities; test fixtures are supplied explicitly through test overrides).
+
+### References
+
+- `apps/api/src/shared/database/base.entity.ts`, `apps/api/src/shared/actor-context/`, `apps/api/src/shared/errors/optimistic-lock.mapper.ts`, `apps/api/src/shared/errors/error.code.ts`, `apps/api/src/shared/database/mikro-orm.options.ts`, `apps/api/src/modules/app/app.module.ts`
+- `docs/utc-datetime.md` (UTC policy details), DECISIONS.md ADR-021 (bilingual errors), ADR-027 (persistence layer)
+- Verified installed sources: `@mikro-orm/core` 7.2.9 `MetadataDiscovery.js` (abstract inlining, BigIntType mode sync, base property/check propagation, version defaults), `unit-of-work/ChangeSetComputer.js` (`onCreate`/`onUpdate`), `unit-of-work/ChangeSetPersister.js` (versioned WHERE + `OptimisticLockError`), `@mikro-orm/sql` `AbstractSqlDriver.js` (atomic `version + 1`)
+- Official documentation: https://mikro-orm.io/docs/defining-entities, https://mikro-orm.io/docs/transactions#optimistic-locking, https://mikro-orm.io/docs/usage-with-nestjs
+- `prompts/_047-shared-base-entity.md`
+
+---
+
+## ADR-030: UTC-First TIMESTAMPTZ Storage Policy
+
+- **Status:** Accepted
+- **Date:** 2026-11-15
+
+### Context
+
+The API has no timezone policy anywhere — no `TZ`/`PGTZ`/`timezone` configuration exists in the Compose stacks, the environment files, the ORM configuration, or the documentation. The API serves users across two locales and arbitrary user timezones (Persian-speaking users primarily in `Asia/Tehran`, +03:30). Timestamps stored without an absolute-instant policy invite the classic failure class: local-time-as-UTC writes, ambiguous range queries across DST transitions, and display code that silently shifts instants. PostgreSQL `timestamptz` stores absolute instants (UTC internally) regardless of the client-supplied offset, which makes it the correct column type; the session timezone only affects rendering, so pinning the server container to UTC makes stored values, logs, and driver round-trips consistent. Verified installed-version facts: MikroORM 7.2.9 maps `Date` properties to `timestamptz` by default (precision 6 = microseconds) and `forceUtcTimezone` (default `true`) affects only timezone-less columns (`timestamp`) by forcing UTC serialization; the `pg` driver returns timestamp values as raw strings which the ORM hydrates using the platform timezone; the driver issues no session `SET TIME ZONE`, so the server's `TimeZone` setting governs.
+
+### Decision
+
+The application follows a UTC-first storage policy, documented in `docs/utc-datetime.md`:
+
+- **Storage:** every application timestamp column uses PostgreSQL `timestamptz` with precision 3 (`timestamptz(3)`) wherever JavaScript `Date` is the canonical representation — `Date` carries exactly millisecond resolution, so higher precision is dead weight. `timestamp` (without timezone) is never introduced.
+- **ORM configuration:** `forceUtcTimezone: true` is set explicitly in the shared MikroORM options (verified supported in 7.2.9; it also documents intent — the setting is the installed default).
+- **Docker:** the PostgreSQL containers (dev, prod, and the Testcontainers test image) run pinned to UTC via `TZ: UTC`, so `initdb` writes `TimeZone = UTC` and `SHOW TimeZone` returns UTC. The API container sets no `TZ` — JavaScript `Date` is an absolute instant and Node's local zone must not influence persistence.
+- **Application handling:** timestamps are `Date` instances treated as absolute instants; serialization uses ISO-8601 UTC representations; no code constructs shifted "local" dates or stores offsets in place of timezone identifiers.
+- **Presentation boundary:** conversion to a user's timezone happens outside the persistence layer, using IANA identifiers (`Asia/Tehran`), via `Intl.DateTimeFormat` (no new date dependency). Calendar-day and range queries must derive UTC instants from the user's IANA zone boundaries — a local calendar day is not always 24 hours (DST), so `apps/api/src/shared/datetime/utc-datetime.ts` provides `calendarDayUtcRange(localDate, timeZone)` computing the exact UTC start/end instants from zone offsets, never fixed hour math.
+
+### Alternatives Considered
+
+- _`timestamp` (without timezone) + application-level UTC normalization:_ rejected — loses instant semantics at the database level and relies on every writer being perpetually correct.
+- _Storing offsets alongside timestamps:_ rejected — an offset is not a timezone; DST transitions make static offsets wrong within the same zone.
+- _A date/time library (Luxon, dayjs, date-fns-tz):_ rejected — `Intl.DateTimeFormat` covers zone-offset resolution natively; no dependency for the same behavior (the dependency-evaluation threshold applies).
+- _Pinning the API container's `TZ` instead of PostgreSQL's:_ rejected per the verified behavior — the API's local zone does not affect `Date` instants; the server's `TimeZone` is the lever that actually controls rendering and driver round-trips.
+
+### Consequences and Trade-offs
+
+**Positive**
+
+- Stored values are unambiguous absolute instants; range queries, ordering, and comparisons are correct by construction.
+- One pinned timezone across dev/prod/test makes behavior and logs identical everywhere; `SHOW TimeZone` is verifiable in integration tests.
+- Presentation conversion stays a per-feature concern with a documented, dependency-free pattern.
+
+**Negative**
+
+- `timestamptz` discards the original submission offset (by design — the absolute instant is the record of truth).
+- Presentation code must correctly use the IANA-zone boundary helper; nothing in the type system enforces it (documented + reviewed).
+- `calendarDayUtcRange` resolves offsets via `Intl`, so zones with gaps at local midnight (rare DST transitions) resolve to the next existing local instant — documented behavior.
+
+### Security Assessment
+
+No security-relevant surface: no secrets, no user input in the boundary math beyond a validated IANA identifier (invalid zone identifiers throw from `Intl` rather than silently shifting). Storing absolute instants prevents timestamp-based ambiguity attacks against audit and rate-limiting windows.
+
+### Performance Implications
+
+`timestamptz(3)` occupies the same 8 bytes as `timestamptz(6)`; `Intl.DateTimeFormat` instantiation in the boundary helper is confined to presentation-time range computations, not the persistence hot path.
+
+### Operational Implications
+
+- `TZ: UTC` applies to both Compose stacks and the test image; existing named volumes predate the pin but were already UTC (the image default), so no re-initialization is needed — the `SHOW TimeZone` integration test verifies the effective value.
+- No new environment variables; no changes to connection resilience or health checks.
+
+### References
+
+- `docs/utc-datetime.md`, `apps/api/src/shared/database/mikro-orm.options.ts` (`forceUtcTimezone`), `apps/api/src/shared/datetime/utc-datetime.ts`, `docker/compose.app.dev.yml` / `docker/compose.app.prod.yml` (postgres `TZ`), `apps/api/test/testcontainers.ts`
+- DECISIONS.md ADR-027 (persistence layer), ADR-029 (BaseEntity timestamps)
+- Verified installed sources: `@mikro-orm/core` 7.2.9 `utils/Configuration.js` (`forceUtcTimezone` default), `platforms/Platform.js` (timezone → `'Z'`), `@mikro-orm/sql` `BasePostgreSqlPlatform.js` (`timestamptz` declaration, precision), `dialects/postgresql/typeOverrides.js` (raw-string timestamp handling)
+- PostgreSQL documentation: https://www.postgresql.org/docs/17/datatype-datetime.html
+- `prompts/_047-shared-base-entity.md`
+
+---
+
+## ADR-031: Use nestjs-cls for the Application Actor Context
+
+- **Status:** Accepted
+- **Date:** 2026-11-15
+
+### Context
+
+ADR-029 introduced a per-request actor context for audit attribution: a module-level `AsyncLocalStorage` singleton in `src/shared/actor-context/`, opened by a bespoke global Nest middleware, read by the BaseEntity audit callbacks through a plain exported function. The design deviated deliberately from the officially documented NestJS AsyncLocalStorage pattern (docs.nestjs.com/recipes/async-local-storage), which registers the ALS instance as a provider in a dedicated module and initializes the context with `AsyncLocalStorage.run()` in middleware — because the ORM's property lifecycle callbacks run inside the Unit of Work with no DI container access. That deviation costs DI-integration: store consumers cannot inject the store, unit tests cannot substitute it through the testing module, and the non-DI seam is bespoke. The official recipe explicitly names `nestjs-cls` as the ready-made alternative ("typed store, `cls.get()`/`cls.set()`, … easy testing"), and the developer directs its adoption for better ALS integration.
+
+The constraint that drove the deviation still holds, so the selected library must serve both worlds: DI consumers and non-DI ORM callbacks. Verified against the released package (7.0.2, inspected): `ClsService` wraps a plain `AsyncLocalStorage` with `run()`-based initialization by default; `ClsMiddleware` is a standard Nest middleware (the same adapter-agnostic pipeline this repository already proves under Fastify — `MikroOrmMiddleware` and the bespoke actor middleware run through it); `ClsServiceManager.getClsService()` is a public, documented API for retrieving the `ClsService` outside Nest's DI — the exact seam the ORM callbacks need. MikroORM's own `RequestContext` (enabled by default via `@mikro-orm/nestjs`, verified in the installed source: `MikroOrmCoreModule.configure` registers `MikroOrmMiddleware` unless `registerRequestContext === false`; `RequestContext.create` forks a per-request `EntityManager` through its own ALS) is a separate mechanism with a separate responsibility — EM/Identity-Map isolation — and is not touched by this decision.
+
+### Decision
+
+Adopt **`nestjs-cls` 7.0.2** as the application's request-context ALS layer (dependency-evaluation skill completed: MIT, zero runtime dependencies, peer deps `@nestjs/core|common >= 10 < 13` covering Nest 12 on Node 24 with an ESM build, OSV query clean for 7.0.2, no consumer-side install scripts, active maintenance — released 2026-09-24).
+
+- `src/shared/actor-context/` becomes a thin typed facade over the CLS service: the store stays `{ actorId: string | null }` (no God object — the NestJS docs' caution about implicit-context breadth applies), exposed through `ActorContextModule` which configures `ClsModule.forRoot` with `ClsMiddleware` (global, mounted, `run()`-based) and a `setup` hook that populates the store from the same actor-extraction seam (returns `null` until authentication lands; actor IDs never come from client input — ADR-029's trust boundary is unchanged).
+- `getActorId()`/`getActorContext()` remain the single read surface; internally they bridge to `ClsServiceManager.getClsService()` so non-DI consumers (BaseEntity audit callbacks, background jobs) keep working unchanged. `runWithActorContext` delegates to the CLS service's `run()` for tests and background work.
+- The bespoke `ActorContextMiddleware` is deleted; the library middleware replaces it.
+- **MikroORM RequestContext stays separate and enabled:** the application ALS propagates application-level request metadata (actor attribution); MikroORM's automatic per-request fork isolates the EntityManager and Identity Map. Neither replaces the other, no EntityManager is stored in the application store, and no manual `RequestContext.create()` is added for ordinary HTTP requests.
+- Fastify participates unchanged: `ClsMiddleware` runs through the Nest middleware pipeline ahead of guards/interceptors/handlers, exactly like the middleware it replaces; the Fastify adapter and bootstrap configuration are untouched.
+
+### Options Considered
+
+- _Keep the bespoke module-level ALS singleton (status quo):_ works and passed both review gates, but outside the documented DI pattern, with a bespoke non-DI seam and no typed-store/test ergonomics.
+- _Native NestJS DIY pattern (recipe verbatim):_ DI-integrated, but every ergonomics feature (typed store plumbing, runWith test helper, non-DI manager) would be hand-maintained — duplicating what `nestjs-cls` ships; the recipe itself defers to ready-made options when a store is needed outside HTTP-only middleware scope.
+- _`@nestjs/observe` TracerService:_ requires the Observe instrumentation setup; not a fit for a minimal typed actor store.
+
+### Rationale
+
+Developer direction plus the official recipe's endorsement of `nestjs-cls` for exactly this role; DI integration for future store consumers; upstream-maintained non-DI seam replacing our bespoke singleton; zero transitive dependencies; peers covering the installed stack. The library's further features (proxy providers, plugins) are unused now (YAGNI) and remain the growth path if request-context needs expand.
+
+### Security Assessment
+
+OSV query for `nestjs-cls@7.0.2`: 0 advisories. Package ships no consumer-side install scripts and has no runtime dependencies (no transitive supply-chain surface). License MIT. Verified by inspecting the published package contents (ESM/CJS builds, `ClsService` over native `AsyncLocalStorage`). The trust boundary is unchanged: the store is populated only from the actor-extraction seam (constant `null` until authentication); `saveReq`/`saveRes` stay off so raw request/response objects are not retained in the store. `pnpm audit` re-runs as part of the implementation. Not verifiable at decision time: upstream documentation makes no Fastify-specific compatibility statement — the mechanism relies on the adapter-agnostic Nest middleware pipeline, which this repository already exercises under Fastify.
+
+### Consequences and Trade-offs
+
+**Positive**
+
+- Conforms to the documented NestJS pattern (module-owned ALS, middleware `run()` initialization, injectable store access).
+- Typed store with injected access for future consumers; mockable `ClsService` and `runWith` in unit tests.
+- Removes bespoke middleware and the bespoke non-DI manager in favor of maintained upstream APIs.
+
+**Negative**
+
+- One more dependency with its own release cadence; peer range `@nestjs/* >= 10 < 13` means a future Nest 13 upgrade needs a compatible `nestjs-cls` release.
+- `getActorId()` now transitively depends on the library's global service manager.
+
+**Limitations**
+
+- Actor attribution stays `NULL` (system) until authentication lands.
+- The store must stay minimal — only genuinely useful request metadata may enter (implicit-context God-object caution from the official docs).
+
+### References
+
+- `apps/api/src/shared/actor-context/` (module, bridge), `apps/api/src/modules/app/app.module.ts`, `apps/api/package.json`
+- DECISIONS.md ADR-029 (actor context architecture — refined by this decision, mechanism only), ADR-027 (MikroORM RequestContext separation)
+- Official documentation: https://docs.nestjs.com/recipes/async-local-storage, https://papooch.github.io/nestjs-cls/, https://mikro-orm.io/docs/identity-map, https://mikro-orm.io/docs/usage-with-nestjs
+- Verified installed sources: `@mikro-orm/nestjs` 7.1.0 `mikro-orm-core.module.js` (automatic middleware registration), `mikro-orm.middleware.js` (`RequestContext.create`), `@mikro-orm/core` 7.2.9 `utils/RequestContext.js` (ALS run + per-request fork)
+- `prompts/_048-nestjs-cls-actor-context.md`

@@ -3,7 +3,7 @@
 Primary architectural and technical context for development sessions. Read
 after the root `AGENTS.md`; use it to decide which further documentation or
 source files a task needs. Detailed documents stay independent — see the
-Documentation Index. Last verified: 2026-11-14.
+Documentation Index. Last verified: 2026-11-15.
 
 ## Repository Overview
 
@@ -24,7 +24,8 @@ commitlint, `pnpm test` on pre-push.
 Frontends contain no API client code; client→API communication is not
 implemented. No authentication/authorization, no shared types. The API has a
 PostgreSQL persistence layer (MikroORM v7, ADR-027) at infrastructure level
-— no entities yet — and Redis remains the only store feature code uses.
+— a shared `BaseEntity` (ADR-029) exists, but no feature entities/tables
+yet — and Redis remains the only store feature code uses.
 
 ## API Architecture (`apps/api`)
 
@@ -72,7 +73,9 @@ Core contracts:
   register per feature with `MikroOrmModule.forFeature`, schema changes go
   only through migrations (`db:migration:*`). An unreachable PostgreSQL
   after a successful boot degrades `/health` (HTTP 200) and fails
-  `/health/ready` (503). Infrastructure-only: no entities yet.
+  `/health/ready` (503). Infrastructure-only: the shared `BaseEntity`
+  (ADR-029) and the UTC-first timestamp policy (ADR-030) are in place; no
+  feature entities yet.
 - **Logging:** Pino only (ADR-008/009); JSON in production, pretty in dev,
   `LOG_PRETTY` override; never `console.log`, never log OTPs/secrets.
 - **Memory protection:** `src/shared/memory-protection/` (ADR-026) samples
@@ -109,9 +112,10 @@ Core contracts:
   dev-only pgAdmin :5050 for PostgreSQL administration (ADR-028).
   Ops: `docs/docker.md`.
 - **Database:** PostgreSQL persistence layer in the API (MikroORM v7,
-  ADR-027) — infrastructure level only (no entities yet); the dev/prod
-  Compose stacks provide the server and inject `DATABASE_URL` into the API
-  service.
+  ADR-027) — infrastructure level only (no feature entities yet; shared
+  `BaseEntity` in place, ADR-029); the dev/prod
+  Compose stacks provide the server (containers pinned to UTC, ADR-030) and
+  inject `DATABASE_URL` into the API service.
 - **Monitoring:** independent Compose stack (ADR-022) — Grafana :3002 (loopback),
   Loki 3.7.9, Grafana Alloy 1.21.0 collecting container stdout → Loki.
   Ops: `docs/observability/README.md`; roadmap: `docs/observability/roadmap.md`.
@@ -142,7 +146,8 @@ Core contracts:
 | `docs/architecture.md`                      | Detailed architecture, boundaries, workspace relationships                           |
 | `docs/api.md`                               | Human-readable API reference (nestbruno route inventory + source-verified contracts) |
 | `docs/current-state.md`                     | Feature/state snapshot (verified per feature)                                        |
-| `DECISIONS.md`                              | ADR-001…ADR-028, all Accepted                                                        |
+| `docs/utc-datetime.md`                      | UTC-first date/time storage policy and usage guide (ADR-030)                         |
+| `DECISIONS.md`                              | ADR-001…ADR-030, all Accepted                                                        |
 | `docs/docker.md`                            | Docker stacks: setup, env files, commands                                            |
 | `docs/observability/README.md`              | Monitoring stack operations                                                          |
 | `docs/observability/manual-testing.md`      | Reproducible monitoring verification scenarios                                       |

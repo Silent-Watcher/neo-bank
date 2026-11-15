@@ -109,6 +109,12 @@
       "skillPath": "skills/migration/SKILL.md",
       "computedHash": "e7c6efc84ff8f85d0242e7f29f51c09fd333c294cc3123ef8ee4b2aca2a93192"
     },
+    "nestbruno": {
+      "source": "Silent-Watcher/nestbruno",
+      "sourceType": "github",
+      "skillPath": "skills/nestbruno/SKILL.md",
+      "computedHash": "1da9992143f30ff0154849a6304ff4b8bbcf74f5d731f8a21951c11d409e8d12"
+    },
     "nestjs-best-practices": {
       "source": "kadajett/agent-nestjs-skills",
       "sourceType": "github",

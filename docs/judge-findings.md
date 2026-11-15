@@ -1555,3 +1555,134 @@ into Loki).
 - **SEC-02 (informational, CWE-256):** `PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED=False` removes the user-chosen key encrypting saved server passwords, so at-rest protection of the imported password on `pgadmin_data` degrades to filesystem access. **Won't Fix (accepted trade-off):** UI authentication stays enabled; an attacker with volume read access already has the same password in plaintext via `docker inspect` or the postgres container; dev-only credentials; deleting the volume purges them. Removing the override would reintroduce a manual prompt (the UX the design rejected).
 - **SEC-03 (informational, CWE-312):** the dev PostgreSQL password exists in plaintext in the container environment, the transient `/tmp/servers.json`, and (encrypted) in pgAdmin's config DB on the volume. **Won't Fix (accepted, documented):** mirrors the accepted exposure of every other dev service carrying the same credentials in env; container is non-root, mounts read-only, the rendered file is per-container scratch, and ADR-028/`docs/docker.md` document the volume-purge path.
 - **SEC-04 (informational, CWE-521):** no password-generation guidance for `PGADMIN_DEFAULT_PASSWORD` in the tracked example file, while the admin login is reachable from sibling containers (lateral-movement hardening). **Resolved (2026-11-15):** the example-file comment now carries the same `openssl rand -hex 24` generation hint as `POSTGRES_PASSWORD` and notes sibling-container reachability.
+
+---
+
+## Wave 15 — Shared BaseEntity, actor context, UTC policy code review (2026-11-15)
+
+Context-blind judge review of `apps/api/src/shared/database/base.entity.ts`,
+`src/shared/actor-context/*`, `src/shared/errors/error.code.ts`,
+`optimistic-lock.mapper.ts`, `src/shared/datetime/utc-datetime.ts`,
+`src/modules/app/app.module.ts`, the en/fa `errors.json` catalogs, and the
+unit + db-tier specs. Final status of the wave before remediation:
+`CHANGES_REQUIRED` — 1 Medium, 2 Low, no Critical/High.
+
+### CR-01 — `parseLocalDate` accepts semantically invalid dates; boundary math silently targets the wrong calendar day
+
+- **Status:** Resolved (2026-11-15)
+- **Severity:** Medium
+- **Category:** Edge Case
+- **Locations:** `apps/api/src/shared/datetime/utc-datetime.ts` (`LOCAL_DATE_PATTERN`, `parseLocalDate`, `startOfLocalDayUtc`, `nextLocalDay`)
+- **Technical explanation:** validation was shape-only (`/^\d{4}-\d{2}-\d{2}$/`); `Date.UTC` silently normalizes `'2026-02-30'` → 2026-03-02, `'2026-13-01'` → 2027-01-01, and maps years 0–99 to 1900–1999, so invalid input sometimes throws and sometimes produces a plausible wrong result.
+- **Failure scenario:** a future caller validates user input against the same shape rule and passes `'2026-02-30'`; every derived report silently shifts by days (or a century for years 0000–0099).
+- **Judge recommendation:** round-trip the components through `Date.UTC`/`getUTC*` before use and reject years below 100.
+- **Investigation results:** valid — real correctness gap with a concrete silent-failure path.
+- **Agreed resolution:** applied — `parseLocalDate` now rejects years 0–99 explicitly and `startOfLocalDayUtc` verifies the parsed components round-trip (`getUTCMonth()/getUTCDate()`), throwing the existing `Invalid local date` error otherwise. Spec extended with the rollover rejections.
+
+### CR-02 — Documented skipped-midnight DST behavior is untested
+
+- **Status:** Resolved (2026-11-15)
+- **Severity:** Low
+- **Category:** Correctness (coverage gap)
+- **Locations:** `apps/api/src/shared/datetime/utc-datetime.ts` (`startOfLocalDayUtc` loop), `utc-datetime.spec.ts`
+- **Technical explanation:** the doc comment promises the transition instant when DST removes local midnight, but every covered zone transitions away from midnight, so the third refinement pass (the only one exercising skipped midnight) was never pinned; a cap regression would pass the suite while shifting boundaries an hour.
+- **Failure scenario:** a regression lowering the loop cap silently returns wrong day boundaries for midnight-transition zones.
+- **Judge recommendation:** assert `calendarDayUtcRange('2024-09-08', 'America/Santiago')` → `2024-09-08T04:00:00.000Z` (and the fall-back counterpart).
+- **Investigation results:** valid.
+- **Agreed resolution:** applied — both midnight-transition tests added (spring-forward 2024-09-08 and fall-back 2024-04-06 for America/Santiago).
+
+### CR-03 — Stale comment: `ServiceUnavailable` also rides the status-based title fallback
+
+- **Status:** Resolved (2026-11-15)
+- **Severity:** Low
+- **Category:** Syntax / Code Quality
+- **Locations:** `apps/api/src/shared/errors/error.code.ts` (`ERROR_CODE_TITLE_KEYS` comment)
+- **Technical explanation:** the comment claimed only `BadRequest`/`NotFound` lack application-specific title keys; `ServiceUnavailable` is equally absent and resolves through `errors.status.serviceUnavailable`.
+- **Failure scenario:** a maintainer builds an invariant on the comment's incomplete list.
+- **Judge recommendation:** correct the comment.
+- **Investigation results:** valid (pre-existing inaccuracy, touched section).
+- **Agreed resolution:** applied — comment lists all three codes.
+
+**Wave 15 summary:** 3 findings — 1 Medium + 2 Low, all resolved. Revised files re-validated by the full unit suite (43 files / 364 tests green) and re-reviewed by the same judge (see Wave 15 re-review below).
+
+### Wave 15 re-review (2026-11-15)
+
+Same judge, revised code. CR-01 verified with independent traces of every
+rejection path (rollover, month/day 0, year<100, year-100 boundary);
+CR-02 verified by hand-deriving both Santiago transitions from the
+fixed-point iteration (third-pass convergence genuinely pinned);
+CR-03 verified against the actual map contents. No new findings.
+**Status: APPROVED.**
+
+## Wave 15 security review (2026-11-15)
+
+Independent security gate over the approved implementation. 1 Low + 3
+Informational findings; trust boundaries, audit-field integrity, optimistic
+locking, information leakage, injection, and middleware registration all
+positively verified sound (grep-verified: no production caller of
+`calendarDayUtcRange`, no production `extends BaseEntity` outside specs, no
+production import of test fixtures).
+
+- **SEC-01 (Low, CWE-770):** `WALL_CLOCK_FORMATTER_CACHE` keyed by raw zone strings — case variants of valid zones are distinct keys, so client-derived zones would grow the map without bound once a feature wires them in (latent; no production caller today). **Resolved (2026-11-15):** the cache canonicalizes first — `new Intl.DateTimeFormat('en', { timeZone }).resolvedOptions().timeZone` collapses every case variant to one entry, invalid zones throw before caching.
+- **SEC-02 (Informational, CWE-20):** `runWithActorContext` accepts any string as actor id and the seam is a stub. **Won't Fix (deferred by design):** unreachable today (seam returns `null`, no production caller); validation of the verified principal and encapsulation of the writer path belong to the authentication task that fills the seam — recorded as a requirement for that task, not implementable against a stub.
+- **SEC-03 (Informational, CWE-20):** malformed `:id` path values reach Postgres as parameterized comparisons and surface as generic 500s. **Won't Fix (test-only):** the affected controller is the test-only probe fixture; the finding itself notes no production route exists. Route-level id validation is a requirement for the first entity-backed endpoints.
+- **SEC-04 (Informational, CWE-778):** the middleware→ORM-write composition (actor established only by the middleware, not a nested context) is untested because the seam resolves `null`. **Won't Fix (deferred by design):** untestable until the seam resolves a real actor; the authentication task must add one db-tier test asserting a middleware-resolved actor lands in `createdBy`/`updatedBy`.
+
+### Wave 15 security re-review (2026-11-15)
+
+SEC-01 verified FIXED (canonicalization precedes every cache operation;
+key space = finite canonical IANA zone set; behavior unchanged; no new
+attack surface). SEC-02/03/04 remain OPEN Informational with their
+future-task requirements recorded above.
+**Status: SECURITY_APPROVED_WITH_INFORMATIONAL_FINDINGS.**
+
+---
+
+## Wave 16 — nestjs-cls actor context (ADR-031) reviews (2026-11-15)
+
+Context-blind code review of the rewritten `src/shared/actor-context/` bridge,
+`actor-context.module.ts` (`ClsModule.forRoot`), the `app.module.ts` swap, the
+two new probe endpoints, and the new db-spec describe block. The reviewer
+independently verified every library assumption against installed sources
+(`nestjs-cls` ALS/globalThis sharing, symbol-key setter branch, Fastify 5
+mount point, no-op auto-registered guard/interceptor, `EntityManager#id`
+contextual resolution). One Low finding.
+
+### CR-01 — Stale doc comment referenced the removed `ActorContextMiddleware`
+
+- **Status:** Resolved (2026-11-15)
+- **Severity:** Low
+- **Category:** Syntax / Code Quality
+- **Locations:** `apps/api/test/fixtures/test-article.controller.ts` (`actingAs` JSDoc)
+- **Technical explanation:** the comment pointed at the deleted bespoke middleware; the seam now lives in the `ClsMiddleware` setup hook.
+- **Failure scenario:** a future reader recreating a bespoke middleware alongside the CLS module would reintroduce the dual-mechanism state this change removed.
+- **Judge recommendation:** reword to the current seam.
+- **Investigation results:** valid.
+- **Agreed resolution:** applied — comment now points at the ClsMiddleware setup hook.
+- **Verdict:** APPROVED_WITH_SUGGESTIONS → finding applied; no re-review needed (comment-only).
+
+## Wave 16 security review (2026-11-15) — SECURITY_APPROVED_WITH_INFORMATIONAL_FINDINGS
+
+Independent security gate over the nestjs-cls integration. Trust boundary,
+store retention (`saveReq`/`saveRes` off is load-bearing), injection safety
+(symbol keys immune to prototype pollution), DoS (WeakMap/per-request store
+lifecycle), CLS-vs-RequestContext isolation, and module mechanics all
+positively verified sound against installed library sources. Two
+Informational findings, both comment-level contracts applied:
+
+- **SEC-01 (Informational, CWE-639-adjacent):** exported `runWithActorContext` can set arbitrary attribution — no production caller today. **Resolved (2026-11-15):** trust contract documented on the export (verified principals only; never client input).
+- **SEC-02 (Informational, CWE-1188 class):** ordering trap — Nest middleware runs before guards, so a guard-populated `request.user` would not exist in the `setup` hook; a header-based fallback would become attribution forgery. **Resolved (2026-11-15):** the seam comment now states the mechanism — when authentication lands, the auth guard writes the verified principal into the store after verification; `setup` only opens the store with the system default.
+
+## Wave 17 — post-report diff review (caveman-review, 2026-11-15)
+
+Terse self-review of the full uncommitted `_047`+`_048` diff (requested by the
+developer: `caveman-review` + "review diff") after both waves closed. Seven
+findings; all applied the same day:
+
+- **R-17-1 (High, doc drift):** `docs/current-state.md` named the deleted bespoke `ActorContextMiddleware` (+ "AsyncLocalStorage") in the actor bullet — the seam is now the nestjs-cls `ClsModule` middleware (ADR-031). **Resolved:** bullet rewritten.
+- **R-17-2 (High, doc drift):** same stale class reference in Known Technical Limitations. **Resolved:** now points at `resolveActorId` in `actor-context.module.ts`.
+- **R-17-3 (Medium, doc drift):** accepted-ADR status list stopped at ADR-030; ADR-031 missing. **Resolved:** appended.
+- **R-17-4 (Medium, test robustness):** `test/base-entity.db-spec.ts` concurrent-actor chains shared the global `EntityManager` without a fork — one chain's `em.create` could land in the other's in-flight flush (cross-attribution hazard; the exact behavior under test). **Resolved:** each chain now flushes its own `em.fork()`. Test remains unexecuted (db tier pending Docker).
+- **R-17-5 (Low, robustness):** `startOfLocalDayUtc` fixed-point loop could exit after the 3-pass cap without convergence, returning a wrong boundary silently. **Resolved (with a corrected premise):** the original recommendation (throw on non-convergence) was wrong — a skipped local midnight has no fixed point; the candidates oscillate across the transition (America/Santiago 2024-09-08: 04:00Z ↔ 03:00Z) and the 3-pass cap lands on the correct transition instant. The naive convergence throw regressed the suite (caught immediately by the Santiago spec). Final fix: early return on true convergence, and after the cap assert the final candidate is a zone transition (offset changes at that millisecond) — loud failure only for genuinely broken results, preserving the oscillation semantics.
+- **R-17-6 (Low, doc drift):** db-spec test count said 9 (now 11). **Resolved.**
+- **R-17-7 (Low, style):** duplicate imports from `@mikro-orm/decorators/legacy` in `base.entity.spec.ts`. **Resolved:** merged.

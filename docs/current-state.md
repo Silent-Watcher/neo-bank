@@ -1,6 +1,6 @@
 # Current Development State
 
-Snapshot of what exists in the repository. Last verified: 2026-11-14.
+Snapshot of what exists in the repository. Last verified: 2026-11-15.
 Legend: **Implemented** / **Partial** / **Planned** / **Unknown**.
 
 ## Maturity
@@ -9,7 +9,7 @@ Early-stage pre-product. The backend has real infrastructure (config, logging,
 error contracts, request IDs, a Redis integration module, a PostgreSQL
 persistence layer) and one small feature; both frontends are untouched
 framework scaffolds. No auth, no deployment setup; the persistence layer is
-infrastructure-only (no entities yet).
+infrastructure-only (shared entity base in place, no feature entities yet).
 
 ## Applications
 
@@ -60,7 +60,32 @@ infrastructure-only (no entities yet).
   exclusively through explicit migrations (folder
   `src/shared/database/migrations/`, CLI config `mikro-orm.config.ts`,
   scripts `pnpm db:migration:create/up/down`) — no schema synchronization.
-  Infrastructure level only: no entities exist yet.
+  Infrastructure level only: the shared abstract `BaseEntity` (ADR-029)
+  exists; no feature entities or tables yet — the first feature entity's
+  migration carries the base columns.
+- Shared entity base and actor audit context (ADR-029): abstract `BaseEntity`
+  (`src/shared/database/base.entity.ts`) inlined into every future entity —
+  BIGINT `bigserial` id (TypeScript `string`, propagated `id > 0` check),
+  `timestamptz(3)` timestamps, nullable `createdBy`/`updatedBy` audit
+  scalars (no foreign keys), ORM-owned optimistic-locking `version`,
+  `deletedAt` soft-delete surface. A per-request actor context
+  (`src/shared/actor-context/`, the nestjs-cls `ClsModule` middleware —
+  ADR-031) opens a request-scoped store and resolves audit attribution via
+  `getActorId()`; with no authentication yet, every request is attributed
+  to the system (`NULL`). Optimistic-lock conflicts map through
+  `mapOptimisticLockError` (`src/shared/errors/optimistic-lock.mapper.ts`)
+  to `ErrorCode.VersionConflict` (HTTP 409) with bilingual Problem Details.
+  Covered by metadata tests (`base.entity.spec.ts`, 5 tests) and a
+  database-tier spec (`test/base-entity.db-spec.ts`, 11 tests; the db-tier
+  run is pending — see the Tests bullet).
+- UTC-first storage policy (ADR-030): all timestamps are `timestamptz(3)`
+  absolute instants (`forceUtcTimezone: true` explicit in the shared ORM
+  options), the dev/prod Compose PostgreSQL services and the Testcontainers
+  test image run pinned to `TZ: UTC`, and user-timezone conversion happens
+  only at the presentation boundary via IANA zones.
+  `calendarDayUtcRange` (`src/shared/datetime/utc-datetime.ts`) computes the
+  exact UTC boundaries of user-local calendar days (DST-correct); the
+  developer guide is `docs/utc-datetime.md`.
 - Global HTTP rate limiting (ADR-015): official `@nestjs/throttler` (v6) with
   two named policies (`short`: 10 req/1s default; `long`: 100 req/1m default)
   backed by custom `RedisThrottlerStorage` using the shared Redis connection.
@@ -163,16 +188,19 @@ infrastructure-only (no entities yet).
   An additional per-phone hourly rate limit (5 sends / rolling 60 min) is
   enforced atomically via Redis sorted set. No registration or authentication
   steps yet.
-- Tests: Vitest unit (334 tests), e2e (15 files / 83 tests), Redis
+- Tests: Vitest unit (362 tests in 42 files), e2e (15 files / 83 tests), Redis
   integration (4 files / 60 tests via `pnpm test:redis`), database
-  integration (1 file / 4 tests via `pnpm test:db`, ADR-027). All integration
+  integration (2 files / 15 tests via `pnpm test:db`, ADR-027/029/030/031). All integration
   and e2e tests use Testcontainers (`apps/api/test/testcontainers.ts`,
   ADR-016): the Redis and database integration tiers start isolated
   containers per test file (`redis:8.2-alpine`, `postgres:17.6-alpine`), and
   the e2e tier shares one Redis and one PostgreSQL container per test run
   via the Vitest globalSetup
   (`apps/api/test/e2e.global-setup.ts`, ADR-025) — all with dynamic ports;
-  no manual Docker Compose required.
+  no manual Docker Compose required. The unit-tier counts are verified
+  (2026-11-15); the database-tier and e2e suites were not executed for the
+  base-entity feature (the Docker daemon was unavailable at validation
+  time), so their results are pending.
 
 **Partial**
 
@@ -219,8 +247,11 @@ bounded retries (5 attempts, capped backoff, per-attempt timeout; startup
 fails if the database cannot be reached, and permanent authentication or
 configuration errors are not retried), while post-boot outages keep
 degraded-liveness/strict-readiness health; explicit migrations only — at
-infrastructure level (no entities yet); the dev and prod Compose stacks
-inject `DATABASE_URL` into the API service. The development Compose stack runs
+infrastructure level (the shared `BaseEntity`, ADR-029, exists; no feature
+entities yet); the dev and prod Compose stacks
+inject `DATABASE_URL` into the API service and pin the PostgreSQL services
+to UTC (`TZ: UTC`, ADR-030 — the Testcontainers test image does the same).
+The development Compose stack runs
 `redis/redis-stack:7.4.0-v8` (pinned; Redis server 7.4.7) with bundled Redis
 Insight on port 8001
 (ADR-020); the API logs the host-accessible Insight URL at startup when the
@@ -295,12 +326,17 @@ Per-app commands are listed in each `apps/<app>/ONBOARDING.md`.
 - Vitest resolves the API's `#` subpath aliases through
   `apps/api/test/subpath-import-aliases.ts`; new top-level `#` aliases must be
   added there as well as in `apps/api/package.json`.
+- No authentication exists yet: the actor-extraction seam
+  (`resolveActorId` in `src/shared/actor-context/actor-context.module.ts`)
+  resolves no identity, so the shared BaseEntity's
+  audit columns (`createdBy`/`updatedBy`) are always `NULL` (system
+  attribution) until authentication lands (ADR-029, ADR-031).
 - The pre-push hook runs the full test suite; pushes fail if it fails.
 
 ## Accepted Architectural Decisions
 
 All ADRs live in [DECISIONS.md](../DECISIONS.md). Status as of this snapshot:
 
-- **Accepted:** ADR-001 (Turborepo), ADR-002 (Fastify), ADR-003 (SWC), ADR-004 (@nestjs/config + Zod), ADR-005 (URI versioning), ADR-006 (1 MiB body limit), ADR-007 (`api` prefix), ADR-008/009 (Pino / nestjs-pino), ADR-010 (UUIDv4 request IDs), ADR-011 (envelope exclusions), ADR-012 (ioredis without a wrapper), ADR-013 (Redis module architecture), ADR-014 (Swagger/OpenAPI, development-only), ADR-015 (Global HTTP rate limiting with Redis-backed @nestjs/throttler), ADR-016 (Testcontainers for integration and e2e testing), ADR-017 (OTP verification attempt lockout for enrollment security), ADR-018 (HMAC-SHA-256 digest storage for enrollment OTPs), ADR-019 (OTP verification hardening — conditional attempt counting and challenge identity), ADR-020 (development Redis service migrated to Redis Stack with bundled Redis Insight), ADR-021 (bilingual internationalization en/fa via the official @nestjs/i18n), ADR-022 (centralized logging with Grafana Alloy, Loki, and Grafana), ADR-023 (project-level multi-agent development workflow for ZCode + Claude Code), ADR-024 (MockServer for development-time resilience testing), ADR-025 (managing the e2e Redis with Testcontainers — one shared container per run), ADR-026 (memory-based load shedding and health-aware readiness), ADR-027 (Use MikroORM v7 with PostgreSQL for Persistence), ADR-028 (pgAdmin 4 as the development-only PostgreSQL web UI).
+- **Accepted:** ADR-001 (Turborepo), ADR-002 (Fastify), ADR-003 (SWC), ADR-004 (@nestjs/config + Zod), ADR-005 (URI versioning), ADR-006 (1 MiB body limit), ADR-007 (`api` prefix), ADR-008/009 (Pino / nestjs-pino), ADR-010 (UUIDv4 request IDs), ADR-011 (envelope exclusions), ADR-012 (ioredis without a wrapper), ADR-013 (Redis module architecture), ADR-014 (Swagger/OpenAPI, development-only), ADR-015 (Global HTTP rate limiting with Redis-backed @nestjs/throttler), ADR-016 (Testcontainers for integration and e2e testing), ADR-017 (OTP verification attempt lockout for enrollment security), ADR-018 (HMAC-SHA-256 digest storage for enrollment OTPs), ADR-019 (OTP verification hardening — conditional attempt counting and challenge identity), ADR-020 (development Redis service migrated to Redis Stack with bundled Redis Insight), ADR-021 (bilingual internationalization en/fa via the official @nestjs/i18n), ADR-022 (centralized logging with Grafana Alloy, Loki, and Grafana), ADR-023 (project-level multi-agent development workflow for ZCode + Claude Code), ADR-024 (MockServer for development-time resilience testing), ADR-025 (managing the e2e Redis with Testcontainers — one shared container per run), ADR-026 (memory-based load shedding and health-aware readiness), ADR-027 (Use MikroORM v7 with PostgreSQL for Persistence), ADR-028 (pgAdmin 4 as the development-only PostgreSQL web UI), ADR-029 (Shared MikroORM BaseEntity with Actor Audit Context and Native Optimistic Locking), ADR-030 (UTC-First TIMESTAMPTZ Storage Policy), ADR-031 (Use nestjs-cls for the Application Actor Context).
 
 All architectural decisions are accepted and implemented. Do not build on rejected alternatives (e.g. do not introduce header versioning or a second logger).
