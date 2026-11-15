@@ -3,7 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { MEMORY_PROTECTION_CONFIG } from '#config/memory-protection.config.js';
 import { createE2eTestApp } from './create-test-app.js';
-import type { NestFastifyApplication } from '@nestjs/platform-fastify';
+import type { NestNodeApplication } from '@nestjs/platform-node';
 
 // Memory-based load shedding (ADR-026), exercised end to end with a
 // configuration override instead of real memory pressure: the protection
@@ -16,7 +16,7 @@ import type { NestFastifyApplication } from '@nestjs/platform-fastify';
 // exempt (@SkipMemoryProtection) and must stay reachable while every
 // non-exempt route receives the 503 rejection.
 describe('Memory protection (e2e)', () => {
-  let app: NestFastifyApplication;
+  let app: NestNodeApplication;
 
   beforeAll(async () => {
     app = await createE2eTestApp(undefined, {

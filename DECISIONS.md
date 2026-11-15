@@ -79,7 +79,7 @@ Similar to Yarn workspaces but with slower installation and less mature lockfile
 
 ## ADR-002: Adopt Fastify as the NestJS HTTP Platform
 
-- **Status:** Accepted
+- **Status:** Accepted (superseded by ADR-032, 2026-11-15 — the Fastify adapter is replaced by the official Node HTTP adapter; this entry is retained as decision history)
 - **Date:** 2026-10-23
 
 ### Context
@@ -1600,3 +1600,93 @@ OSV query for `nestjs-cls@7.0.2`: 0 advisories. Package ships no consumer-side i
 - Official documentation: https://docs.nestjs.com/recipes/async-local-storage, https://papooch.github.io/nestjs-cls/, https://mikro-orm.io/docs/identity-map, https://mikro-orm.io/docs/usage-with-nestjs
 - Verified installed sources: `@mikro-orm/nestjs` 7.1.0 `mikro-orm-core.module.js` (automatic middleware registration), `mikro-orm.middleware.js` (`RequestContext.create`), `@mikro-orm/core` 7.2.9 `utils/RequestContext.js` (ALS run + per-request fork)
 - `prompts/_048-nestjs-cls-actor-context.md`
+
+---
+
+## ADR-032: Migrate the API HTTP Platform from Fastify to the NestJS NodeAdapter
+
+- **Status:** Accepted
+- **Date:** 2026-11-15
+
+### Context
+
+ADR-002 adopted Fastify as the NestJS HTTP platform when NestJS offered no alternative beyond Express. NestJS 12.3 introduced the official `NodeAdapter` (`@nestjs/platform-node`): a first-party HTTP adapter built directly on `node:http`/`node:https` with no framework in between, becoming the default platform in NestJS 13. The API runs `@nestjs/core`/`common` 12.5.0, so the adapter is available without a major-version upgrade. Continuing on Fastify means carrying a framework dependency that upstream no longer treats as the strategic default, while `NodeAdapter` shrinks the dependency surface to the Node standard library and aligns the stack with the direction of the framework.
+
+The migration is constrained by observable-behavior preservation: the API's contracts (ADR-005 URI versioning, ADR-006 body limit, ADR-007 global prefix, ADR-010 request IDs, ADR-011 response envelope, ADR-014 Swagger, ADR-015 throttling, ADR-021 i18n, ADR-031 actor context) must survive the adapter swap, and every deviation must be a recorded decision, not a silent test relaxation.
+
+### Decision
+
+Replace `@nestjs/platform-fastify` with `@nestjs/platform-node` 12.5.0 (`NodeAdapter`, `NestNodeApplication`) in the production bootstrap (`apps/api/src/main.ts`) and in every test application factory (`apps/api/test/create-test-app.ts` and the db-spec factories), which always pass the adapter explicitly so no test tier can silently initialize on a different platform. Remove `fastify` (dev dependency, types only) and `@fastify/static` (present solely for the Swagger UI on Fastify) once nothing imports them. Establish platform independence as a permanent architectural rule in the root `AGENTS.md` (the Platform-Agnostic Architecture section), and confine platform-specific code to the bootstrap boundary: every `src/` import of a Fastify type is replaced with Nest abstractions (`ExecutionContext`, `ArgumentsHost`) or app-owned minimal contracts, and platform-specific operations are isolated in the HTTP layer.
+
+Behavior-critical mappings, verified against the installed adapter source and published type definitions:
+
+- **Trust proxy:** `NodeAdapterOptions.trustProxy` accepts the same values as Fastify's option and compiles them with the same `proxy-addr` semantics; `req.ip`, `req.ips`, `req.protocol`, `req.hostname` resolve express-style from `X-Forwarded-*` for trusted proxies. `TRUST_PROXY` env configuration and the ADR-015 throttler tracker (`req.ip`) carry over unchanged.
+- **Body limit:** the adapter's default body-parser limit is 100 KB, not Fastify's 1 MiB. Bootstrap registers `json` and `urlencoded` parsers explicitly through `useBodyParser` with `limit` taken from `BODY_LIMIT`, preserving ADR-006.
+- **Request IDs (ADR-010):** Fastify's `genReqId` and raw `onRequest` lifecycle hook are replaced by the adapter's `setOnRequestHook` (runs as the first middleware; the adapter also runs it for the requests its router rejects before any middleware, as Fastify does for its own router errors). The hook assigns the request ID onto the request object, echoes `x-request-id` on every response, and rejects a present-but-invalid inbound header with 400 Problem Details exactly as before.
+- **Root-level not-found fallback:** Nest core mounts its not-found handler only under the global prefix, so unmatched paths outside it (e.g. `GET /healthz`) would receive the adapter's plain-text 404 instead of the Problem Details contract that Fastify served instance-wide. The developer directed that the Problem Details contract be kept everywhere; the bootstrap therefore registers an additional prefix-less not-found fallback after init (implementation recorded in `docs/ai-decisions.md` §13), reusing the same shared building blocks as the Problem Details filter.
+- **Swagger UI:** `SwaggerModule.serveStatic` checks the adapter type; for `node` it falls through to `app.useStaticAssets`, which `NodeAdapter` implements natively. `/docs`, `/docs/json`, `/docs/yaml` paths are unchanged, and `@fastify/static` is removable.
+- **Actor context (ADR-031):** `nestjs-cls` detects the adapter by constructor name; non-Fastify resolves to the Express path, mounting `ClsMiddleware` at `/`. `NodeAdapter` supports connect-style middleware, so the CLS middleware runs in the same pipeline position. Correctness is verified by the existing actor-context e2e/db suites before sign-off.
+
+**Accepted behavior changes** (Fastify-only behaviors the adapter does not reproduce; both are invisible to the current test suite and to clients of the current API):
+
+- **No automatic ETag/304 support (restored in-task, 2026-11-15).** Fastify emits ETags on JSON responses and answers `If-None-Match` with 304; `NodeAdapter` does neither by default. The loss was accepted at migration time and recorded in `DEFERRED.md`; the developer then directed restoring it in the same task: a global `ConditionalRequestInterceptor` plus shared helpers tag every JSON-serializable response with a WEAK entity tag over the application payload (`W/"<sha256>"` — the response envelope adds per-response metadata, so byte-identity of the wire body is not claimed; `If-None-Match` compares weakly per RFC 9110 §13.1.2) and answer matching `If-None-Match` on GET/HEAD with 304 (the adapter ends 304s body-less natively). Problem Details responses and the two bootstrap error paths are tagged through the filter/helpers; their fresh timestamp/request IDs mean they never revalidate, matching the Fastify-era behavior.
+
+A notable asymmetry in the other direction: Fastify's tags were STRONG and covered the full response envelope, whose fresh timestamp and per-request request ID changed the body on every response — so under Fastify, `If-None-Match` revalidation could never succeed for enveloped responses. The feature existed but had no usable effect. The weak payload validator restored here is the first implementation of this contract on the API where conditional revalidation actually works: "unchanged" means _same application data_ (the envelope's per-response metadata is deliberately excluded), which is the semantics clients caching representations want.
+
+- **Keep-alive timeout explicitly set to 20 seconds** (`keepAliveTimeout = 20_000`, a named bootstrap constant). Fastify's default is 72 s, the raw Node default is 5 s; the developer chose 20 s as a deliberate middle ground. With no reverse proxy in front of the API today, neither value creates a compatibility problem; if a connection-pooling proxy lands, this is a one-constant change. The request timeout is accepted at the adapter's (Node's) 300 s default — Fastify disabled it entirely; nothing today serves a 5-minute response (2026-11-15, developer decision).
+- **Proxy trust allowlist:** `TRUST_PROXY` keeps its boolean semantics and the new optional `TRUST_PROXY_PROXIES` variable (comma-separated proxy addresses or CIDR ranges) narrows trust to the listed proxies when `TRUST_PROXY=true`, removing the trust-all footgun for XFF-appending proxies (2026-11-15, developer decision — Wave 18 SEC-01).
+
+### Alternatives Considered
+
+- _Stay on Fastify (status quo):_ zero migration cost, but keeps a heavier dependency surface and diverges from the platform NestJS 13 makes the default; the platform-agnosticism rule would land regardless.
+- _Express adapter (`@nestjs/platform-express`):_ the long-standing alternative, but a larger dependency tree, not the upstream default going forward, and its API surface invites Express-coupled code; explicitly rejected by the developer.
+- _Defer to NestJS 13:_ bundles the platform swap into a major-version upgrade — a bigger, riskier change; rejected in favor of decoupling the two upgrades.
+
+### Rationale
+
+Developer direction. `NodeAdapter` is the official first-party adapter, eliminates the Fastify dependency from the runtime tree, and its option surface covers everything this API actually uses (trust proxy, body parsing, request hooks, static assets, CORS, middleware). The platform-agnosticism rule turns the migration's refactoring into a permanent constraint, so the next platform change is a bootstrap-file edit rather than a codebase sweep.
+
+### Security Assessment
+
+Trust-proxy semantics are identical (same `proxy-addr` compilation), so no new `X-Forwarded-*` spoofing surface. The 1 MiB body limit is enforced explicitly rather than inherited from Fastify defaults. Both Fastify's and the adapter's JSON parsers reject prototype-pollution keys (`__proto__`, `constructor.prototype`) with 400 by default. Error responses keep their generic Problem Details shape (existing filters unchanged in semantics). The supply-chain surface shrinks: `@nestjs/platform-fastify`, `fastify` (with its transitive tree), and `@fastify/static` are removed; `@nestjs/platform-node` brings `light-my-request` (test-injection) as its notable dependency. `pnpm audit` re-runs as part of implementation; OSV/advisory results are recorded there.
+
+### Performance Implications
+
+The radix-tree router and `node:http` serving are comparable to Fastify in throughput for this workload. The main regression: Fastify compiles response serializers (`fast-json-stringify`) while the adapter serializes with `JSON.stringify` — a constant-factor cost irrelevant at the current scale. No ETag generation also removes a per-response hash computation Fastify performed.
+
+### Operational Implications
+
+Docker images, Compose stacks, health checks, and the observability pipeline are adapter-agnostic and unchanged. Graceful shutdown carries over: the adapter tracks open connections and drains them on `close()` behind the existing `enableShutdownHooks()` path. Keep-alive is now explicit (20 s) instead of a framework default. Logging (`nestjs-pino`) already types against `IncomingMessage`/`ServerResponse`, so log shape and redaction are unchanged.
+
+### Consequences and Trade-offs
+
+**Positive**
+
+- Runtime dependency on Fastify and its plugin tree removed; HTTP platform is the Node standard library plus first-party Nest code.
+- Aligns with the NestJS 13 default platform, reducing future upgrade risk.
+- Platform-agnosticism rule (`AGENTS.md`) makes reusable components adapter-neutral by construction.
+
+**Negative**
+
+- Lost framework conveniences: compiled JSON serialization, automatic ETags (deferred to `DEFERRED.md`), Fastify's strict header validation edge cases.
+- Keep-alive is now an application-owned constant that must be revisited if a proxy with idle pooling is introduced.
+
+**Limitations**
+
+- `nestjs-cls` and `@nestjs/swagger` resolve the adapter by detection heuristics (`constructor.name`, `getType()`); a future adapter change must re-verify both.
+- The adapter is young (12.3+); behavioral edge cases may surface that Fastify hardened over years — regression tests added in this migration are the guard.
+
+### Testing and Migration Implications
+
+- Baseline checks are recorded before any code change (build, lint, typecheck, unit, e2e, redis, db tiers).
+- `test/create-test-app.ts` and the db-spec factories pass `new NodeAdapter()` explicitly; e2e assertions preserved semantically — `http-config` (body limit, trust-proxy identity), `envelope` (HEAD semantics), `request-id`, `rate-limit` — with Fastify-specific mechanics replaced.
+- Regression tests are added for the two accepted behavior changes (no ETag; 20 s keep-alive) and for body-limit enforcement on the new parser chain.
+- The GitNexus graph index re-analyzed after the migration to keep impact analysis accurate.
+
+### References
+
+- `apps/api/src/main.ts`, `apps/api/test/create-test-app.ts`, `apps/api/package.json`
+- DECISIONS.md ADR-002 (superseded), ADR-005, ADR-006, ADR-007, ADR-010, ADR-011, ADR-014, ADR-015, ADR-021, ADR-025, ADR-031
+- Official documentation: https://docs.nestjs.com/http/performance (NodeAdapter), https://docs.nestjs.com/fundamentals/platform-agnosticism
+- Verified package sources: `@nestjs/platform-node` 12.5.0 published tarball (adapter, options, body parser, router), `@nestjs/swagger` 12.1.0 `swagger-module.js` (serve-static branch), `nestjs-cls` 7.0.2 `feature-detection.utils.js` (adapter detection, mount point)
+- `DEFERRED.md` (ETag/304 conditional-request support), `prompts/_049-fastify-to-node-adapter.md`

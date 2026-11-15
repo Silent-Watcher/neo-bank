@@ -55,6 +55,31 @@ export const serverEnvSchema = z.object({
     .enum(['true', 'false'], { error: 'TRUST_PROXY must be exactly "true" or "false".' })
     .default('false')
     .transform((value) => value === 'true'),
+  // Optional proxy allowlist used only when TRUST_PROXY=true: comma-separated
+  // proxy addresses or CIDR ranges (for example "10.0.0.0/8,192.168.1.10")
+  // whose X-Forwarded-* headers are trusted instead of every hop. Only
+  // meaningful together with TRUST_PROXY=true; when unset with TRUST_PROXY=true
+  // every hop is trusted, which requires an X-Forwarded-For-sanitizing proxy.
+  // Entries are sanity-checked here (no whitespace or separators); semantic
+  // errors in an entry fail fast at adapter construction (proxy-addr compile).
+  TRUST_PROXY_PROXIES: z
+    .string()
+    .optional()
+    .transform((value) => {
+      if (value === undefined || value.trim() === '') return undefined;
+      return value
+        .split(',')
+        .map((entry) => entry.trim())
+        .filter((entry) => entry.length > 0);
+    })
+    .refine(
+      (proxies) =>
+        proxies === undefined || proxies.every((entry) => /^[a-zA-Z0-9.:/-]+$/.test(entry)),
+      {
+        message:
+          'TRUST_PROXY_PROXIES entries must be proxy addresses or CIDR ranges without whitespace.',
+      },
+    ),
   // Request body size in bytes. Constrains payload size to bound memory
   // consumption per request and limit the impact of oversized-payload abuse.
   BODY_LIMIT: positiveSafeInteger('BODY_LIMIT').default(1048576),

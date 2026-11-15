@@ -6,8 +6,8 @@ who has never seen this repository.
 ## 1. Introduction
 
 This application is the backend of Neo Bank, a banking product in early
-development. It is a REST API built with NestJS 12 running on Fastify
-instead of Express. It currently serves health checks, a Problem Type
+development. It is a REST API built with NestJS 12 running on the official
+Node HTTP platform (`@nestjs/platform-node`, ADR-032). It currently serves health checks, a Problem Type
 documentation page, and the first feature (enrollment challenge: it
 validates a phone number, stores a six-digit OTP in Redis for 120 seconds
 using atomic `SET NX EX`, and a verify endpoint consumes the stored code
@@ -33,23 +33,23 @@ feature coverage is minimal.
 
 ## 2. Technology Stack
 
-| Technology                               | Purpose                                                                                                 |
-| ---------------------------------------- | ------------------------------------------------------------------------------------------------------- |
-| NestJS 12                                | Application framework (modules, DI, pipes, filters, interceptors)                                       |
-| Fastify (via `@nestjs/platform-fastify`) | HTTP platform — high-throughput target ([ADR-002](../../DECISIONS.md))                                  |
-| SWC                                      | TypeScript transpilation (fast builds; type checking stays with `tsc`)                                  |
-| Zod 4                                    | Validation for HTTP input and environment variables                                                     |
-| @nestjs/config                           | Configuration namespaces via `registerAs` + `ConfigService`                                             |
-| @nestjs/i18n                             | Bilingual en/fa translations: locale resolution, JSON catalogs ([ADR-021](../../DECISIONS.md))          |
-| nestjs-cls 7                             | Per-request AsyncLocalStorage context (actor store) via `ClsModule` ([ADR-031](../../DECISIONS.md))     |
-| Pino / nestjs-pino                       | Structured logging; request-scoped context, header redaction                                            |
-| @nestjs/terminus                         | `/health` (liveness) and `/health/ready` (readiness) endpoints                                          |
-| ioredis 6                                | Redis client behind the shared `RedisService` ([ADR-012](../../DECISIONS.md)/[013](../../DECISIONS.md)) |
-| MikroORM v7 (`@mikro-orm/*`)             | PostgreSQL persistence: ORM integration, migrations, health indicator ([ADR-027](../../DECISIONS.md))   |
-| @nestjs/swagger + @fastify/static        | OpenAPI docs; Swagger UI at `/docs`, **development only** ([ADR-014](../../DECISIONS.md))               |
-| Vitest + supertest                       | Unit and e2e testing                                                                                    |
-| Testcontainers                           | Real Redis and PostgreSQL in integration & e2e tests (ADR-016/025); see `test/testcontainers.ts`        |
-| Oxlint / Oxfmt                           | Linting and formatting (no ESLint/Prettier)                                                             |
+| Technology                                   | Purpose                                                                                                 |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| NestJS 12                                    | Application framework (modules, DI, pipes, filters, interceptors)                                       |
+| Node HTTP platform (`@nestjs/platform-node`) | Official adapter on `node:http` ([ADR-032](../../DECISIONS.md), superseding ADR-002)                    |
+| SWC                                          | TypeScript transpilation (fast builds; type checking stays with `tsc`)                                  |
+| Zod 4                                        | Validation for HTTP input and environment variables                                                     |
+| @nestjs/config                               | Configuration namespaces via `registerAs` + `ConfigService`                                             |
+| @nestjs/i18n                                 | Bilingual en/fa translations: locale resolution, JSON catalogs ([ADR-021](../../DECISIONS.md))          |
+| nestjs-cls 7                                 | Per-request AsyncLocalStorage context (actor store) via `ClsModule` ([ADR-031](../../DECISIONS.md))     |
+| Pino / nestjs-pino                           | Structured logging; request-scoped context, header redaction                                            |
+| @nestjs/terminus                             | `/health` (liveness) and `/health/ready` (readiness) endpoints                                          |
+| ioredis 6                                    | Redis client behind the shared `RedisService` ([ADR-012](../../DECISIONS.md)/[013](../../DECISIONS.md)) |
+| MikroORM v7 (`@mikro-orm/*`)                 | PostgreSQL persistence: ORM integration, migrations, health indicator ([ADR-027](../../DECISIONS.md))   |
+| @nestjs/swagger                              | OpenAPI docs; Swagger UI at `/docs`, **development only** ([ADR-014](../../DECISIONS.md))               |
+| Vitest + supertest                           | Unit and e2e testing                                                                                    |
+| Testcontainers                               | Real Redis and PostgreSQL in integration & e2e tests (ADR-016/025); see `test/testcontainers.ts`        |
+| Oxlint / Oxfmt                               | Linting and formatting (no ESLint/Prettier)                                                             |
 
 Dependency notes: `@mikro-orm/postgresql` pulls `pg` (8.23.1) and,
 transitively, `kysely` (0.29.8) — neither is a direct dependency.
@@ -92,6 +92,7 @@ cp env/.env.example env/.env.development
 | `HOST`, `PORT`                         | Bind address and port                                                                                                                                                                                                                                                                                                              | required (dev/test files set `3001`)              |
 | `CORS_ORIGIN`                          | Comma-separated allowed origins                                                                                                                                                                                                                                                                                                    | CORS disabled; required when `APP_ENV=production` |
 | `TRUST_PROXY`                          | Trust proxy headers (`true`/`false`)                                                                                                                                                                                                                                                                                               | `false`                                           |
+| `TRUST_PROXY_PROXIES`                  | Optional comma-separated proxy addresses/CIDR ranges trusted instead of every hop; only meaningful with `TRUST_PROXY=true` (set it for XFF-appending proxies)                                                                                                                                                                      | unset (trust-all when `TRUST_PROXY=true`)         |
 | `BODY_LIMIT`                           | Max request body bytes                                                                                                                                                                                                                                                                                                             | `1048576` (1 MiB)                                 |
 | `DATABASE_URL`                         | PostgreSQL connection URL (`postgres://` or `postgresql://`, ADR-027); the connection is established during bootstrap with bounded retries and startup fails if the server cannot be reached (auth/config errors fail immediately) — after a successful boot, an outage degrades `/health` (HTTP 200), `/health/ready` returns 503 | required                                          |
 | `REDIS_INSIGHT_URL`                    | Host-accessible Redis Insight URL; startup log prints it only when set (ADR-020)                                                                                                                                                                                                                                                   | unset (injected by the dev Compose stack)         |
@@ -156,7 +157,7 @@ pnpm start        # node dist/main.js
 
 ```
 src/
-  main.ts                  # bootstrap: Fastify options, /api prefix, /v1 versioning, CORS
+  main.ts                  # bootstrap: HTTP adapter options, /api prefix, /v1 versioning, CORS
   i18n/                    # translation catalogs src/i18n/{en,fa}/*.json, key type
                            # registration (i18n.types.ts), catalog-consistency spec
   modules/
@@ -261,9 +262,12 @@ tooling (lint, format, Turbo tasks) comes from the root; see
 
 ## 7. Important Notes
 
-- **Fastify, not Express:** use `FastifyRequest`/`FastifyReply` types and
-  Fastify-compatible plugins; Express middleware does not work
-  ([ADR-002](../../DECISIONS.md)).
+- **Platform-agnostic components:** reusable components never import
+  platform request/response types; shared code consumes the app-owned
+  contracts in `src/shared/http/http-boundary.ts`, and platform-specific
+  behavior stays in the bootstrap boundary (`src/main.ts` and its test
+  mirror `test/create-test-app.ts`) ([ADR-032](../../DECISIONS.md); root
+  rule: Platform-Agnostic Architecture).
 - **ESM everywhere:** `"type": "module"` — relative imports in source need
   the `.js` extension; cross-directory imports use `#` aliases, never
   `../..`.

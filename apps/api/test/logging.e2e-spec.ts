@@ -1,6 +1,6 @@
 import { Writable } from 'node:stream';
 
-import type { NestFastifyApplication } from '@nestjs/platform-fastify';
+import type { NestNodeApplication } from '@nestjs/platform-node';
 import { Logger, PARAMS_PROVIDER_TOKEN } from 'nestjs-pino';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import request from 'supertest';
@@ -16,7 +16,7 @@ interface LogLine {
 // Exercises the real AppModule logging pipeline but redirects Pino's output
 // into an in-memory sink instead of stdout, so log records can be asserted.
 describe('Pino logging (e2e)', () => {
-  let app: NestFastifyApplication;
+  let app: NestNodeApplication;
   let lines: string[];
 
   beforeAll(async () => {

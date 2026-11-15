@@ -15,11 +15,11 @@ pinned to `6.0.3` (Nest CLI needs the compiler API TypeScript 7 removed).
 Linting/formatting: Oxlint + Oxfmt everywhere. Git hooks: Husky, lint-staged,
 commitlint, `pnpm test` on pre-push.
 
-| Application     | Path         | Stack                           | Port | Status             |
-| --------------- | ------------ | ------------------------------- | ---- | ------------------ |
-| API             | `apps/api`   | NestJS 12, Fastify, SWC, ESM    | 3001 | Active development |
-| Web (customer)  | `apps/web`   | Next.js 16 App Router, React 19 | 3000 | Bare scaffold      |
-| Admin dashboard | `apps/admin` | Vite 8, React 19                | 5173 | Bare scaffold      |
+| Application     | Path         | Stack                                   | Port | Status             |
+| --------------- | ------------ | --------------------------------------- | ---- | ------------------ |
+| API             | `apps/api`   | NestJS 12, Node HTTP platform, SWC, ESM | 3001 | Active development |
+| Web (customer)  | `apps/web`   | Next.js 16 App Router, React 19         | 3000 | Bare scaffold      |
+| Admin dashboard | `apps/admin` | Vite 8, React 19                        | 5173 | Bare scaffold      |
 
 Frontends contain no API client code; client→API communication is not
 implemented. No authentication/authorization, no shared types. The API has a
@@ -29,9 +29,11 @@ yet — and Redis remains the only store feature code uses.
 
 ## API Architecture (`apps/api`)
 
-Entry point `src/main.ts` — all bootstrap HTTP configuration (Fastify
-`trustProxy`, `bodyLimit`, request IDs, global `api` prefix, URI versioning
-`/api/v1`, CORS) lives in its `bootstrap` function and must not be extracted.
+Entry point `src/main.ts` — all bootstrap HTTP configuration (NodeAdapter
+`trustProxy`, body-parser limit, request IDs, root not-found fallback, global
+`api` prefix, URI versioning `/api/v1`, CORS) lives in its `bootstrap`
+function and must not be extracted. Platform: `@nestjs/platform-node`
+(ADR-032).
 
 Key layers (Node `#` subpath import aliases, see `apps/api/package.json`):
 

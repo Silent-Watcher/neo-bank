@@ -1,6 +1,5 @@
 import { Catch, HttpException, HttpStatus } from '@nestjs/common';
 import type { ArgumentsHost, ExceptionFilter } from '@nestjs/common';
-import type { FastifyReply, FastifyRequest } from 'fastify';
 import { I18nService } from '@nestjs/i18n';
 import { PinoLogger } from 'nestjs-pino';
 import { ThrottlerException } from '@nestjs/throttler';
@@ -8,12 +7,11 @@ import { ThrottlerException } from '@nestjs/throttler';
 import { AppHttpException } from '#errors/app-http.exception.js';
 import { ErrorCode, errorCodeForStatus, titleKeyForErrorCode } from '#errors/error.code.js';
 import { buildProblemDetails, titleKeyForStatus } from '#errors/problem-details.js';
+import type { HttpRequestLike, HttpResponseLike } from '#http/http-boundary.js';
+import { isRecord } from '#http/http-boundary.js';
 import { resolveApiVersion } from '#http/api-version.js';
+import { weakEtag } from '#http/etag.js';
 import { X_REQUEST_ID_HEADER } from '#http/request-id.js';
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null;
-}
 
 function detailFromHttpException(exception: HttpException): string {
   const response = exception.getResponse();
@@ -44,6 +42,62 @@ interface NormalizedException {
   error?: Error;
 }
 
+// Normalizes a (framework or application) HTTP exception into the status/code/
+// detail triple the Problem Details contract carries. Shared with the
+// bootstrap's root-level not-found fallback so both paths build the same body
+// (ADR-032).
+export function normalizeHttpException(exception: unknown, i18n: I18nService): NormalizedException {
+  if (exception instanceof AppHttpException) {
+    return {
+      status: exception.getStatus(),
+      code: exception.code,
+      detail: detailFromHttpException(exception),
+    };
+  }
+
+  // Identified specifically (not via the status) so unrelated HTTP 429s
+  // keep the generic status-based handling; the framework exception
+  // message is replaced with a safe, predictable detail.
+  if (exception instanceof ThrottlerException) {
+    return {
+      status: HttpStatus.TOO_MANY_REQUESTS,
+      code: ErrorCode.RateLimited,
+      detail: i18n.t('errors.details.rateLimited'),
+    };
+  }
+
+  if (exception instanceof HttpException) {
+    const status = exception.getStatus();
+
+    return {
+      status,
+      code: errorCodeForStatus(status),
+      detail: detailFromHttpException(exception),
+    };
+  }
+
+  return {
+    status: HttpStatus.INTERNAL_SERVER_ERROR,
+    code: ErrorCode.ApplicationError,
+    detail: i18n.t('errors.details.unexpected'),
+    // Non-Error thrown values carry no safe diagnostics, but the failure
+    // must still surface at error level, so the type is wrapped as the
+    // cause. The thrown value itself is never logged or echoed.
+    error:
+      exception instanceof Error
+        ? exception
+        : new Error(`Non-Error value thrown (${typeof exception})`),
+  };
+}
+
+// The Problem Details `title` is built in English by buildProblemDetails and
+// localized here for the request's locale. `code`, `status`, `type` stay
+// machine-readable (ADR-021).
+export function localizedProblemTitle(i18n: I18nService, code: ErrorCode, status: number): string {
+  const key = titleKeyForErrorCode(code) ?? titleKeyForStatus(status);
+  return i18n.t(key, { args: { status } });
+}
+
 // Normalizes every escaped exception into the RFC 9457 Problem Details
 // contract. Built-in NestJS HTTP exceptions keep working as before and get a
 // centralized status-based code; unknown exceptions become a safe generic 500.
@@ -58,22 +112,28 @@ export class ProblemDetailsFilter implements ExceptionFilter {
 
   catch(exception: unknown, host: ArgumentsHost): void {
     const http = host.switchToHttp();
-    const request = http.getRequest<FastifyRequest>();
-    const reply = http.getResponse<FastifyReply>();
+    const request = http.getRequest<HttpRequestLike>();
+    const reply = http.getResponse<HttpResponseLike>();
 
-    const normalized = this.normalize(exception);
+    const normalized = normalizeHttpException(exception, this.i18n);
     const problem = buildProblemDetails({
       status: normalized.status,
       code: normalized.code,
       detail: normalized.detail,
       requestId: String(request.id),
-      apiVersion: resolveApiVersion(request.url),
+      apiVersion: resolveApiVersion(request.url ?? ''),
     });
     // `detail` is already localized at its throw site (service, pipe); the
     // title is built in English by buildProblemDetails (also consumed by the
     // pre-i18n request-id rejection) and localized here for the request's
     // locale. `code`, `status`, `type` stay machine-readable (ADR-021).
-    problem.title = this.localizedTitle(normalized.code, normalized.status);
+    problem.title = localizedProblemTitle(this.i18n, normalized.code, normalized.status);
+
+    // Conditional-request support (ADR-032): Problem Details bodies carry an
+    // entity tag like every other JSON response. The tag never revalidates —
+    // the body embeds a fresh timestamp and request ID per response — so the
+    // header is set without any If-None-Match processing.
+    reply.header('ETag', weakEtag(JSON.stringify(problem)));
 
     reply
       .status(normalized.status)
@@ -90,54 +150,5 @@ export class ProblemDetailsFilter implements ExceptionFilter {
     } else {
       this.logger.warn(`HTTP ${normalized.status} ${normalized.code}`);
     }
-  }
-
-  private localizedTitle(code: ErrorCode, status: number): string {
-    const key = titleKeyForErrorCode(code) ?? titleKeyForStatus(status);
-    return this.i18n.t(key, { args: { status } });
-  }
-
-  private normalize(exception: unknown): NormalizedException {
-    if (exception instanceof AppHttpException) {
-      return {
-        status: exception.getStatus(),
-        code: exception.code,
-        detail: detailFromHttpException(exception),
-      };
-    }
-
-    // Identified specifically (not via the status) so unrelated HTTP 429s
-    // keep the generic status-based handling; the framework exception
-    // message is replaced with a safe, predictable detail.
-    if (exception instanceof ThrottlerException) {
-      return {
-        status: HttpStatus.TOO_MANY_REQUESTS,
-        code: ErrorCode.RateLimited,
-        detail: this.i18n.t('errors.details.rateLimited'),
-      };
-    }
-
-    if (exception instanceof HttpException) {
-      const status = exception.getStatus();
-
-      return {
-        status,
-        code: errorCodeForStatus(status),
-        detail: detailFromHttpException(exception),
-      };
-    }
-
-    return {
-      status: HttpStatus.INTERNAL_SERVER_ERROR,
-      code: ErrorCode.ApplicationError,
-      detail: this.i18n.t('errors.details.unexpected'),
-      // Non-Error thrown values carry no safe diagnostics, but the failure
-      // must still surface at error level, so the type is wrapped as the
-      // cause. The thrown value itself is never logged or echoed.
-      error:
-        exception instanceof Error
-          ? exception
-          : new Error(`Non-Error value thrown (${typeof exception})`),
-    };
   }
 }

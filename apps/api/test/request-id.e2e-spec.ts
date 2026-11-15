@@ -92,6 +92,24 @@ describe('Request IDs (e2e)', () => {
     await app.close();
   });
 
+  it('rejects duplicate x-request-id header lines like the comma-joined form', async () => {
+    // The adapter's HTTP server keeps duplicate header lines as an array, not
+    // a joined string; both encodings of "multiple values" must reject alike.
+    // Arrange
+    const app = await createE2eTestApp(undefined, { controllers: [ContractController] });
+
+    // Act
+    const response = await request(app.getHttpServer())
+      .get('/api/v1/echo')
+      .set({ 'x-request-id': [VALID_UUID_V4_LOWERCASE, VALID_UUID_V4_LOWERCASE] });
+
+    // Assert
+    expect(response.status).toBe(400);
+    expect(response.body.code).toBe('INVALID_REQUEST_ID');
+    expect(response.headers['x-request-id']).not.toBe(VALID_UUID_V4_LOWERCASE);
+    await app.close();
+  });
+
   it('carries the request ID on responses to excluded and version-neutral routes', async () => {
     // Arrange
     const app = await createE2eTestApp();

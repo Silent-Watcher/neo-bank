@@ -5,7 +5,7 @@ import type { ErrorCode } from './error.code.js';
 import { problemTypeForErrorCode, titleForErrorCode } from './error.code.js';
 
 // RFC 9457 Problem Details with the application's extension members. Shared by
-// the global exception filter and the early Fastify request-id rejection so
+// the global exception filter and the early request-ID rejection so
 // every standardized error uses exactly this contract.
 export interface ProblemDetails {
   type: string;

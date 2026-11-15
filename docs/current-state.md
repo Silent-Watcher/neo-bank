@@ -13,12 +13,16 @@ infrastructure-only (shared entity base in place, no feature entities yet).
 
 ## Applications
 
-### `apps/api` — NestJS + Fastify backend (active)
+### `apps/api` — NestJS backend on the Node HTTP platform (active)
 
 **Implemented**
 
-- Bootstrap in `src/main.ts`: Fastify adapter with `trustProxy`, `bodyLimit`,
-  request-ID generation, global `api` prefix, URI versioning (`/api/v1`),
+- Bootstrap in `src/main.ts`: `NodeAdapter` (`@nestjs/platform-node`,
+  ADR-032) with `trustProxy`, explicit `json`/`urlencoded` body parsers
+  limited by `BODY_LIMIT`, an adapter-level request-ID lifecycle (ID
+  assignment, echo, early 400 rejection), an explicit 20 s keep-alive
+  timeout, a root-level not-found fallback keeping Problem Details outside
+  the global prefix, global `api` prefix, URI versioning (`/api/v1`), and
   CORS from validated config. After a successful listen, the API logs its
   address (`http://<address>:<port>/api/v1`, loopback plus non-internal
   interface addresses for the wildcard host) and, in development only, the
@@ -121,7 +125,7 @@ infrastructure-only (shared entity base in place, no feature entities yet).
   machine-readable values unchanged. Missing keys `throw` in
   development/test and fall back to English with diagnostics in production.
   Responses carry `Content-Language` and `Vary: Accept-Language`. The
-  Fastify-level request-ID rejection stays English by design (runs before
+  Adapter-level request-ID rejection stays English by design (runs before
   locale resolution). Catalog-consistency tests enforce key/placeholder/
   plural parity; `test/i18n.e2e-spec.ts` covers resolution, headers,
   localization, isolation, and health regression.
@@ -188,19 +192,26 @@ infrastructure-only (shared entity base in place, no feature entities yet).
   An additional per-phone hourly rate limit (5 sends / rolling 60 min) is
   enforced atomically via Redis sorted set. No registration or authentication
   steps yet.
-- Tests: Vitest unit (362 tests in 42 files), e2e (15 files / 83 tests), Redis
+- Conditional requests (restored Fastify-era behavior, ADR-032/DEFERRED.md):
+  weak entity tags (`W/"<sha256>"`) over the application payload on every
+  JSON response (envelope path, Problem Details path, and the bootstrap error
+  paths alike), `If-None-Match` revalidation with 304 for GET/HEAD (weak
+  comparison — unlike Fastify's strong envelope tags, which never matched in
+  practice because of the per-response metadata, this revalidation works), no
+  revalidation for other methods, SSE skipped; proxy trust is
+  optionally narrowed by `TRUST_PROXY_PROXIES` (see the env table in
+  `apps/api/ONBOARDING.md`).
+- Tests: Vitest unit (43 files / 377 tests), e2e (16 files / 95 tests), Redis
   integration (4 files / 60 tests via `pnpm test:redis`), database
-  integration (2 files / 15 tests via `pnpm test:db`, ADR-027/029/030/031). All integration
+  integration (2 files / 17 tests via `pnpm test:db`, ADR-027/029/030/031). All integration
   and e2e tests use Testcontainers (`apps/api/test/testcontainers.ts`,
   ADR-016): the Redis and database integration tiers start isolated
   containers per test file (`redis:8.2-alpine`, `postgres:17.6-alpine`), and
   the e2e tier shares one Redis and one PostgreSQL container per test run
   via the Vitest globalSetup
   (`apps/api/test/e2e.global-setup.ts`, ADR-025) — all with dynamic ports;
-  no manual Docker Compose required. The unit-tier counts are verified
-  (2026-11-15); the database-tier and e2e suites were not executed for the
-  base-entity feature (the Docker daemon was unavailable at validation
-  time), so their results are pending.
+  no manual Docker Compose required. All tier counts verified 2026-11-15 during the ADR-032 platform migration
+  (unit 362/362, e2e 85/85, Redis 60/60, database 17/17 on NodeAdapter).
 
 **Partial**
 
@@ -337,6 +348,6 @@ Per-app commands are listed in each `apps/<app>/ONBOARDING.md`.
 
 All ADRs live in [DECISIONS.md](../DECISIONS.md). Status as of this snapshot:
 
-- **Accepted:** ADR-001 (Turborepo), ADR-002 (Fastify), ADR-003 (SWC), ADR-004 (@nestjs/config + Zod), ADR-005 (URI versioning), ADR-006 (1 MiB body limit), ADR-007 (`api` prefix), ADR-008/009 (Pino / nestjs-pino), ADR-010 (UUIDv4 request IDs), ADR-011 (envelope exclusions), ADR-012 (ioredis without a wrapper), ADR-013 (Redis module architecture), ADR-014 (Swagger/OpenAPI, development-only), ADR-015 (Global HTTP rate limiting with Redis-backed @nestjs/throttler), ADR-016 (Testcontainers for integration and e2e testing), ADR-017 (OTP verification attempt lockout for enrollment security), ADR-018 (HMAC-SHA-256 digest storage for enrollment OTPs), ADR-019 (OTP verification hardening — conditional attempt counting and challenge identity), ADR-020 (development Redis service migrated to Redis Stack with bundled Redis Insight), ADR-021 (bilingual internationalization en/fa via the official @nestjs/i18n), ADR-022 (centralized logging with Grafana Alloy, Loki, and Grafana), ADR-023 (project-level multi-agent development workflow for ZCode + Claude Code), ADR-024 (MockServer for development-time resilience testing), ADR-025 (managing the e2e Redis with Testcontainers — one shared container per run), ADR-026 (memory-based load shedding and health-aware readiness), ADR-027 (Use MikroORM v7 with PostgreSQL for Persistence), ADR-028 (pgAdmin 4 as the development-only PostgreSQL web UI), ADR-029 (Shared MikroORM BaseEntity with Actor Audit Context and Native Optimistic Locking), ADR-030 (UTC-First TIMESTAMPTZ Storage Policy), ADR-031 (Use nestjs-cls for the Application Actor Context).
+- **Accepted:** ADR-001 (Turborepo), ADR-002 (Fastify — superseded by ADR-032), ADR-003 (SWC), ADR-004 (@nestjs/config + Zod), ADR-005 (URI versioning), ADR-006 (1 MiB body limit), ADR-007 (`api` prefix), ADR-008/009 (Pino / nestjs-pino), ADR-010 (UUIDv4 request IDs), ADR-011 (envelope exclusions), ADR-012 (ioredis without a wrapper), ADR-013 (Redis module architecture), ADR-014 (Swagger/OpenAPI, development-only), ADR-015 (Global HTTP rate limiting with Redis-backed @nestjs/throttler), ADR-016 (Testcontainers for integration and e2e testing), ADR-017 (OTP verification attempt lockout for enrollment security), ADR-018 (HMAC-SHA-256 digest storage for enrollment OTPs), ADR-019 (OTP verification hardening — conditional attempt counting and challenge identity), ADR-020 (development Redis service migrated to Redis Stack with bundled Redis Insight), ADR-021 (bilingual internationalization en/fa via the official @nestjs/i18n), ADR-022 (centralized logging with Grafana Alloy, Loki, and Grafana), ADR-023 (project-level multi-agent development workflow for ZCode + Claude Code), ADR-024 (MockServer for development-time resilience testing), ADR-025 (managing the e2e Redis with Testcontainers — one shared container per run), ADR-026 (memory-based load shedding and health-aware readiness), ADR-027 (Use MikroORM v7 with PostgreSQL for Persistence), ADR-028 (pgAdmin 4 as the development-only PostgreSQL web UI), ADR-029 (Shared MikroORM BaseEntity with Actor Audit Context and Native Optimistic Locking), ADR-030 (UTC-First TIMESTAMPTZ Storage Policy), ADR-031 (Use nestjs-cls for the Application Actor Context), ADR-032 (Migrate the API HTTP Platform from Fastify to the NestJS NodeAdapter — supersedes ADR-002).
 
 All architectural decisions are accepted and implemented. Do not build on rejected alternatives (e.g. do not introduce header versioning or a second logger).

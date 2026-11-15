@@ -32,6 +32,25 @@ describe('AppController (e2e)', () => {
     await app.close();
   });
 
+  it('serves a Problem Details 404 for an unmatched path outside the global prefix', async () => {
+    // Regression (ADR-032): the adapter's default plain-text 404 answers paths
+    // outside the prefix unless the bootstrap's root-level fallback is
+    // registered; health-probe-like typos must keep the API error contract.
+    // Arrange
+    const app = await createE2eTestApp();
+
+    // Act
+    const response = await request(app.getHttpServer()).get('/healthz');
+
+    // Assert
+    expect(response.status).toBe(404);
+    expect(response.headers['content-type']).toContain('application/problem+json');
+    expect(response.body.status).toBe(404);
+    expect(response.body.detail).toBe('Cannot GET /healthz');
+    expect(response.headers['x-request-id']).toEqual(expect.any(String));
+    await app.close();
+  });
+
   it('returns a Problem Details 404 for an undefined route under /api/v1', async () => {
     // Arrange
     const app = await createE2eTestApp();

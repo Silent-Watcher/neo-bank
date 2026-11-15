@@ -26,11 +26,11 @@ TypeScript pnpm-workspace monorepo orchestrated by Turborepo
 
 ## Applications
 
-| Application     | Path         | Stack                             | Default port | Status             |
-| --------------- | ------------ | --------------------------------- | ------------ | ------------------ |
-| API             | `apps/api`   | NestJS 12, Fastify, SWC, ESM      | 3001         | Active development |
-| Web (customer)  | `apps/web`   | Next.js 16 (App Router), React 19 | 3000         | Bare scaffold      |
-| Admin dashboard | `apps/admin` | Vite 8, React 19                  | 5173         | Bare scaffold      |
+| Application     | Path         | Stack                                   | Default port | Status             |
+| --------------- | ------------ | --------------------------------------- | ------------ | ------------------ |
+| API             | `apps/api`   | NestJS 12, Node HTTP platform, SWC, ESM | 3001         | Active development |
+| Web (customer)  | `apps/web`   | Next.js 16 (App Router), React 19       | 3000         | Bare scaffold      |
+| Admin dashboard | `apps/admin` | Vite 8, React 19                        | 5173         | Bare scaffold      |
 
 Per-application architecture, conventions, and onboarding guides:
 
@@ -47,7 +47,7 @@ API (no API client code exists in either frontend).
 ```mermaid
 graph TD
     subgraph pnpm workspace ["pnpm workspace (apps/*)"]
-        API["apps/api<br/>NestJS + Fastify :3001"]
+        API["apps/api<br/>NestJS + NodeAdapter :3001"]
         WEB["apps/web<br/>Next.js :3000"]
         ADMIN["apps/admin<br/>Vite + React :5173"]
     end
@@ -103,9 +103,11 @@ repository (not a Turbo task), so formatting is repository-wide.
   architecture. The centralized pipeline (ADR-022) collects container
   stdout as-is — it never replaces the application logger, and the optional
   `LOG_PRETTY` env override is the single compatibility knob.
-- **Bootstrap boundary (API):** all bootstrap-time HTTP configuration (Fastify
-  adapter options, global prefix, URI versioning, CORS) lives in the
-  `bootstrap` function in `apps/api/src/main.ts` and must not be extracted.
+- **Bootstrap boundary (API):** all bootstrap-time HTTP configuration (HTTP
+  adapter options, request-ID lifecycle, root not-found fallback, global
+  prefix, URI versioning, CORS) lives in the `bootstrap` function in
+  `apps/api/src/main.ts` and must not be extracted. The API runs on the
+  official Node HTTP platform (`NodeAdapter`, ADR-032).
 - **Response/error contracts (API):** success responses use the global
   response envelope (exclusions in [ADR-011](../DECISIONS.md)); errors use
   RFC 9457 Problem Details carrying the request ID

@@ -1,7 +1,6 @@
 import { ServiceUnavailableException } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { I18nService } from '@nestjs/i18n';
-import type { FastifyReply } from 'fastify';
 import { describe, expect, it, vi } from 'vitest';
 
 // Unit tests must not depend on ambient environment state, so the env
@@ -34,11 +33,11 @@ import { MemoryProtectionService } from './memory-protection.service.js';
 
 function createContext(exempt: boolean | undefined, replyHeaders: Map<string, string>) {
   const reply = {
-    header: vi.fn<(name: string, value: string) => FastifyReply>((name, value) => {
+    header: vi.fn<(name: string, value: string) => unknown>((name, value): unknown => {
       replyHeaders.set(name, value);
       return reply;
     }),
-  } as unknown as FastifyReply;
+  };
   const reflector = {
     getAllAndOverride: vi.fn<(key: string, targets: unknown[]) => boolean | undefined>(
       () => exempt,

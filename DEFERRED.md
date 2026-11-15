@@ -55,6 +55,23 @@ original task requirements and must be addressed in future work.
 
 ---
 
+## Mandated by Fastify → NodeAdapter Migration (ADR-032)
+
+### 1. ETag / Conditional-Request Support (Behavior Parity — Deferred)
+
+**Origin**: ADR-032 acceptance decision, 2026-11-15 — the developer directed that ETag support be implemented later and recorded here instead of in the migration.
+**Status**: Done (2026-11-15, same task) — implemented as `ConditionalRequestInterceptor` + shared ETag helpers (`apps/api/src/shared/http/etag.ts`): weak entity tags (`W/"<sha256>"`) over the application payload, `If-None-Match` → 304 for GET/HEAD (weak comparison), ETag (no revalidation) on other methods and Problem Details responses, SSE skipped. Verified by `test/conditional-request.e2e-spec.ts` and unit tests. Note: this is strictly more useful than the Fastify behavior it replaces — Fastify's strong tags covered the full envelope (fresh timestamp/request ID per response), so revalidation never actually succeeded in practice; the weak payload tag makes conditional caching work for the first time on this API.
+**Requirement**: Restore conditional-request support lost with the Fastify removal. Fastify emitted strong ETags on JSON responses and answered `If-None-Match` with `304 Not Modified`; the NodeAdapter does neither. Responses from the API carry no `ETag` header, and conditional requests return full `200` bodies.
+**Rationale**: No current handler or client builds on conditional caching, so the loss is invisible today; restoring it is an enhancement, not a migration blocker. Must not be silently forgotten since it is an observable regression versus the Fastify era.
+**Implementation notes**:
+
+- Implement on the adapter's request/response hook surface (`setOnRequestHook`/`setOnResponseHook`) or an interceptor at the HTTP boundary — keep it out of reusable components per the Platform-Agnostic Architecture rule.
+- Generate strong ETags over the serialized response body; honor `If-None-Match` with `304` and no body, matching Fastify's prior semantics.
+- Cover with regression tests: ETag presence on JSON responses, `If-None-Match` → 304, `If-None-Match` with a stale value → 200.
+- Revisit together with the keep-alive constant (ADR-032) if a connection-pooling reverse proxy is introduced.
+
+---
+
 ## How to Use This Registry
 
 - When starting work on a deferred item, move it from this file to a new ADR proposal (or link to an existing one).

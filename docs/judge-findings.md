@@ -1686,3 +1686,284 @@ findings; all applied the same day:
 - **R-17-5 (Low, robustness):** `startOfLocalDayUtc` fixed-point loop could exit after the 3-pass cap without convergence, returning a wrong boundary silently. **Resolved (with a corrected premise):** the original recommendation (throw on non-convergence) was wrong — a skipped local midnight has no fixed point; the candidates oscillate across the transition (America/Santiago 2024-09-08: 04:00Z ↔ 03:00Z) and the 3-pass cap lands on the correct transition instant. The naive convergence throw regressed the suite (caught immediately by the Santiago spec). Final fix: early return on true convergence, and after the cap assert the final candidate is a zone transition (offset changes at that millisecond) — loud failure only for genuinely broken results, preserving the oscillation semantics.
 - **R-17-6 (Low, doc drift):** db-spec test count said 9 (now 11). **Resolved.**
 - **R-17-7 (Low, style):** duplicate imports from `@mikro-orm/decorators/legacy` in `base.entity.spec.ts`. **Resolved:** merged.
+
+## Wave 18 — NodeAdapter platform migration review (2026-11-15)
+
+Context-blind judge review (APPROVED_WITH_SUGGESTIONS) of the Fastify → NodeAdapter
+migration (ADR-032): bootstrap, request-ID lifecycle, HTTP boundary contracts,
+not-found fallback, envelope/filter/guard re-typing, test factory. 0 Critical,
+0 High, 0 Medium, 6 Low. The judge independently verified the risky mechanisms
+against the installed adapter sources (done-once hook protocol, not-found
+mounting order, parser registration, 413 semantics, HEAD/204/304, pino reqId).
+
+### CR-01 — `resolveApiVersion` misreports `neutral` for version-root URLs with a query string
+
+- **Status:** Resolved (2026-11-15)
+- **Severity:** Low
+- **Category:** Edge Case/Correctness
+- **Locations:** `apps/api/src/shared/http/api-version.ts:5`; consumers in the envelope interceptor, request-id lifecycle, not-found fallback
+- **Technical explanation:** `API_VERSION_PATTERN = /^\/api\/v(\d+)(?:\/|$)/` applied to the raw URL: for `GET /api/v1?x=1` the `?` satisfies neither `/` nor `$`, so the pattern misses and the consumer reports `apiVersion: "neutral"` for a request that routes to v1. Predates the migration (Fastify code passed the same raw URL); the re-typed consumers re-cemented it in three places.
+- **Failure scenario:** identical version-root requests with and without a query string return different user-visible `apiVersion` metadata in the envelope/Problem Details.
+- **Judge recommendation:** normalize inside `resolveApiVersion` (single fix point) by stripping the query/fragment before matching.
+- **Investigation results:** confirmed against the pattern and the three consumers; fix is one line in `resolveApiVersion`, no behavioral change for existing tested paths (the `/api/v1/...` and root-path cases already matched).
+- **Agreed resolution:** applied — `resolveApiVersion` strips the query string (everything from the first `?`) before matching; HTTP request targets do not carry fragments.
+
+### CR-02 — Inbound `x-request-id` normalization duplicated between accept/reject decision and ID resolution
+
+- **Status:** Resolved (2026-11-15)
+- **Severity:** Low
+- **Category:** Syntax/Code Quality (DRY)
+- **Locations:** `apps/api/src/shared/http/request-id.lifecycle.ts:40-41`; `apps/api/src/shared/http/request-id.ts:21-28`
+- **Technical explanation:** the hook re-implements the exact "single value, else invalid" expression that `resolveRequestId` encapsulates; two copies of the accept decision can drift apart and break the never-echo-an-invalid-value pairing.
+- **Failure scenario:** a future edit to one copy (trimming, comma handling) makes the hook reject an ID that `resolveRequestId` would reuse (or vice versa) with no type or test forcing sync.
+- **Judge recommendation:** export one shared helper for resolving the inbound header value; both call sites consume it.
+- **Investigation results:** straightforward extraction, no behavior change.
+- **Agreed resolution:** applied — `readInboundRequestIdHeader(req)` exported from `request-id.ts`; used by `resolveRequestId` and the lifecycle hook.
+
+### CR-03 — Dead commented-out code with a misleading comment
+
+- **Status:** Resolved (2026-11-15; re-review confirmed the `request-id.ts` half, flagged the spec half as initially missed — the commented-out parameter was then replaced with a prose comment and the re-review verdict accepted it)
+- **Severity:** Low
+- **Category:** Syntax/Code Quality
+- **Locations:** `apps/api/src/shared/http/request-id.ts:7-11`; `apps/api/src/shared/interceptors/response-envelope.interceptor.spec.ts:23-24`
+- **Technical explanation:** `request-id.ts` carries a commented-out lowercase-only regex with an `info:` comment claiming the active pattern rejects uppercase — the active pattern compiles with `/i`, accepts uppercase, and its own unit test asserts that; the spec keeps a commented-out default parameter.
+- **Failure scenario:** a reader trusting the `info` comment concludes uppercase UUIDs are rejected; dead code invites stale-copy confusion.
+- **Judge recommendation:** delete the commented-out regex, the `info` comment, and the commented-out spec parameter.
+- **Investigation results:** confirmed the comment is factually wrong about the shipped behavior.
+- **Agreed resolution:** applied — dead code and misleading comment removed; the rejection-path comment now states the actual normalization behavior.
+
+### CR-04 — Root not-found fallback silently depends on the request-ID lifecycle having run
+
+- **Status:** Resolved (2026-11-15)
+- **Severity:** Low
+- **Category:** Edge Case/maintainability
+- **Locations:** `apps/api/src/shared/http/not-found.fallback.ts` (`String(req.id)` at the response build)
+- **Technical explanation:** the fallback reads `req.id`, which only exists because `registerRequestIdLifecycle` assigned it pre-routing; `req.id` is typed `unknown` on the boundary contract, so nothing forces the pairing.
+- **Failure scenario:** a future bootstrap/test registering the fallback without the lifecycle produces `requestId: "undefined"` in the body and the `x-request-id` header on every root-level 404.
+- **Judge recommendation:** state the pairing requirement in the interface doc, or derive the ID defensively via `resolveRequestId(req)`.
+- **Investigation results:** both options viable; the defensive derivation is strictly better — self-sufficient, reuses the shared helper (CR-02's), and preserves ADR-010 semantics (fresh UUID when the lifecycle has not run) instead of encoding a broken value.
+- **Agreed resolution:** applied — the fallback uses the lifecycle-assigned `req.id` when it is a valid UUIDv4 string (the normal path, keeping body/header consistency) and falls back to `resolveRequestId` otherwise, so a misconfigured bootstrap gets a real UUIDv4 instead of the literal `"undefined"`.
+
+### CR-05 — Early 400 for an invalid `x-request-id` carries no CORS headers
+
+- **Status:** Won't Fix (technical justification)
+- **Severity:** Low
+- **Category:** Edge Case (behavior parity)
+- **Locations:** `apps/api/src/shared/http/request-id.lifecycle.ts` (hook registration) vs `enableCors` middleware position
+- **Technical explanation:** the request-ID hook runs before all middleware including CORS, so the early 400 lacks `Access-Control-Allow-Origin`. This exactly preserves the pre-migration Fastify behavior (an `onRequest` hook also ran before `@fastify/cors`), so it is not a migration regression; browser clients sending malformed IDs are not a supported surface (first-party clients send valid UUIDv4s).
+- **Failure scenario:** browser-based client sending a malformed `x-request-id` sees an opaque network error instead of the 400 body; server-to-server clients unaffected.
+- **Judge recommendation:** accept as parity, or add CORS headers to the early rejection if browser readability ever matters — do not hand-roll CORS in the hook.
+- **Investigation results:** confirmed parity with the Fastify-era behavior; adding CORS headers to a pre-middleware rejection would duplicate the CORS configuration inside the hook for no first-party benefit.
+- **Agreed resolution:** Won't Fix — behavior parity preserved deliberately; the hook's existing "before any middleware" comment records the ordering. Revisit only if a browser client surface for that error is ever required.
+
+### CR-06 — Mixed import styles for sibling HTTP modules in the bootstrap
+
+- **Status:** Resolved (2026-11-15)
+- **Severity:** Low
+- **Category:** Syntax/Code Quality (consistency)
+- **Locations:** `apps/api/src/main.ts` (`#http/not-found.fallback.js` next to `./shared/http/request-id.lifecycle.js`); `apps/api/test/create-test-app.ts` (`#src/shared/http/...` where `#http/...` is the established alias)
+- **Technical explanation:** two import conventions for the same module boundary in the same files.
+- **Failure scenario:** readers and future edits must track two conventions; alias drift.
+- **Judge recommendation:** use `#http/...` consistently.
+- **Investigation results:** both files updated to the specific aliases; `#src/shared/http/...` removed.
+- **Agreed resolution:** applied.
+
+### CR-07 — Duplicate `x-request-id` header lines were accepted (200) after the CR-02 remediation
+
+- **Status:** Resolved (2026-11-15, re-review iteration 2 — CHANGES_REQUIRED verdict)
+- **Severity:** Medium (dispatch: Correctness/Edge Case)
+- **Category:** Correctness/Edge Case
+- **Locations:** `apps/api/src/shared/http/request-id.lifecycle.ts` (hook guard); `apps/api/src/shared/http/request-id.ts` (`readInboundRequestIdHeader`)
+- **Technical explanation:** the CR-02 deduplication changed the hook's guard from a raw-header presence check (`header === undefined`) to a normalized-value check (`value === undefined`). The helper returns `undefined` both for an absent header and for an unusable multi-value header, and the adapter's HTTP server (default `joinDuplicateHeaders: false`) surfaces duplicate `x-request-id` lines as an array — so two header lines, which the pre-refactor code rejected with 400 `INVALID_REQUEST_ID`, became accepted requests with a fresh ID, diverging from the comma-joined single-line form (still 400) and contradicting the helper's own comment.
+- **Failure scenario:** a proxy re-encoding one comma-joined header into two header lines turns a 400 `INVALID_REQUEST_ID` into a 200; validation answers depend on header-line encoding, and no test pinned the duplicate-line form.
+- **Judge recommendation:** restore the raw-presence check while keeping the shared normalization, or discriminate absence from unusability in the helper; either way pin the chosen semantic with an e2e case sending two header lines.
+- **Investigation results:** the pre-refactor contract (both duplicate encodings reject) is the correct semantic to preserve — it is behavior this migration must keep, and accepting an ambiguous identity header would weaken the ADR-010 contract. Verified against `@types/node` http server defaults that duplicate lines surface as arrays.
+- **Agreed resolution:** applied — the hook checks raw-header presence again (`header === undefined`) alongside the shared normalization (`isValidUuidV4(readInboundRequestIdHeader(req))`), with a comment stating why; a new e2e case pins that duplicate header lines reject with 400 like the comma-joined form. The re-review's CR-04 residual nit (redundant `typeof` before `isValidUuidV4`) was also applied.
+
+## Wave 19 — side-session second-pass diff review (caveman-review, 2026-11-15)
+
+Independent side-session review of the Wave 18 remediated diff. All five
+findings were investigated and dispositioned by the main session on
+2026-11-15 (statuses below); overlaps with Wave 18 are cross-referenced.
+
+### CR-08 — `requestTimeout` silently moves from disabled to Node's 300 s default
+
+- **Status:** Resolved as documented (2026-11-15 — developer decision: accept the 300 s cap as a safety default; recorded in ADR-032 beside the keep-alive constant)
+- **Severity:** Low
+- **Category:** Correctness/behavior parity
+- **Locations:** `apps/api/src/main.ts` (bootstrap, near `SERVER_KEEP_ALIVE_TIMEOUT_MS`)
+- **Technical explanation:** Fastify's default `requestTimeout` is `0` (disabled); the Node HTTP server's default is 300000 ms. The keep-alive timeout was made explicit under ADR-032, but the request timeout was left to the new platform's default — a behavior change the ADR's compatibility table does not list.
+- **Failure scenario:** any request whose handling exceeds 5 minutes is killed with 408; today no endpoint does this, so the change is latent rather than breaking.
+- **Judge recommendation:** either set `app.getHttpServer().requestTimeout = 0` to preserve Fastify parity, or explicitly document the 300 s cap in ADR-032 beside the keep-alive constant. Developer decision (behavioral).
+
+### CR-09 — `writableEnded` check is narrower than Fastify's `sent`; no `headersSent` guard on the fallback
+
+- **Status:** Resolved (2026-11-15)
+- **Severity:** Low
+- **Category:** Edge Case
+- **Locations:** `apps/api/src/shared/interceptors/response-envelope.interceptor.ts` (`reply.writableEnded`); `apps/api/src/shared/http/http-boundary.ts` (`HttpResponseLike`); `apps/api/src/shared/http/not-found.fallback.ts` (responds without a `res.headersSent` check)
+- **Technical explanation:** Fastify's `reply.sent` flips once headers/payload go out; Node's `writableEnded` only after `end()`. A hypothetical handler that writes raw headers and returns data would now be enveloped and then fail the adapter's send (previously skipped). The root fallback likewise responds without checking `res.headersSent`, which would throw if a future raw handler already responded and the router then fell through.
+- **Failure scenario:** no current handler touches the raw response — latent. If one lands, the error path yields a 500 where the intent was the handler's own response.
+- **Judge recommendation:** add `headersSent` to `HttpResponseLike`, check `writableEnded || headersSent` in the envelope and guard the fallback with `res.headersSent` — or, if the narrower contract is accepted deliberately, fix the envelope's "raw reply usage" comment to match.
+
+### CR-10 — e2e asserts an exact socket address (`::ffff:127.0.0.1`)
+
+- **Status:** Resolved (2026-11-15)
+- **Severity:** Low
+- **Category:** Edge Case (test robustness)
+- **Locations:** `apps/api/test/http-config.e2e-spec.ts` (second test's `.data.ip` assertion)
+- **Technical explanation:** the trust-proxy "untrusted fallback" assertion pins the exact IPv4-mapped loopback string Node produces today. CI runners or Node changes can yield `::1`/`127.0.0.1` instead.
+- **Failure scenario:** environment-dependent red herring failure of an unrelated migration test.
+- **Judge recommendation:** assert the value is a non-empty loopback (`toContain('127.0.0.1')` or a non-X-Forwarded-For value), not the mapped form verbatim.
+
+### CR-11 — CORS parity on the NodeAdapter is untested (distinct from Wave 18 CR-05)
+
+- **Status:** Won't Fix — finding invalid (2026-11-15)
+- **Severity:** Low
+- **Category:** Test coverage gap
+- **Locations:** `apps/api/src/main.ts` (`enableCors` when `CORS_ORIGIN` configured); `apps/api/test/create-test-app.ts` (no option to exercise CORS)
+- **Technical explanation:** Wave 18 CR-05 covers the early-400-vs-CORS ordering; this is the broader gap: `NodeAdapter.enableCors` is a fresh code path with no e2e coverage at all (the test env never sets `CORS_ORIGIN`).
+- **Failure scenario:** a CORS regression (missing preflight handling, wrong headers) would reach production unobserved by any tier.
+- **Judge recommendation:** add an e2e case that enables CORS via a module/adapter option override (pattern exists: `adapterTrustProxy`) and asserts preflight + allowed-origin behavior on the new adapter.
+
+### CR-12 — Minor observations (log parity, redundant header read, mirror comment)
+
+- **Status:** Resolved as documented (2026-11-15)
+- **Severity:** Informational
+- **Category:** Syntax/Code Quality
+- **Locations:** `apps/api/src/shared/http/not-found.fallback.ts` (no warn line — in-prefix 404s get the filter's warn, root 404s only the access log; deliberate per comment); `apps/api/src/shared/http/request-id.lifecycle.ts` (raw header read twice — presence check + helper; could return `{present, value}`); `apps/api/test/create-test-app.ts` (mirror comment could note the intentionally absent `keepAliveTimeout` — tests never `listen()`)
+- **Technical explanation:** consistency/polish items with no behavioral impact.
+- **Failure scenario:** none; readability and observability-parity questions only.
+- **Judge recommendation:** apply or document as deliberate; no urgency.
+- **Agreed resolution:** Resolved as documented (2026-11-15) — (1) the fallback's log parity stays deliberate: the pino-http access log records every 404 and the fallback's comment says so; (2) the double raw-header read in the request-ID hook stays deliberate: presence must be checked on the raw header (Wave 18 CR-07) while the normalized value flows through the shared helper — a `{present, value}` discriminated result would re-entangle the two concerns the CR-02/CR-07 fixes separated; (3) the test-factory mirror comment now notes the intentionally absent `keepAliveTimeout` (tests never `listen()`).
+
+---
+
+## Wave 18 security review (2026-11-15) — SECURITY_CHANGES_REQUIRED
+
+Context-blind security judge review of the NodeAdapter migration. 1 Medium,
+2 Informational. The judge verified against installed adapter sources: the
+request-ID trust/echo invariants, early-response keep-alive draining (no
+smuggling), not-found fallback reflection (JSON-serialized, no response
+splitting), body-parser limit/poisoning defaults, and structural-contract
+surface all sound; no confirmed exploitable vulnerability in the changeset.
+
+### SEC-01 — Binary `TRUST_PROXY` trust-all state feeds client-controlled `req.ip` into the throttler tracker
+
+- **Status:** Resolved (2026-11-15)
+- **Severity:** Medium
+- **Classification:** CWE-345 enabling CWE-307
+- **Locations:** env schema `TRUST_PROXY`; bootstrap adapter construction; throttler tracker consumption (the throttler's default tracker keys per-IP quota on the trust-proxy-resolved `req.ip`)
+- **Technical explanation:** `TRUST_PROXY` accepts only `true`/`false`; `true` compiles to trust-every-hop, so `req.ip` resolves to the leftmost, attacker-chosen `X-Forwarded-For` entry behind any proxy that appends to XFF (nginx `proxy_add_x_forwarded_for`, ALBs, CDNs). The default throttler tracker keys per-IP quota on that value, so distinct spoofed values bypass the OTP endpoint limits and grow Redis key cardinality without bound.
+- **Failure scenario:** operator sets `TRUST_PROXY=true` behind an appending proxy; attacker rotates `X-Forwarded-For` per request; OTP send/verify limits never trip.
+- **Exploitability:** **Not exploitable under the committed configuration** — `TRUST_PROXY=false` in the production and development env files; `true` only in test envs (where trust-proxy behavior itself is the test subject). Carried over from the Fastify configuration with identical trust-all semantics — pre-existing trust-model weakness, not a migration regression.
+- **Judge recommendation:** support an explicit proxy allowlist (the adapter's trust compiler already accepts CIDR/string/array forms — only the env schema restricts it); require/ensure the terminating proxy overwrites XFF; consider rejecting non-IP tracker values to bound Redis cardinality; document that `TRUST_PROXY=true` demands an XFF-sanitizing proxy.
+- **Investigation results:** real weakness, real pre-existing. The developer approved the allowlist approach (2026-11-15).
+- **Agreed resolution:** Resolved (2026-11-15) — new optional `TRUST_PROXY_PROXIES` env variable (comma-separated proxy addresses/CIDR ranges, whitespace-sanitized in the Zod schema, entries sanity-checked, semantic errors fail fast at adapter construction). With `TRUST_PROXY=true` the allowlist narrows trust to the listed proxies; without it the trust-all form remains (documented as requiring an XFF-sanitizing proxy). Synced across `.env.example` and all env files; env-schema unit tests added; `server.config.ts` resolves the adapter-ready value as a single source.
+
+### SEC-02 — Unused supply-chain footprint shipped by `@nestjs/platform-node`
+
+- **Status:** Won't Fix (technical justification)
+- **Severity:** Informational
+- **Classification:** CWE-1104
+- **Locations:** `@nestjs/platform-node` runtime dependencies (`light-my-request`, `multer`, `serve-static`, `send`, `cookie`, `cookie-signature`) — verified unreached on the production request path (lazy loading for the test-injection helper; no multer/static usage in the API source).
+- **Failure scenario:** hypothetical install-graph compromise only; none exploitable.
+- **Judge recommendation:** none required; periodic `pnpm audit` coverage.
+- **Agreed resolution:** Won't Fix — install-graph surface only, net supply-chain reduction versus the removed Fastify stack; covered by routine dependency audits.
+
+### SEC-03 — Pre-routing request-ID rejection path sits outside the throttler and access-log pipeline
+
+- **Status:** Won't Fix (technical justification)
+- **Severity:** Informational
+- **Classification:** CWE-770 (hardening observation)
+- **Locations:** `apps/api/src/shared/http/request-id.lifecycle.ts` (hook rejection path)
+- **Technical explanation:** the pre-routing 400 bypasses pino-http access logging and the Redis throttler by design (cheapest-path rejection); per-request cost is one bounded regex plus at most one `randomUUID()`, and each event still emits one `logger.warn` line.
+- **Failure scenario:** theoretical log-volume amplifier with no amplification relative to baseline access logging.
+- **Judge recommendation:** none required; sample the warn if log volume ever matters.
+- **Agreed resolution:** Won't Fix — rejecting before routing is the intended cheapest-path design; adding a Redis round trip to every request would be a worse trade.
+
+## Wave 20 — conditional-request implementation review (2026-11-15)
+
+Context-blind judge review (CHANGES_REQUIRED, iteration 1) of the ETag/304
+restoration, Problem Details tagging, and throttler-tracker bounding. 1 High,
+1 Medium, 6 Low. The reviewer verified interceptor composition order against
+`@nestjs/core` sources, adapter 304 handling, SSE stream header commit
+semantics, and throttler tracker normalization. All findings processed:
+
+### CR-01 — ETag hashed the raw payload while claimed to be the wire representation
+
+- **Status:** Resolved (2026-11-15, iteration 2)
+- **Severity:** High
+- **Category:** Correctness (RFC 9110 strong-validator semantics)
+- **Locations:** `apps/api/src/shared/http/etag.ts`, `conditional-request.interceptor.ts`, `app.module.ts` comment, e2e spec
+- **Technical explanation:** global interceptor registration order makes the later-registered interceptor innermost, so the conditional interceptor's map ran BEFORE the envelope's: the emitted "strong" tag hashed the raw handler payload while the sent representation (envelope with fresh timestamp/request ID) changed per response — a strong validator that does not change when the representation changes.
+- **Agreed resolution:** the validator is now WEAK (`W/"<sha256>"`) over the application payload with honest documentation (validates semantic equivalence; `If-None-Match` compares weakly per RFC 9110 §13.1.2); all comment sites corrected. Revalidation now works (under Fastify the envelope's fresh timestamp meant strong tags never matched in practice — the weak tag is strictly more useful).
+
+### CR-02 — Global interceptor tagged SSE streams and could 304 a live event stream
+
+- **Status:** Resolved (2026-11-15, iteration 2)
+- **Severity:** Medium
+- **Category:** Correctness/Edge case
+- **Locations:** `conditional-request.interceptor.ts` (no SSE skip)
+- **Technical explanation:** SSE events flow through interceptor maps before the stream commits headers; the first event would be hashed, an ETag set, and a reconnecting client with a matching candidate would receive a malformed 304-with-body on a `text/event-stream` response.
+- **Agreed resolution:** SSE routes skipped via `SSE_METADATA` exactly like the envelope; e2e case asserts the SSE stream carries no ETag.
+
+### CR-03 — Dead content-type pre-set justified by a non-existent adapter behavior
+
+- **Status:** Resolved (2026-11-15, iteration 2)
+- **Severity:** Low
+- **Category:** Code quality
+- **Locations:** `conditional-request.interceptor.ts` (304 branch)
+- **Technical explanation:** the adapter's `endWithoutBody` ends 304s before any `writeHead` on every reply path, so the pre-set content type had no effect and its comment described behavior that does not exist.
+- **Agreed resolution:** pre-set removed; comment states the actual mechanism.
+
+### CR-04 — Unreachable 304 branch in the Problem Details filter
+
+- **Status:** Resolved (2026-11-15, iteration 2)
+- **Severity:** Low
+- **Category:** Dead code
+- **Locations:** `problem-details.filter.ts`
+- **Technical explanation:** Problem Details bodies embed a fresh timestamp and request ID, so `If-None-Match` can never match a previously sent tag; the 304 branch was dead code paid for on every error response.
+- **Agreed resolution:** branch removed; the filter sets the ETag header only, with the never-revalidates rationale documented.
+
+### CR-05 — HEAD responses got no ETag although the payload hash matches GET
+
+- **Status:** Resolved (2026-11-15, iteration 2)
+- **Severity:** Low
+- **Category:** RFC conformance (SHOULD, §9.3.2)
+- **Locations:** `conditional-request.interceptor.ts`
+- **Technical explanation:** the skip was an artifact of the strong-representation design; with the weak payload validator, HEAD's handler payload hashes identically to GET's.
+- **Agreed resolution:** HEAD is tagged with the same validator and revalidates with 304; e2e asserts validator equality with GET and a HEAD 304.
+
+### CR-06 — Third copy of the `isRecord` type guard
+
+- **Status:** Resolved (2026-11-15, iteration 2)
+- **Severity:** Low
+- **Category:** Duplication
+- **Locations:** `http-boundary.ts` (single export now), envelope, filter, conditional interceptor
+- **Agreed resolution:** one exported guard consumed by all three.
+
+### CR-07 — Inaccurate scope note; two error paths untagged
+
+- **Status:** Resolved (2026-11-15, iteration 2)
+- **Severity:** Low
+- **Category:** Comment accuracy/Consistency
+- **Locations:** `conditional-request.interceptor.ts`, `request-id.lifecycle.ts`, `not-found.fallback.ts`
+- **Technical explanation:** the scope note misdescribed the request-ID rejection (it sends a body; it lacks an ETag because it bypasses the pipeline), and the two bootstrap error paths built the same Problem Details contract as the filter without tagging it.
+- **Agreed resolution:** both paths now set the ETag via the shared helper (never revalidates — fresh timestamp — documented at each site). Iteration 2 verified both code fixes but flagged that the interceptor's scope note still claimed the rejection carries no ETag — corrected to the reviewer's wording in the same pass (final status: APPROVED_WITH_SUGGESTIONS).
+
+### CR-08 — Bounded tracker covers only non-IP garbage
+
+- **Status:** Won't Fix (technical justification)
+- **Severity:** Low
+- **Category:** Edge case (mitigation coverage)
+- **Locations:** `redis-throttler.guard.ts`
+- **Technical explanation:** the fallback neutralizes syntactically invalid forwarded values; well-formed spoofed IPs under trust-all still mint one key per value.
+- **Agreed resolution:** accepted residual, documented explicitly in the guard docstring — the `TRUST_PROXY_PROXIES` allowlist is the real control; extending the fallback to detect trust-all via server config would duplicate configuration the operator already controls.
+
+## Wave 20 re-review (iteration 2, 2026-11-15) — APPROVED_WITH_SUGGESTIONS
+
+All Wave 20 WARNING findings verified FIXED; CR-08 residual accepted. One
+comment-only remnant (CR-07's scope note in `conditional-request.interceptor.ts`
+still claimed the request-ID rejection carried no ETag) corrected in the same
+pass with the reviewer's wording.

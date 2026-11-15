@@ -1,3 +1,5 @@
+import { isIP } from 'node:net';
+
 import { ThrottlerGuard } from '@nestjs/throttler';
 import type { ThrottlerRequest } from '@nestjs/throttler';
 
@@ -8,9 +10,15 @@ import type { ThrottlerRequest } from '@nestjs/throttler';
  * standard unsuffixed `Retry-After` plus the `X-RateLimit-*` quota headers
  * (remaining 0) before the throttling exception is thrown.
  *
- * Everything else — named-throttler iteration, metadata resolution, skip
- * behavior, tracker and key generation — is inherited unchanged so upgrades
- * of @nestjs/throttler keep working.
+ * The tracker is additionally bounded: the default tracker keys on the
+ * trust-proxy-resolved `req.ip`, which in the documented trust-all state
+ * (`TRUST_PROXY=true` without a `TRUST_PROXY_PROXIES` allowlist) can be any
+ * client-chosen X-Forwarded-For string. A tracker that is exactly the
+ * resolved request IP but not a valid IP falls back to the socket address,
+ * so garbage forwarded values cannot mint unbounded quota keys (Wave 18
+ * SEC-01). Route-supplied custom trackers pass through untouched. Residual,
+ * accepted: under trust-all a client cycling well-formed spoofed IPs still
+ * mints one key per value — the allowlist is the real control for that.
  */
 export class RedisThrottlerGuard extends ThrottlerGuard {
   protected override async handleRequest(requestProps: ThrottlerRequest): Promise<boolean> {
@@ -28,7 +36,7 @@ export class RedisThrottlerGuard extends ThrottlerGuard {
     // The guard's onModuleInit always fills a name; the type keeps it
     // optional, so fall back to the official default name.
     const throttlerName = throttler.name ?? 'default';
-    const tracker = await getTracker(req, context);
+    const tracker = this.boundedTracker(await getTracker(req, context), req);
     const key = generateKey(context, tracker, throttlerName);
     const record = await this.storageService.increment(
       key,
@@ -70,5 +78,23 @@ export class RedisThrottlerGuard extends ThrottlerGuard {
     }
 
     return true;
+  }
+
+  /**
+   * Falls back to the socket address when the tracker is exactly the resolved
+   * request IP and that value is not a valid IP — the signature of the
+   * default tracker consuming a garbage forwarded value. Comparing against
+   * `req.ip` keeps route-supplied custom trackers (which never equal the
+   * request IP) untouched.
+   */
+  private boundedTracker(
+    tracker: string,
+    req: { ip?: unknown; socket?: { remoteAddress?: unknown } },
+  ): string {
+    if (tracker === req.ip && !isIP(tracker)) {
+      const remoteAddress = req.socket?.remoteAddress;
+      return typeof remoteAddress === 'string' && remoteAddress !== '' ? remoteAddress : 'unknown';
+    }
+    return tracker;
   }
 }

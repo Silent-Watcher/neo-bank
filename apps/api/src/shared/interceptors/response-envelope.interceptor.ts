@@ -1,21 +1,18 @@
 import { HttpStatus, Injectable, StreamableFile } from '@nestjs/common';
 import type { CallHandler, ExecutionContext, NestInterceptor } from '@nestjs/common';
 import { HEADERS_METADATA, SSE_METADATA } from '@nestjs/common/constants.js';
-import type { FastifyReply, FastifyRequest } from 'fastify';
 import { I18nService } from '@nestjs/i18n';
 import { map } from 'rxjs';
 import type { Observable } from 'rxjs';
 
 import { resolveApiVersion } from '#http/api-version.js';
+import { isRecord } from '#http/http-boundary.js';
+import type { HttpRequestLike, HttpResponseLike } from '#http/http-boundary.js';
 
 const NO_BODY_STATUSES = new Set<number>([HttpStatus.NO_CONTENT, HttpStatus.NOT_MODIFIED]);
 
 function isJsonContentType(contentType: unknown): boolean {
   return typeof contentType === 'string' && contentType.toLowerCase().includes('json');
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null;
 }
 
 // @Header()-declared headers are applied by the router after the interceptor
@@ -48,8 +45,8 @@ export class ResponseEnvelopeInterceptor implements NestInterceptor {
 
   intercept(context: ExecutionContext, next: CallHandler): Observable<unknown> {
     const http = context.switchToHttp();
-    const request = http.getRequest<FastifyRequest>();
-    const reply = http.getResponse<FastifyReply>();
+    const request = http.getRequest<HttpRequestLike>();
+    const reply = http.getResponse<HttpResponseLike>();
 
     if (this.shouldSkip(request, reply, context)) {
       return next.handle();
@@ -57,15 +54,21 @@ export class ResponseEnvelopeInterceptor implements NestInterceptor {
 
     return next.handle().pipe(
       map((data: unknown) => {
-        // A handler may finish the reply itself (raw reply usage, streams) or
-        // produce a non-serializable payload; none of these get wrapped.
-        if (reply.sent || data === undefined || data instanceof StreamableFile) {
+        // A handler may finish or start the response itself (raw response
+        // usage, streaming) or produce a non-serializable payload; none of
+        // these get wrapped.
+        if (
+          reply.writableEnded ||
+          reply.headersSent ||
+          data === undefined ||
+          data instanceof StreamableFile
+        ) {
           return data;
         }
 
         return {
           timestamp: new Date().toISOString(),
-          apiVersion: resolveApiVersion(request.url),
+          apiVersion: resolveApiVersion(request.url ?? ''),
           requestId: String(request.id),
           status: reply.statusCode,
           // Only the human-readable envelope message is localized; `data`
@@ -78,8 +81,8 @@ export class ResponseEnvelopeInterceptor implements NestInterceptor {
   }
 
   private shouldSkip(
-    request: FastifyRequest,
-    reply: FastifyReply,
+    request: HttpRequestLike,
+    reply: HttpResponseLike,
     context: ExecutionContext,
   ): boolean {
     if (request.method === 'HEAD') return true;

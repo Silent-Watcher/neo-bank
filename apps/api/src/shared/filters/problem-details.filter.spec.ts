@@ -7,7 +7,7 @@ import type { ArgumentsHost } from '@nestjs/common';
 import { HttpStatus } from '@nestjs/common';
 import { describe, expect, it, vi } from 'vitest';
 
-import type { FastifyReply, FastifyRequest } from 'fastify';
+import type { HttpRequestLike, HttpResponseLike } from '#http/http-boundary.js';
 import { I18nService } from '@nestjs/i18n';
 import { PinoLogger } from 'nestjs-pino';
 
@@ -31,17 +31,20 @@ const ENGLISH_MESSAGES: Record<string, string> = {
 function createFilterFixture(requestUrl = '/api/v1/hello') {
   const replySend = vi.fn();
 
-  const reply = {
+  const reply: HttpResponseLike = {
     statusCode: 200,
-    status: vi.fn(function this_(status: number) {
+    status: vi.fn<(code: number) => HttpResponseLike>(function this_(status: number) {
       reply.statusCode = status;
       return reply;
-    }) as unknown as FastifyReply['status'],
-    header: vi.fn(() => reply) as unknown as FastifyReply['header'],
+    }),
+    header: vi.fn<(name: string, value: string) => HttpResponseLike>(() => reply),
+    getHeader: vi.fn<(name: string) => undefined>(() => undefined),
     send: replySend,
-  } as unknown as FastifyReply;
+    writableEnded: false,
+    headersSent: false,
+  };
 
-  const request = { id: REQUEST_ID, url: requestUrl } as unknown as FastifyRequest;
+  const request: HttpRequestLike = { id: REQUEST_ID, url: requestUrl, headers: {} };
 
   const host = {
     switchToHttp: () => ({ getRequest: () => request, getResponse: () => reply }),

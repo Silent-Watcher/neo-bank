@@ -10,7 +10,10 @@ const serverConfig = registerAs(SERVER_CONFIG, () => ({
   host: _env.HOST,
   port: _env.PORT,
   corsOrigins: _env.CORS_ORIGIN,
-  trustProxy: _env.TRUST_PROXY,
+  // The adapter-ready proxy-trust value: with TRUST_PROXY=true the optional
+  // TRUST_PROXY_PROXIES allowlist narrows trust to the listed proxies;
+  // without the list every hop is trusted (requires an XFF-sanitizing proxy).
+  trustProxy: _env.TRUST_PROXY ? (_env.TRUST_PROXY_PROXIES ?? true) : false,
   bodyLimit: _env.BODY_LIMIT,
   redisInsightUrl: _env.REDIS_INSIGHT_URL,
   mockserverHostUrl: _env.MOCKSERVER_HOST_URL,

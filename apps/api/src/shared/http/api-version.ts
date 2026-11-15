@@ -7,7 +7,10 @@ const API_VERSION_PATTERN = /^\/api\/v(\d+)(?:\/|$)/;
 export const NEUTRAL_API_VERSION = 'neutral';
 
 export function resolveApiVersion(url: string): string {
-  const match = API_VERSION_PATTERN.exec(url);
+  // IncomingMessage-style URLs carry the query string after the path; version
+  // matching sees the path only.
+  const path = url.split('?')[0];
+  const match = path.match(API_VERSION_PATTERN);
 
   return match ? `v${match[1]}` : NEUTRAL_API_VERSION;
 }

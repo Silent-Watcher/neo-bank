@@ -4,11 +4,11 @@ Minimal TypeScript monorepo managed with pnpm workspaces and Turborepo.
 
 ## Applications
 
-| Application  | Framework          | Default port |
-| ------------ | ------------------ | ------------ |
-| `apps/api`   | NestJS / Fastify   | 3001         |
-| `apps/web`   | Next.js App Router | 3000         |
-| `apps/admin` | Vite + React       | 5173         |
+| Application  | Framework            | Default port |
+| ------------ | -------------------- | ------------ |
+| `apps/api`   | NestJS (NodeAdapter) | 3001         |
+| `apps/web`   | Next.js App Router   | 3000         |
+| `apps/admin` | Vite + React         | 5173         |
 
 ## Requirements
 

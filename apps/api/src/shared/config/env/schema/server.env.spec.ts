@@ -306,6 +306,61 @@ describe('serverEnvSchema', () => {
     });
   });
 
+  describe('TRUST_PROXY_PROXIES', () => {
+    it('resolves to undefined when the variable is unset', () => {
+      // Arrange
+      const input = { ...validBaseEnv };
+
+      // Act
+      const result = serverEnvSchema.parse(input);
+
+      // Assert
+      expect(result.TRUST_PROXY_PROXIES).toBeUndefined();
+    });
+
+    it('resolves to undefined for a blank value', () => {
+      // Arrange
+      const input = { ...validBaseEnv, TRUST_PROXY_PROXIES: '   ' };
+
+      // Act
+      const result = serverEnvSchema.parse(input);
+
+      // Assert
+      expect(result.TRUST_PROXY_PROXIES).toBeUndefined();
+    });
+
+    it('splits a comma-separated list into trimmed entries', () => {
+      // Arrange
+      const input = { ...validBaseEnv, TRUST_PROXY_PROXIES: '10.0.0.0/8, 192.168.1.10 ,loopback' };
+
+      // Act
+      const result = serverEnvSchema.parse(input);
+
+      // Assert
+      expect(result.TRUST_PROXY_PROXIES).toEqual(['10.0.0.0/8', '192.168.1.10', 'loopback']);
+    });
+
+    it('drops empty entries from a trailing or doubled comma list', () => {
+      // Arrange
+      const input = { ...validBaseEnv, TRUST_PROXY_PROXIES: '10.0.0.5,,' };
+
+      // Act
+      const result = serverEnvSchema.parse(input);
+
+      // Assert
+      expect(result.TRUST_PROXY_PROXIES).toEqual(['10.0.0.5']);
+    });
+
+    it('rejects entries with whitespace or other unexpected characters', () => {
+      // Arrange & Act & Assert
+      for (const value of ['10.0.0.0/8; rm -rf', 'not a proxy']) {
+        const result = serverEnvSchema.safeParse({ ...validBaseEnv, TRUST_PROXY_PROXIES: value });
+
+        expect(result.success).toBe(false);
+      }
+    });
+  });
+
   describe('BODY_LIMIT', () => {
     it('defaults to 1048576 bytes when the variable is unset', () => {
       // Arrange

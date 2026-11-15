@@ -5,7 +5,7 @@ import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Test } from '@nestjs/testing';
 import type { TestingModuleBuilder } from '@nestjs/testing';
-import { FastifyAdapter } from '@nestjs/platform-fastify';
+import { NodeAdapter } from '@nestjs/platform-node';
 
 import { AppModule } from '#modules/app/app.module.js';
 import { DatabaseConnectionInitializer } from '#database/database.connect.js';
@@ -99,8 +99,8 @@ describe('Database integration (AppModule boot against PostgreSQL)', () => {
     });
     const module = await moduleBuilder.compile();
     // The boot fails in the lifecycle hooks before any HTTP behavior matters;
-    // the Fastify adapter matches the project platform.
-    const app = module.createNestApplication(new FastifyAdapter());
+    // the Node adapter matches the project platform.
+    const app = module.createNestApplication(new NodeAdapter());
 
     // Act & Assert
     try {

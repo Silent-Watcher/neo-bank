@@ -1,7 +1,7 @@
 import { networkInterfaces } from 'node:os';
 import type { NetworkInterfaceInfo } from 'node:os';
 
-// The Fastify adapter is constructed without HTTPS options (main.ts), so the
+// The HTTP adapter is constructed without HTTPS options (main.ts), so the
 // server always speaks plain HTTP. Update this together with any future TLS
 // configuration — reverse-proxy TLS termination is not part of the current
 // deployment topology, and no external URL is invented for it here.

@@ -1,6 +1,5 @@
 import { afterAll, afterEach, beforeAll, describe, expect, inject, it, vi } from 'vitest';
 import request from 'supertest';
-import type { TestingModuleBuilder } from '@nestjs/testing';
 
 import { randomUUID } from 'node:crypto';
 import { RedisService } from '#redis/redis.service.js';
@@ -64,14 +63,16 @@ afterAll(async () => {
   await inspectClient.quit();
 });
 
-function createE2eTestAppWithMockRedis(
-  configureModule?: (builder: TestingModuleBuilder) => void,
-): Promise<{ app: Awaited<ReturnType<typeof createE2eTestApp>>; close: () => Promise<void> }> {
+function createE2eTestAppWithMockRedis(): Promise<{
+  app: Awaited<ReturnType<typeof createE2eTestApp>>;
+  close: () => Promise<void>;
+}> {
   return createE2eTestApp(undefined, {
     configureModule: (builder) =>
       builder
         .overrideProvider(RedisService)
-        .useValue(configureModule ? undefined : undefined)
+        // Stub instance: overrideRedisService assigns the per-test methods.
+        .useValue({})
         .overrideProvider(RATE_LIMIT_CONFIG)
         .useValue({
           shortLimit: 10000,

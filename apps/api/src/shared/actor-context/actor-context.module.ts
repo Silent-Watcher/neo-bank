@@ -1,4 +1,3 @@
-import type { FastifyRequest } from 'fastify';
 import { ClsModule } from 'nestjs-cls';
 
 import { ACTOR_ID } from './actor-context.js';
@@ -16,18 +15,19 @@ import { ACTOR_ID } from './actor-context.js';
  * client-supplied identity data (headers, DTO fields) — that is attribution
  * forgery.
  */
-function resolveActorId(_request: FastifyRequest): string | null {
+function resolveActorId(_request: unknown): string | null {
   return null;
 }
 
 /**
  * Global actor-context module (ADR-031): `nestjs-cls`'s `ClsModule.forRoot`
  * provides the shared, DI-integrated CLS service and mounts `ClsMiddleware`
- * for every route through the adapter-specific mount point (Fastify 5 is
- * detected and handled by the library itself). The `setup` hook opens the
- * store with the actor seam — the store stays the single-field actor shape
- * (ADR-031: no contextual God object), and raw request/response objects are
- * not retained (`saveReq`/`saveRes` off).
+ * for every route; the library detects the HTTP adapter and mounts through a
+ * suitable path (ADR-032: platform-agnostic — under the NodeAdapter the
+ * middleware runs through the same Nest middleware pipeline). The `setup`
+ * hook opens the store with the actor seam — the store stays the
+ * single-field actor shape (ADR-031: no contextual God object), and raw
+ * request/response objects are not retained (`saveReq`/`saveRes` off).
  *
  * MikroORM's own `RequestContext` (per-request EntityManager fork) remains a
  * separate, independent mechanism — ADR-031 does not touch it.

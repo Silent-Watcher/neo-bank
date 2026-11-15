@@ -5,6 +5,7 @@ import { configModule } from '#config/config.js';
 import { actorContextModule } from '#src/shared/actor-context/actor-context.module.js';
 import { ProblemDetailsFilter } from '#filters/problem-details.filter.js';
 import { ResponseEnvelopeInterceptor } from '#interceptors/response-envelope.interceptor.js';
+import { ConditionalRequestInterceptor } from '#http/conditional-request.interceptor.js';
 import { MemoryProtectionModule } from '#src/shared/memory-protection/memory-protection.module.js';
 import { MemoryProtectionGuard } from '#src/shared/memory-protection/memory-protection.guard.js';
 import { AppLoggerModule } from '#src/shared/logging/logger.module.js';
@@ -44,6 +45,12 @@ import { EnrollmentsModule } from '#modules/enrollments/enrollments.module.js';
     { provide: APP_GUARD, useClass: MemoryProtectionGuard },
     { provide: APP_GUARD, useClass: RedisThrottlerGuard },
     { provide: APP_INTERCEPTOR, useClass: ResponseEnvelopeInterceptor },
+    // Registered after the envelope interceptor, so it wraps INSIDE it and
+    // sees the handler payload before the envelope adds its per-response
+    // metadata: the ETag validates the application payload (a weak validator,
+    // since the wire body carries fresh timestamp/request ID per response).
+    // ADR-032: conditional-request support.
+    { provide: APP_INTERCEPTOR, useClass: ConditionalRequestInterceptor },
     { provide: APP_FILTER, useClass: ProblemDetailsFilter },
   ],
 })

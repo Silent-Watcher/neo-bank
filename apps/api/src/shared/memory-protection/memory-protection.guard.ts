@@ -1,8 +1,9 @@
 import { Injectable, ServiceUnavailableException } from '@nestjs/common';
 import type { CanActivate, ExecutionContext } from '@nestjs/common';
 import { I18nService } from '@nestjs/i18n';
-import type { FastifyReply } from 'fastify';
 import { Reflector } from '@nestjs/core';
+
+import type { HttpResponseLike } from '#http/http-boundary.js';
 
 import { SKIP_MEMORY_PROTECTION } from './memory-protection.constants.js';
 import { MemoryProtectionService } from './memory-protection.service.js';
@@ -42,7 +43,9 @@ export class MemoryProtectionGuard implements CanActivate {
       return true;
     }
 
-    const response = context.switchToHttp().getResponse<FastifyReply>();
+    // The response is consumed through the app-owned HTTP boundary contract
+    // (ADR-032): the adapter's response satisfies it structurally.
+    const response = context.switchToHttp().getResponse<HttpResponseLike>();
     response.header('Retry-After', String(this.memoryProtection.getSecondsUntilNextSample()));
     throw new ServiceUnavailableException(this.i18n.t('errors.details.serviceOverloaded'));
   }

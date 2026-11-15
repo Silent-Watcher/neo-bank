@@ -1,46 +1,80 @@
 import { HttpStatus } from '@nestjs/common';
-import type { FastifyInstance } from 'fastify';
 import { Logger } from 'nestjs-pino';
 
 import { ErrorCode } from '#errors/error.code.js';
 import { buildProblemDetails } from '#errors/problem-details.js';
 import { resolveApiVersion } from './api-version.js';
-import { X_REQUEST_ID_HEADER, isValidUuidV4 } from './request-id.js';
+import type { HttpRequestLike, HttpResponseLike } from './http-boundary.js';
+import { weakEtag } from './etag.js';
+import {
+  X_REQUEST_ID_HEADER,
+  isValidUuidV4,
+  readInboundRequestIdHeader,
+  resolveRequestId,
+} from './request-id.js';
 
-// Registers the request-ID lifecycle on the raw Fastify instance:
-// - every response carries the request ID from Fastify's own lifecycle;
+// The minimal HTTP-adapter surface this lifecycle registers on, expressed
+// structurally (ADR-032): the request-ID hook must run before routing and
+// middleware on every request, which the NodeAdapter's request hook
+// guarantees. The adapter's request/response types satisfy the hook's
+// parameter contracts structurally.
+export interface RequestIdLifecycleAdapter {
+  setOnRequestHook(
+    hook: (req: HttpRequestLike, res: HttpResponseLike, done: (err?: Error) => void) => void,
+  ): void;
+}
+
+// Registers the request-ID lifecycle on the HTTP adapter:
+// - every request gets an ID assigned (valid inbound UUIDv4 normalized to
+//   lowercase, otherwise a fresh server-side UUIDv4) before any middleware or
+//   route handler runs, and every response echoes it;
 // - a present-but-invalid `x-request-id` header is rejected with `400` in the
 //   standardized Problem Details contract before any route handler runs. The
-//   ID already assigned by `genReqId` (a fresh server-side UUIDv4) is used
-//   everywhere; the invalid value is never echoed, trusted, or logged.
-export function registerRequestIdLifecycle(instance: FastifyInstance, logger: Logger): void {
-  instance.addHook('onRequest', async (request, reply) => {
-    reply.header(X_REQUEST_ID_HEADER, String(request.id));
+//   freshly assigned server-side UUIDv4 is used everywhere; the invalid value
+//   is never echoed, trusted, or logged.
+// Responding without calling `done()` stops the request pipeline: the
+// rejection never reaches a route handler.
+export function registerRequestIdLifecycle(
+  adapter: RequestIdLifecycleAdapter,
+  logger: Logger,
+): void {
+  adapter.setOnRequestHook((req, res, done) => {
+    const requestId = resolveRequestId(req);
+    req.id = requestId;
+    res.header(X_REQUEST_ID_HEADER, requestId);
 
-    const header = request.headers[X_REQUEST_ID_HEADER];
-    const value = Array.isArray(header) ? (header.length === 1 ? header[0] : undefined) : header;
+    // Presence is checked on the raw header so that an unusable multi-value
+    // header (duplicate header lines surface as an array) rejects exactly
+    // like the comma-joined form, instead of silently resolving to absence.
+    const header = req.headers[X_REQUEST_ID_HEADER];
+    const value = readInboundRequestIdHeader(req);
 
     if (header === undefined || isValidUuidV4(value)) {
+      done();
       return;
     }
 
     const problem = buildProblemDetails({
       status: HttpStatus.BAD_REQUEST,
       code: ErrorCode.InvalidRequestId,
-      // This hook runs as a raw Fastify onRequest hook, before the i18n
-      // middleware resolves a locale, so the message stays English by design
-      // (ADR-021). Clients identify it by the stable `code`, not the detail.
+      // This hook runs before the i18n middleware resolves a locale, so the
+      // message stays English by design (ADR-021). Clients identify it by the
+      // stable `code`, not the detail.
       detail: `${X_REQUEST_ID_HEADER} header must be a valid UUIDv4.`,
-      requestId: String(request.id),
-      apiVersion: resolveApiVersion(request.url),
+      requestId,
+      apiVersion: resolveApiVersion(req.url ?? ''),
     });
 
     logger.warn(
       `Rejected invalid ${X_REQUEST_ID_HEADER} header; assigned request ID ${problem.requestId}.`,
     );
 
-    await reply
+    // ETag like every other Problem Details response (ADR-032). This hook
+    // bypasses the interceptor pipeline and the filter, so the tag is set
+    // here; the fresh per-request timestamp means it never revalidates.
+    res
       .status(problem.status)
+      .header('ETag', weakEtag(JSON.stringify(problem)))
       .header('content-type', 'application/problem+json')
       .send(problem);
   });

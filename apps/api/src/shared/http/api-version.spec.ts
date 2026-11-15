@@ -30,5 +30,7 @@ describe('resolveApiVersion', () => {
 
   it('ignores query strings and does not treat them as paths', () => {
     expect(resolveApiVersion('/api/v1/hello?x=1')).toBe('v1');
+    // The version root itself, where `?` directly follows the version segment.
+    expect(resolveApiVersion('/api/v1?x=1')).toBe('v1');
   });
 });

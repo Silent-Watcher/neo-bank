@@ -13,15 +13,17 @@ interface Fixture {
   method?: string;
   url?: string;
   statusCode?: number;
-  sent?: boolean;
+  writableEnded?: boolean;
+  headersSent?: boolean;
   contentType?: string;
   handlerMetadata?: Record<string, unknown>;
 }
 
 function createInterceptorContext(
   fixture: Fixture = {},
-  // handleResult: unknown = { example: true },
-  // when we specify default value like {example:true} it breaks the "does not wrap undefined payloads" test case
+  // No default for handleResult: a default would break the "does not wrap
+  // undefined payloads" test case, which relies on an explicitly undefined
+  // handler result.
   handleResult: unknown,
 ): { context: ExecutionContext; next: CallHandler; nextHandle: ReturnType<typeof vi.fn> } {
   const request = {
@@ -31,7 +33,8 @@ function createInterceptorContext(
   };
   const reply = {
     statusCode: fixture.statusCode ?? 200,
-    sent: fixture.sent ?? false,
+    writableEnded: fixture.writableEnded ?? false,
+    headersSent: fixture.headersSent ?? false,
     getHeader: vi.fn(() => fixture.contentType),
   };
   // A stable handler reference, so tests can attach Reflect metadata to it
@@ -117,7 +120,15 @@ describe('ResponseEnvelopeInterceptor', () => {
   });
 
   it('does not wrap responses whose reply is already sent (raw reply usage)', async () => {
-    const { context, next } = createInterceptorContext({ sent: true }, { example: true });
+    const { context, next } = createInterceptorContext({ writableEnded: true }, { example: true });
+
+    const result = await interceptOnce(context, next);
+
+    expect(result).toEqual({ example: true });
+  });
+
+  it('does not wrap responses whose reply already started sending (raw streaming usage)', async () => {
+    const { context, next } = createInterceptorContext({ headersSent: true }, { example: true });
 
     const result = await interceptOnce(context, next);
 

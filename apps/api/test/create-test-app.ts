@@ -1,7 +1,7 @@
 import type { Type } from '@nestjs/common';
 import { RequestMethod, VersioningType } from '@nestjs/common';
-import type { NestFastifyApplication } from '@nestjs/platform-fastify';
-import { FastifyAdapter } from '@nestjs/platform-fastify';
+import type { NestNodeApplication } from '@nestjs/platform-node';
+import { NodeAdapter } from '@nestjs/platform-node';
 import type { TestingModuleBuilder } from '@nestjs/testing';
 import { Test } from '@nestjs/testing';
 import type { Redis } from 'ioredis';
@@ -15,8 +15,9 @@ import { createRedisClient } from '#redis/redis.provider.js';
 import { DatabaseConnectionInitializer } from '#database/database.connect.js';
 import { buildRuntimeMikroOrmOptions } from '#database/mikro-orm.options.js';
 import serverConfig from '#config/server.config.js';
-import { fastifyGenReqId } from '#src/shared/http/request-id.js';
-import { registerRequestIdLifecycle } from '#src/shared/http/request-id.lifecycle.js';
+import { registerRequestIdLifecycle } from '#http/request-id.lifecycle.js';
+import { registerRootNotFoundFallback } from '#http/not-found.fallback.js';
+import { I18nService } from '@nestjs/i18n';
 import { MIKRO_ORM_MODULE_OPTIONS } from '@mikro-orm/nestjs';
 import { PostgreSqlDriver } from '@mikro-orm/postgresql';
 
@@ -33,7 +34,12 @@ import { PostgreSqlDriver } from '@mikro-orm/postgresql';
 export interface CreateTestAppOptions {
   controllers?: Type[];
   configureModule?: (builder: TestingModuleBuilder) => void;
-  adapterTrustProxy?: boolean;
+  /**
+   * Overrides the validated trust-proxy value for specs that verify
+   * proxy-trust behavior itself. A string array is the allowlist form
+   * (Wave 18 SEC-01): only the listed proxies' forwarded headers are trusted.
+   */
+  adapterTrustProxy?: boolean | string[];
   redisConfig?: RedisConfig;
   /**
    * Stubs the boot-time PostgreSQL connection (ADR-027 amendment) for suites
@@ -46,9 +52,9 @@ export interface CreateTestAppOptions {
 }
 
 export async function createTestApp(
-  beforeInit?: (app: NestFastifyApplication) => void,
+  beforeInit?: (app: NestNodeApplication) => void,
   options?: CreateTestAppOptions,
-): Promise<NestFastifyApplication> {
+): Promise<NestNodeApplication> {
   const { trustProxy, bodyLimit, corsOrigins } = serverConfig();
 
   const moduleBuilder = Test.createTestingModule({
@@ -69,14 +75,16 @@ export async function createTestApp(
   }
   options?.configureModule?.(moduleBuilder);
   const module = await moduleBuilder.compile();
-  const app = module.createNestApplication<NestFastifyApplication>(
-    new FastifyAdapter({
-      trustProxy: options?.adapterTrustProxy ?? trustProxy,
-      bodyLimit,
-      genReqId: fastifyGenReqId,
-    }),
-    { bufferLogs: true },
-  );
+  const adapter = new NodeAdapter({
+    trustProxy: options?.adapterTrustProxy ?? trustProxy,
+  });
+  const app = module.createNestApplication<NestNodeApplication>(adapter, { bufferLogs: true });
+  // Body parsers (ADR-006): registered explicitly with the configured limit,
+  // exactly as the production bootstrap does, so e2e assertions exercise the
+  // same parser chain (the adapter's defaults cap bodies at 100 KB).
+  // keepAliveTimeout is intentionally not set here: tests never listen().
+  app.useBodyParser('json', { limit: bodyLimit });
+  app.useBodyParser('urlencoded', { limit: bodyLimit, extended: true });
 
   app.useLogger(app.get(Logger));
   app.setGlobalPrefix('api', {
@@ -91,10 +99,14 @@ export async function createTestApp(
     app.enableCors({ origin: corsOrigins });
   }
 
-  registerRequestIdLifecycle(app.getHttpAdapter().getInstance(), app.get(Logger));
+  registerRequestIdLifecycle(adapter, app.get(Logger));
 
   beforeInit?.(app);
   await app.init();
+  // Mirrors the production bootstrap: the root-level not-found fallback keeps
+  // the Problem Details contract for unmatched paths outside the global
+  // prefix (ADR-032).
+  registerRootNotFoundFallback(adapter, app.get(I18nService));
   // The Redis connection is initiated in the background at init; guarded
   // routes fail closed (500) until it is ready. Deployments gate traffic on
   // the health probe the same way — connect the client when a spec stubbed
@@ -117,7 +129,6 @@ export async function createTestApp(
       client.disconnect();
     };
   }
-  await app.getHttpAdapter().getInstance().ready();
 
   return app;
 }
@@ -133,9 +144,9 @@ export async function createTestApp(
  * createTestApp directly with their own per-file containers.
  */
 export async function createE2eTestApp(
-  beforeInit?: (app: NestFastifyApplication) => void,
+  beforeInit?: (app: NestNodeApplication) => void,
   options?: Omit<CreateTestAppOptions, 'redisConfig'>,
-): Promise<NestFastifyApplication> {
+): Promise<NestNodeApplication> {
   const databaseUrl = inject('e2ePostgresUrl');
   return createTestApp(beforeInit, {
     ...options,

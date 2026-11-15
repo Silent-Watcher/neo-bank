@@ -1,14 +1,15 @@
 import { RequestMethod, VersioningType } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
-import type { NestFastifyApplication } from '@nestjs/platform-fastify';
-import { FastifyAdapter } from '@nestjs/platform-fastify';
+import { I18nService } from '@nestjs/i18n';
+import type { NestNodeApplication } from '@nestjs/platform-node';
+import { NodeAdapter } from '@nestjs/platform-node';
 import { Logger } from 'nestjs-pino';
 
 import { AppEnv } from '#enums/app-env.enum.js';
 import { AppModule } from './modules/app/app.module.js';
 import serverConfig from './shared/config/server.config.js';
-import { fastifyGenReqId } from './shared/http/request-id.js';
-import { registerRequestIdLifecycle } from './shared/http/request-id.lifecycle.js';
+import { registerRequestIdLifecycle } from '#http/request-id.lifecycle.js';
+import { registerRootNotFoundFallback } from '#http/not-found.fallback.js';
 import {
   buildStartupLogMessage,
   buildStartupUrl,
@@ -24,6 +25,12 @@ const API_GLOBAL_PREFIX = 'api';
 const API_DEFAULT_VERSION = '1';
 const API_BASE_PATH = `/${API_GLOBAL_PREFIX}/v${API_DEFAULT_VERSION}`;
 
+// Keep-alive timeout for idle HTTP connections, in milliseconds (ADR-032).
+// Node's 5 s default is aggressive for keep-alive clients; Fastify shipped 72 s.
+// 20 s is the deliberate middle ground; revisit together with the ETag
+// deferral if a connection-pooling reverse proxy is ever introduced.
+const SERVER_KEEP_ALIVE_TIMEOUT_MS = 20_000;
+
 async function bootstrap() {
   const {
     env,
@@ -37,27 +44,32 @@ async function bootstrap() {
     mockserverDockerUrl,
   } = serverConfig();
 
-  const app = await NestFactory.create<NestFastifyApplication>(
+  const adapter = new NodeAdapter({
+    // When the application runs behind a trusted reverse proxy or load
+    // balancer, forwarded headers are needed to determine the original client
+    // IP and protocol. Trusting forwarded headers without a properly
+    // configured trusted proxy would let clients spoof their address, so
+    // proxy trust stays off unless explicitly enabled.
+    trustProxy,
+  });
+  const app = await NestFactory.create<NestNodeApplication>(
     AppModule,
-    new FastifyAdapter({
-      // When the application runs behind a trusted reverse proxy or load
-      // balancer, forwarded headers are needed to determine the original client
-      // IP and protocol. Trusting forwarded headers without a properly
-      // configured trusted proxy would let clients spoof their address, so
-      // proxy trust stays off unless explicitly enabled.
-      trustProxy,
-      // Caps the maximum request payload size in bytes to reduce unnecessary
-      // memory consumption and limit the impact of oversized-payload abuse.
-      bodyLimit,
-      // Single source of truth for request IDs: an inbound x-request-id header
-      // is accepted only as a valid UUIDv4 (normalized to lowercase); every
-      // other request gets a freshly generated crypto.randomUUID(). Pino and
-      // the response envelopes reuse this Fastify-assigned ID.
-      genReqId: fastifyGenReqId,
-    }),
+    adapter,
     // Early bootstrap logs are buffered until the Pino logger takes over.
     { bufferLogs: true },
   );
+
+  // Body parsers (ADR-006): the adapter's default parsers cap bodies at 100 KB,
+  // while the configured limit is the application contract for every parsed
+  // content type. Registering both parsers explicitly also replaces the
+  // adapter's default parser set (it skips parsers that are already present).
+  // Both default to rejecting prototype-polluting keys, as Fastify did.
+  app.useBodyParser('json', { limit: bodyLimit });
+  app.useBodyParser('urlencoded', { limit: bodyLimit, extended: true });
+
+  // Set before listen(): the underlying server is created with the
+  // application (see SERVER_KEEP_ALIVE_TIMEOUT_MS above).
+  app.getHttpServer().keepAliveTimeout = SERVER_KEEP_ALIVE_TIMEOUT_MS;
 
   // Replaces the default NestJS logger so framework and application logs use
   // the same Pino pipeline.
@@ -83,9 +95,10 @@ async function bootstrap() {
     app.enableCors({ origin: corsOrigins });
   }
 
-  // Fastify-level request-ID lifecycle: x-request-id echo on every response
-  // and early rejection of invalid inbound IDs, before any route handler runs.
-  registerRequestIdLifecycle(app.getHttpAdapter().getInstance(), app.get(Logger));
+  // Adapter-level request-ID lifecycle: ID assignment on every request,
+  // x-request-id echo on every response, and early rejection of invalid
+  // inbound IDs, before any middleware or route handler runs.
+  registerRequestIdLifecycle(adapter, app.get(Logger));
 
   // Swagger is a development aid only: it must not appear in e2e route
   // expectations (test) or expose the API surface publicly (production), so
@@ -98,6 +111,13 @@ async function bootstrap() {
   }
 
   app.enableShutdownHooks();
+  await app.init();
+
+  // Root-level not-found fallback: keeps the Problem Details contract for
+  // unmatched paths outside the global prefix (ADR-032). Must be registered
+  // after init, behind the routes and the prefix-scoped not-found mount.
+  registerRootNotFoundFallback(adapter, app.get(I18nService));
+
   await app.listen(port, host);
 
   // Startup address logging: URLs use the real prefix/version path and the

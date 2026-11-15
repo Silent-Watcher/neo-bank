@@ -15,8 +15,9 @@ const OPENAPI_API_VERSION = '1';
  * `/{SWAGGER_DOCS_PATH}/json`. Development-only: the environment gate lives
  * in the bootstrap function (main.ts), keeping one explicit decision point.
  *
- * The JSON/YAML URLs are set explicitly because @nestjs/swagger's defaults on
- * Fastify are `docs-json`/`docs-yaml`, which contradicts the UI path.
+ * The JSON/YAML URLs are set explicitly (instead of the library defaults
+ * `docs-json`/`docs-yaml`) so every documentation URL shares the UI's path
+ * convention.
  */
 export function setupSwagger(app: INestApplication): void {
   const config = new DocumentBuilder()

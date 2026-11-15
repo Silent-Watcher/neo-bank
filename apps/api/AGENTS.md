@@ -8,12 +8,15 @@ status: [../../docs/current-state.md](../../docs/current-state.md).
 ## Purpose
 
 The backend API for Neo Bank. Serves REST under `/api/v1` with a version-
-neutral `/health` probe on Fastify, port 3001 in development/test.
+neutral `/health` probe on the NestJS Node HTTP adapter, port 3001 in
+development/test.
 
 ## Stack
 
-- NestJS 12 on **Fastify** (ADR-002) — never add Express-specific code; use
-  Fastify types (`FastifyRequest`/`FastifyReply`) and plugins.
+- NestJS 12 on the official **Node HTTP platform** (`@nestjs/platform-node`,
+  `NodeAdapter` — ADR-032, superseding ADR-002). Reusable components stay
+  platform-agnostic (root rule: Platform-Agnostic Architecture); platform-
+  specific code lives only in the bootstrap boundary.
 - ESM (`"type": "module"`) with Node.js native `#` subpath import aliases
   (root rule; alias map in `package.json` → `imports`).
 - SWC transpiles (`.swcrc`, ADR-003); type safety is enforced separately by
@@ -106,7 +109,7 @@ in the root `AGENTS.md`; this section covers the API-specific mechanics.
     formatting.
   - Error titles: `titleKeyForErrorCode`/`titleKeyForStatus` map to
     `errors.*` catalog keys; the Problem Details filter translates the title
-    at response time. The pre-i18n Fastify request-ID rejection stays English
+    at response time. The pre-i18n request-ID rejection stays English
     by design.
   - Envelope: only `message` is localized (`common.success`); response data
     is never translated.
@@ -281,7 +284,7 @@ Constraints:
 
 ```
 src/
-  main.ts                  # bootstrap only (Fastify, prefix, versioning, CORS)
+  main.ts                  # bootstrap only (HTTP adapter, prefix, versioning, CORS)
   modules/
     app/                   # AppModule, health check, Problem Type docs page
     enrollments/           # feature modules: controller + service + schema + specs

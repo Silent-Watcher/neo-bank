@@ -337,6 +337,26 @@ Do not introduce unexplained string literals for application states, domain valu
 - Avoid unnecessary round trips; never replace an atomic script with application-side check-then-act sequences.
 - Always build script keys with the centralized key naming convention above; never introduce arbitrary namespaces or prefixes.
 
+## Platform-Agnostic Architecture
+
+Platform independence must be the default design principle when developing reusable application components.
+
+Whenever possible, application logic and NestJS components must remain independent of the underlying HTTP platform. The API runs on the official NestJS Node HTTP platform (`@nestjs/platform-node`, `NodeAdapter` — ADR-032), but the same rule applies to every application in the monorepo. This applies to, but is not limited to: guards, interceptors, pipes, exception filters, custom decorators, providers and services, middleware, shared modules, and reusable utilities.
+
+Mandatory guidelines:
+
+1. Avoid direct dependencies on Fastify, Express, or other HTTP platform-specific packages inside reusable application components.
+2. Avoid platform-specific request and response types such as `FastifyRequest`, `FastifyReply`, or Express-specific types unless there is a clearly justified reason.
+3. Prefer NestJS abstractions such as `ExecutionContext`, `ArgumentsHost`, `Reflector`, and `HttpAdapterHost` whenever they provide the required functionality.
+4. Prefer application-owned interfaces and contracts when accessing information that should not depend on a particular platform.
+5. Do not couple business logic or application services to HTTP framework-specific APIs.
+6. If platform-specific functionality is genuinely unavoidable, isolate it in the appropriate infrastructure or HTTP platform boundary (for the API: `apps/api/src/main.ts` and its test mirror `apps/api/test/create-test-app.ts`) and expose it through an application-owned abstraction or interface.
+7. Platform-specific imports must not leak into reusable components or higher-level application layers.
+8. Avoid introducing unnecessary abstractions merely to achieve theoretical platform independence. Apply the principle pragmatically and follow existing architectural conventions.
+9. Every exception to this rule must have a clear technical justification.
+
+The objective is to make changing the underlying HTTP platform possible without requiring widespread changes to application components.
+
 ## Backend — NestJS
 
 - Follow NestJS conventions for modules, dependency injection, controllers, and providers.
@@ -354,7 +374,7 @@ Treat this convention as the default project architecture. Inspect existing file
 
 ### Application Bootstrap
 
-- Keep all bootstrap-time application configuration — Fastify adapter options such as `trustProxy` and `bodyLimit`, the global API prefix, URI versioning, and CORS — directly inside the `bootstrap` function in `apps/api/src/main.ts`.
+- Keep all bootstrap-time application configuration — HTTP adapter options such as `trustProxy` and the body-parser limit, the global API prefix, URI versioning, and CORS — directly inside the `bootstrap` function in `apps/api/src/main.ts`.
 - Do not extract bootstrap configuration into a separate file such as `app.setup.ts`.
 
 ## Internationalization and Bilingual Development

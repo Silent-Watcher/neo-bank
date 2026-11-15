@@ -4,7 +4,7 @@ import { PostgreSqlDriver } from '@mikro-orm/postgresql';
 import { ThrottlerStorage, ThrottlerStorageService } from '@nestjs/throttler';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import type { NestFastifyApplication } from '@nestjs/platform-fastify';
+import type { NestNodeApplication } from '@nestjs/platform-node';
 
 import { BaseEntity } from '#database/base.entity.js';
 import { buildRuntimeMikroOrmOptions } from '#database/mikro-orm.options.js';
@@ -35,7 +35,7 @@ afterAll(async () => {
   await postgres.stop();
 });
 
-function createProbeApp(): Promise<NestFastifyApplication> {
+function createProbeApp(): Promise<NestNodeApplication> {
   return createTestApp(undefined, {
     controllers: [TestArticleController],
     configureModule: (builder) => {
@@ -57,7 +57,7 @@ function createProbeApp(): Promise<NestFastifyApplication> {
   });
 }
 
-function probe(app: NestFastifyApplication) {
+function probe(app: NestNodeApplication) {
   return request(app.getHttpServer());
 }
 
@@ -214,12 +214,16 @@ describe('BaseEntity lifecycle (ADR-029)', () => {
     // Arrange
     const app = await createProbeApp();
     const created = await probe(app).post('/api/v1/test/articles').send({ title: 'roundtrip' });
-    const em = app.get(EntityManager);
+    // Outside an HTTP request there is no RequestContext fork, so the global
+    // EM would throw; fork explicitly for the entity read.
+    const em = app.get(EntityManager).fork();
 
     // Act — the same row read as an entity Date and as the raw driver string.
+    // The raw SQL uses `?` placeholders; the connection converts them to the
+    // platform's positional parameters ($1, $2, …) on PostgreSQL.
     const rows: Array<{ created_at: string }> = await em
       .getConnection()
-      .execute(`SELECT created_at FROM test_article WHERE id = $1`, [created.body.data.id]);
+      .execute(`SELECT created_at FROM test_article WHERE id = ?`, [created.body.data.id]);
     const entity = await em.findOneOrFail(TestArticle, { id: created.body.data.id });
 
     // Assert — the hydrated instant equals the stored instant.
@@ -287,8 +291,8 @@ describe('Actor attribution (ADR-029)', () => {
   });
 });
 
-describe('Request contexts under Fastify (ADR-031)', () => {
-  it('mounts the CLS actor context for every request through the Fastify middleware pipeline', async () => {
+describe('Request contexts (ADR-031)', () => {
+  it('mounts the CLS actor context for every request through the HTTP middleware pipeline', async () => {
     // Arrange
     const app = await createProbeApp();
 
@@ -302,7 +306,7 @@ describe('Request contexts under Fastify (ADR-031)', () => {
     await app.close();
   });
 
-  it('isolates the MikroORM EntityManager per concurrent request (RequestContext under Fastify)', async () => {
+  it('isolates the MikroORM EntityManager per concurrent request (RequestContext)', async () => {
     // Arrange
     const app = await createProbeApp();
     const http = probe(app);
