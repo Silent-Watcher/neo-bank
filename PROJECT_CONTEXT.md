@@ -135,23 +135,24 @@ Core contracts:
 
 ## Documentation Index
 
-| Document                                    | Purpose                                                                   |
-| ------------------------------------------- | ------------------------------------------------------------------------- |
-| `AGENTS.md` (root + per app)                | Agent instructions and conventions                                        |
-| `apps/*/ONBOARDING.md`                      | Developer onboarding, stack tables, env vars, commands                    |
-| `docs/architecture.md`                      | Detailed architecture, boundaries, workspace relationships                |
-| `docs/current-state.md`                     | Feature/state snapshot (verified per feature)                             |
-| `DECISIONS.md`                              | ADR-001…ADR-028, all Accepted                                             |
-| `docs/docker.md`                            | Docker stacks: setup, env files, commands                                 |
-| `docs/observability/README.md`              | Monitoring stack operations                                               |
-| `docs/observability/manual-testing.md`      | Reproducible monitoring verification scenarios                            |
-| `docs/observability/roadmap.md`             | Observability roadmap (metrics/tracing/alerting)                          |
-| `docs/security-otp-enrollment.md`           | Security assessment of the OTP enrollment flow                            |
-| `docs/judge-findings.md`                    | AI code-review findings tracker                                           |
-| `docs/ai-decisions.md`                      | Independent AI decision log (mandatory per root AGENTS.md Agent Workflow) |
-| `DEFERRED.md`                               | Mandated deferred work registry                                           |
-| `prompts/`                                  | Sequential per-feature request + implementation records                   |
-| `.agents/rules/`, `.agents/skills/`         | Agent rules and skills (tooling)                                          |
-| `.agents/README.md`                         | Multi-agent system: setup, platform integration, extension                |
-| `.agents/workflows/development-workflow.md` | Mandatory multi-agent development workflow (ADR-023)                      |
-| `.agents/schemas/`                          | Canonical subagent report templates                                       |
+| Document                                    | Purpose                                                                              |
+| ------------------------------------------- | ------------------------------------------------------------------------------------ |
+| `AGENTS.md` (root + per app)                | Agent instructions and conventions                                                   |
+| `apps/*/ONBOARDING.md`                      | Developer onboarding, stack tables, env vars, commands                               |
+| `docs/architecture.md`                      | Detailed architecture, boundaries, workspace relationships                           |
+| `docs/api.md`                               | Human-readable API reference (nestbruno route inventory + source-verified contracts) |
+| `docs/current-state.md`                     | Feature/state snapshot (verified per feature)                                        |
+| `DECISIONS.md`                              | ADR-001…ADR-028, all Accepted                                                        |
+| `docs/docker.md`                            | Docker stacks: setup, env files, commands                                            |
+| `docs/observability/README.md`              | Monitoring stack operations                                                          |
+| `docs/observability/manual-testing.md`      | Reproducible monitoring verification scenarios                                       |
+| `docs/observability/roadmap.md`             | Observability roadmap (metrics/tracing/alerting)                                     |
+| `docs/security-otp-enrollment.md`           | Security assessment of the OTP enrollment flow                                       |
+| `docs/judge-findings.md`                    | AI code-review findings tracker                                                      |
+| `docs/ai-decisions.md`                      | Independent AI decision log (mandatory per root AGENTS.md Agent Workflow)            |
+| `DEFERRED.md`                               | Mandated deferred work registry                                                      |
+| `prompts/`                                  | Sequential per-feature request + implementation records                              |
+| `.agents/rules/`, `.agents/skills/`         | Agent rules and skills (tooling)                                                     |
+| `.agents/README.md`                         | Multi-agent system: setup, platform integration, extension                           |
+| `.agents/workflows/development-workflow.md` | Mandatory multi-agent development workflow (ADR-023)                                 |
+| `.agents/schemas/`                          | Canonical subagent report templates                                                  |
