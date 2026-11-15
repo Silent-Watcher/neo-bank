@@ -48,6 +48,27 @@ The Redis integration suite (`test:redis`) exists only in the `apps/api` workspa
 
 Type safety is audited with `typehealth` (root devDependency): `npx typehealth scan --cwd apps/<app> --config apps/<app>/tsconfig.json --format markdown`. Every workspace tsconfig enables all supported strictness compiler options; `apps/admin` must be scanned with `tsconfig.app.json` (its root `tsconfig.json` is a solution-style reference file).
 
+## Code Intelligence (GitNexus)
+
+The repository is indexed by GitNexus, a code-graph tool (symbols, dependency relationships, execution flows). Use it to understand the codebase faster than broad text searching — "how does X work?", "who calls Y?", "what breaks if I change Z?".
+
+All commands run through the local runner from the repository root:
+
+```sh
+node .gitnexus/run.cjs status --repo .                                  # index freshness
+node .gitnexus/run.cjs analyze --index-only                             # re-index after large changes
+node .gitnexus/run.cjs query "concept" --repo .                         # find code by concept/flow
+node .gitnexus/run.cjs context "SymbolName" --repo .                    # inspect a named symbol
+node .gitnexus/run.cjs impact "SymbolName" --direction upstream --repo .  # callers / blast radius
+node .gitnexus/run.cjs detect-changes --scope all --repo .              # graph diff before committing
+```
+
+Notes:
+
+- An index is registered at `.gitnexus/`; check freshness with `status`. After large refactors or many new files, re-run `analyze --index-only`.
+- Treat an empty caller set or `risk: UNKNOWN` from `impact` as unresolved, not as unused — confirm with a text search before deleting or changing a symbol.
+- Per-task workflows (exploring, impact analysis, debugging, refactoring) are documented in the `gitnexus-*` skills under `.agents/skills/` and `.claude/skills/`.
+
 ## Docker
 
 The full stack — API, web, admin, PostgreSQL, Redis, plus development-only MockServer for resilience testing (ADR-024) and pgAdmin for PostgreSQL administration (ADR-028) — can also run in Docker, in development (hot reloading) and production configurations. See [`docs/docker.md`](./docs/docker.md).
