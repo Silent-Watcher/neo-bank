@@ -199,6 +199,9 @@ importers:
       turbo:
         specifier: 2.11.10
         version: 2.11.10
+      typehealth:
+        specifier: ^0.10.0
+        version: 0.10.0
       typescript:
         specifier: 6.0.3
         version: 6.0.3
@@ -4491,6 +4494,16 @@ packages:
     resolution: {integrity: sha512-faYHw0anBbc/kWF3zFTEnxSFOAGUX9GFbOBthvDdLsIlEoWOFOtS0zgCiQYwIskL9iGXZL3kAXD8OoZ4GmMATA==}
     engines: {node: '>= 18'}
 
+  typehealth@0.10.0:
+    resolution: {integrity: sha512-yCTvtQiLzCmHHN7bVjrMW6lTGQrBOGurUM67jaDBKV0I9A3z1BlQy7NlIDNYNwyJWIbzzJ6uzJlTEulRRtcjlA==}
+    engines: {node: '>=22.18'}
+    hasBin: true
+
+  typescript@5.9.3:
+    resolution: {integrity: sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw==}
+    engines: {node: '>=14.17'}
+    hasBin: true
+
   typescript@6.0.3:
     resolution: {integrity: sha512-y2TvuxSZPDyQakkFRPZHKFm+KKVqIisdg9/CZwm9ftvKXLP8NRWj38/ODjNbr43SsoXqNuAisEf1GdCxqWcdBw==}
     engines: {node: '>=14.17'}
@@ -8602,6 +8615,13 @@ snapshots:
       media-typer: 1.1.1
       mime-types: 3.0.2
     optional: true
+
+  typehealth@0.10.0:
+    dependencies:
+      commander: 15.0.0
+      typescript: 5.9.3
+
+  typescript@5.9.3: {}
 
   typescript@6.0.3: {}
 

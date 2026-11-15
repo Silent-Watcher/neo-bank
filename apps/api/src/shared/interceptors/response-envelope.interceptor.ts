@@ -25,7 +25,10 @@ function declaredContentType(handler: object): string | undefined {
   const headers: unknown = Reflect.getMetadata(HEADERS_METADATA, handler);
 
   if (!Array.isArray(headers)) return undefined;
-  for (const header of headers) {
+  // Array.isArray on `unknown` narrows to any[]; the explicit unknown[] keeps
+  // the loop typed and lets isRecord() narrow each entry properly.
+  const headerList: unknown[] = headers;
+  for (const header of headerList) {
     if (!isRecord(header)) continue;
     if (typeof header.name !== 'string' || header.name.toLowerCase() !== 'content-type') continue;
     if (typeof header.value === 'string') return header.value;
@@ -53,7 +56,7 @@ export class ResponseEnvelopeInterceptor implements NestInterceptor {
     }
 
     return next.handle().pipe(
-      map((data) => {
+      map((data: unknown) => {
         // A handler may finish the reply itself (raw reply usage, streams) or
         // produce a non-serializable payload; none of these get wrapped.
         if (reply.sent || data === undefined || data instanceof StreamableFile) {

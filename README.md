@@ -46,6 +46,8 @@ pnpm cm
 
 The Redis integration suite (`test:redis`) exists only in the `apps/api` workspace: run `pnpm --dir apps/api test:redis` (also requires Docker).
 
+Type safety is audited with `typehealth` (root devDependency): `npx typehealth scan --cwd apps/<app> --config apps/<app>/tsconfig.json --format markdown`. Every workspace tsconfig enables all supported strictness compiler options; `apps/admin` must be scanned with `tsconfig.app.json` (its root `tsconfig.json` is a solution-style reference file).
+
 ## Docker
 
 The full stack — API, web, admin, PostgreSQL, Redis, plus development-only MockServer for resilience testing (ADR-024) and pgAdmin for PostgreSQL administration (ADR-028) — can also run in Docker, in development (hot reloading) and production configurations. See [`docs/docker.md`](./docs/docker.md).

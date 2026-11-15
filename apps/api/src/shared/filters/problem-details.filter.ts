@@ -27,7 +27,9 @@ function detailFromHttpException(exception: HttpException): string {
     if (Array.isArray(response.message)) {
       // Validation message arrays are joined so the list stays readable
       // without leaking the raw exception structure.
-      return response.message.filter((item) => typeof item === 'string').join('; ');
+      return response.message
+        .filter((item: unknown): item is string => typeof item === 'string')
+        .join('; ');
     }
   }
 

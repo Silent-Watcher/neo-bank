@@ -206,3 +206,14 @@ requires developer approval before any ADR is created.
 - **Impact:** `docker/pgadmin/render_servers.py` (default path + `PGADMIN_SERVER_JSON_FILE` handling), `docker/compose.app.dev.yml` (one environment line).
 - **Reversibility:** Trivial — change `DEFAULT_RENDERED_PATH`/the compose variable together (they share one source of truth by contract).
 - **ADR Recommendation:** No — implementation detail within the approved ADR-028 mechanism (the ADR never specified the render target); recorded here and in the Wave 6 tracker entry.
+
+### 9. TypeHealth audit scope: production findings fixed, generated code and test-idiom findings intentionally left (typehealth task)
+
+- **Context:** The user-added `typehealth` analyzer reports per-metric findings across the three workspaces. The raw baseline (99.4%/75.6%/n-a) mixes production source, test files, framework-generated code, and solution-tsconfig artifacts.
+- **Decision:** Fix only production-source findings (api `src/` implicit-any ×8, admin root-element `!`), and leave three classes open with recorded justification: (a) Next.js `.next/types/validator.ts` codegen (not project source; tsconfig exclusion would affect Next's route type checking), (b) 30 test-file findings where `as unknown as` is the repo's established Vitest mock idiom, (c) the `openapi.schemas.ts` JSON round-trip (internally generated JSON; typed alternatives need an unsafe assertion or change drop-undefined semantics). Also established that `apps/admin` must be scanned with `tsconfig.app.json` — its solution-style root tsconfig yields a false 0-file report with 9 "disabled" flags although both real configs are strict.
+- **Reasoning:** The skill's own rules (findings are signals, don't game metrics, respect conventions) plus the repo's DRY/convention rules: converting the test-idiom assertions would fight the surrounding code for zero runtime safety; the JSON.parse call is a non-boundary by construction.
+- **Alternatives:** Fix every finding including tests (high churn, convention conflict — rejected); exclude `.next` and test globs from scans to clean the report (metric gaming — rejected); switch the JSON round-trip to `structuredClone` (semantics change for undefined-valued properties — rejected).
+- **Trade-offs:** The headline metrics stay below 100% (api 99.7%, web 75.6% reported); the reports now have a documented interpretation layer instead of a misleading raw number.
+- **Impact:** `apps/api/src/shared/{filters,interceptors,logging}`, `apps/admin/src/main.tsx`, `README.md` (scan command + admin config note), `prompts/_045`.
+- **Reversibility:** Trivial — annotations only; re-introducing the raw idioms is a one-line revert each.
+- **ADR Recommendation:** No — tool usage and annotation-level fixes; no architectural decision.

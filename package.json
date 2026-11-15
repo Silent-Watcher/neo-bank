@@ -39,6 +39,7 @@
     "oxfmt": "0.74.0",
     "oxlint": "1.89.0",
     "turbo": "2.11.10",
+    "typehealth": "^0.10.0",
     "typescript": "6.0.3"
   },
   "config": {

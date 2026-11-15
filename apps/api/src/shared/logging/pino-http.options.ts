@@ -1,3 +1,4 @@
+import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Options } from 'pino-http';
 
 import type { LogConfig } from '#config/log.config.js';
@@ -21,8 +22,22 @@ export function buildPinoHttpOptions(config: LogConfig): Options {
     // pino-http only binds the request ID to child loggers, so access-log
     // lines carry it solely inside `req`; lift it to the top level to keep
     // records queryable by the shared request ID directly.
-    customSuccessObject: (req, _res, object) => ({ reqId: req.id, ...object }),
-    customErrorObject: (req, _res, _error, object) => ({ reqId: req.id, ...object }),
+    // Parameter types match the declared pino-http callback signature; the
+    // explicit annotations keep req.id typed through IncomingMessage
+    // augmentation instead of relying on contextual any.
+    customSuccessObject: (req: IncomingMessage, _res: ServerResponse, object: object) => ({
+      reqId: req.id,
+      ...object,
+    }),
+    customErrorObject: (
+      req: IncomingMessage,
+      _res: ServerResponse,
+      _error: Error,
+      object: object,
+    ) => ({
+      reqId: req.id,
+      ...object,
+    }),
   };
 
   if (config.pretty) {

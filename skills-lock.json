@@ -133,6 +133,12 @@
       "skillPath": "skills/turborepo/SKILL.md",
       "computedHash": ""
     },
+    "typehealth": {
+      "source": "Silent-Watcher/typehealth",
+      "sourceType": "github",
+      "skillPath": "skills/typehealth/SKILL.md",
+      "computedHash": "f8c1315345360b7a9beec54e2e996afdeba056b3545ddb2b826f80bd7730552e"
+    },
     "ultracave": {
       "source": "JuliusBrussee/caveman",
       "sourceType": "github",
