@@ -37,9 +37,9 @@ const GENERATED_AGENT_DIRS = [ZCODE_AGENTS_DIR, CLAUDE_AGENTS_DIR];
 /** Single source of truth for plugin and marketplace metadata. */
 const PLUGIN = {
   name: 'monorepo-workflow',
-  version: '0.1.0',
+  version: '0.2.0',
   description:
-    'Project multi-agent development workflow: project-explorer, code-reviewer, code-security-analyzer and documentation-writer subagents, with session-start and documentation-write-guard hooks.',
+    'Project multi-agent development workflow: project-explorer, code-reviewer, code-security-analyzer, migration-reviewer and documentation-writer subagents, with session-start and documentation-write-guard hooks.',
   author: { name: 'neo-bank' },
   category: 'developer-tools',
   displayName: 'Neo Bank Monorepo Workflow',
@@ -50,6 +50,7 @@ const AGENT_PRESENTATION = {
   'project-explorer': { color: 'blue', thoughtLevel: 'high' },
   'code-reviewer': { color: 'yellow', thoughtLevel: 'high' },
   'code-security-analyzer': { color: 'red', thoughtLevel: 'max' },
+  'migration-reviewer': { color: 'purple', thoughtLevel: 'high' },
   'documentation-writer': { color: 'green', thoughtLevel: 'high' },
 };
 const DEFAULT_PRESENTATION = { color: 'blue', thoughtLevel: 'high' };

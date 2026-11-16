@@ -72,6 +72,17 @@ original task requirements and must be addressed in future work.
 
 ---
 
+## Mandated by Database Governance Implementation (_051, ADR-033/ADR-034)
+
+### 1. Enrollment Write-Path Data-Protection Decisions (Deferred)
+
+**Origin**: code-security-analyzer finding SEC-02 (CWE-312, informational, 2026-11-16) — `docs/judge-findings.md` Wave 21 security review.
+**Status**: Open — no write path exists yet; the `enrollments` table is provisioned but inert.
+**Requirement**: When the first flow persists `Enrollment` rows, decide deliberately and implement: retention/cleanup policy, backup/encryption posture for the PII column, and reconcile the entity documentation's E.164 shape (`+1555…`) with the HTTP-facing `09XXXXXXXXX` normalization (`enrollments.schema.ts`) so the column never receives unvalidated input. **Phone-number uniqueness is explicitly rejected by the developer (2026-11-16, business logic): multiple `Enrollment` rows with the same `phone_number` are valid — never add a unique constraint on it.**
+**Rationale**: The column is plaintext PII; nothing exploitable exists today (no read/write path, no HTTP surface), but the decisions above must not be made implicitly by the first feature that touches the table.
+
+---
+
 ## How to Use This Registry
 
 - When starting work on a deferred item, move it from this file to a new ADR proposal (or link to an existing one).

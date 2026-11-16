@@ -312,6 +312,70 @@ Do not introduce unexplained string literals for application states, domain valu
 - Use MikroORM and PostgreSQL driver capabilities wherever possible instead of introducing custom infrastructure; no circuit breakers, bulkheads, retry decorators, custom pools, or reconnection orchestrators.
 - Keep database connection resilience simple; extend it only when a concrete requirement appears.
 
+## Database Entity and Migration Governance
+
+Permanent rules for entity organization and database migrations (ADR-033).
+Applies to every agent and every future schema change.
+
+### Entity Organization
+
+- Every entity lives inside an `entities/` directory belonging to its owning
+  feature module (`src/modules/<feature>/entities/<name>.entity.ts`), one
+  entity per file. Entities never sit in module roots, global folders, or
+  unrelated shared directories.
+- Each module registers only the entities it genuinely needs with
+  `MikroOrmModule.forFeature([Entity])`; never register unrelated entities
+  for convenience, never expose every entity to every module, and never
+  introduce a global entity list (`autoLoadEntities` + the CLI globs in
+  `mikro-orm.options.ts` already enforce this structure).
+
+### BaseEntity
+
+- `BaseEntity` (`src/shared/database/base.entity.ts`, ADR-029) is a mapped
+  superclass (`@Entity({ abstract: true })`) and must never produce its own
+  database table or migration.
+- Its primary key is `BIGINT` (`bigserial`) at the database level and
+  `string` in application code (`BigIntType` string mode) — values are never
+  converted to JavaScript `number`.
+- Concrete entities inherit its fields without redeclaring them; its columns
+  and check constraint appear in every concrete entity's table through
+  migration.
+
+### Date/Time Persistence
+
+- Every newly introduced or modified date/time field uses UTC semantics end
+  to end (ADR-030): `timestamptz` columns, UTC-normalized values, no
+  reliance on the server's local timezone, no ambiguous local-time storage.
+
+### Migration Immutability
+
+- Existing migrations are immutable: never edit, delete, rename, squash, or
+  rewrite a previous migration, regardless of whether it has been executed.
+- Every subsequent schema change — and every correction to an existing
+  migration's effects — is a new forward migration with an appropriate
+  `down()` operation.
+- Never silently regenerate or replace an existing migration.
+
+### Migration Naming and Inspection
+
+- All table and column names in migrations use `snake_case`; TypeScript
+  properties stay camelCase (the default `UnderscoreNamingStrategy` handles
+  the mapping — still inspect the generated SQL instead of assuming it).
+- Generated migrations are always inspected (`up()`, `down()`, types,
+  nullability, constraints) before execution; never blindly accept CLI
+  output.
+
+### Migration Review
+
+- Every newly created or corrective migration must pass a structured review
+  by the `migration-reviewer` subagent (read-only, in `.agents/definitions/`)
+  before the task is considered complete; verdicts and findings follow
+  `.agents/schemas/migration-review-report.md`.
+- Migration issues are resolved through new forward migrations, never by
+  editing an earlier migration; corrective migrations are reviewed again.
+- A migration with unresolved blocking findings is never marked complete or
+  executed.
+
 ## Error Response Security
 
 - Never expose unnecessary internal information through API responses, especially error responses; disclose the minimum information a client needs.
@@ -505,6 +569,9 @@ Available subagents:
 - `code-security-analyzer` — read-only independent security judge; statuses
   `SECURITY_APPROVED` / `SECURITY_APPROVED_WITH_INFORMATIONAL_FINDINGS` /
   `SECURITY_CHANGES_REQUIRED`.
+- `migration-reviewer` — read-only independent database migration judge
+  (ADR-033); statuses `APPROVED` / `APPROVED_WITH_SUGGESTIONS` /
+  `CHANGES_REQUIRED`.
 - `documentation-writer` — documentation-only writes (enforced by hook where
   the platform supports it, otherwise returns ready-to-apply patches).
 
@@ -520,6 +587,10 @@ Orchestration rules for the primary agent:
   below remains in force; `code-reviewer` fulfills that role when the
   multi-agent workflow is used, and the findings tracker
   (`docs/judge-findings.md`) applies to its findings the same way.
+- **Migration review:** every newly generated or corrective database
+  migration is reviewed by `migration-reviewer` (ADR-033) before the task
+  completes, independently of the code review gate; corrections go through
+  new forward migrations only.
 - **Parallel phase:** invoke `documentation-writer` in parallel with the
   testing stage; only the primary agent runs tests and only the primary
   agent supplies verified test results to it.

@@ -257,6 +257,12 @@ Constraints:
   with `pnpm db:migration:create`, apply with `pnpm db:migration:up`,
   revert with `pnpm db:migration:down`. Never run `mikro-orm schema:update`
   and never configure `synchronize` anywhere.
+- Existing migrations are immutable (ADR-033, root "Database Entity and
+  Migration Governance"): never edit, delete, rename, squash, or rewrite one;
+  every schema change and every correction is a new forward migration with
+  `up()`/`down()`. Every generated migration is inspected before execution
+  and must pass the `migration-reviewer` subagent's structured review before
+  the task completes.
 - Outside an HTTP request context there is no request-scoped
   `EntityManager`: use `em.fork()` or the `@CreateRequestContext()`
   decorator (from `@mikro-orm/decorators/legacy`) for background work. Such
@@ -275,10 +281,16 @@ Constraints:
   `*.db-spec.ts` file boots the real AppModule against its own container
   and overrides `MIKRO_ORM_MODULE_OPTIONS` (overriding the
   `DATABASE_CONFIG` `registerAs` token does not propagate through
-  `ConfigService` — the same caveat as the Redis config token). Test-only
-  fixture entities ride in the explicit `entities` option together with
-  `BaseEntity` (the MikroORM rule for explicit entity lists) — never
-  registered in production discovery.
+  `ConfigService` — the same caveat as the Redis config token). Overrides
+  must set `autoLoadEntities: false` and list entities explicitly: with
+  `autoLoadEntities` on, `@mikro-orm/nestjs` copies `forFeature`
+  registrations into `entitiesTs`, and TS-mode discovery (Vitest) uses
+  `entitiesTs` INSTEAD of `entities` — an explicit `entities` list would be
+  silently ignored. The list must contain `BaseEntity`, every entity
+  registered with `forFeature` anywhere in the booted module tree (their
+  repository providers resolve eagerly against the explicit list), and any
+  test-only fixture entities (the MikroORM rule for explicit entity lists)
+  — never registered in production discovery.
 
 ## Directory Structure
 

@@ -26,6 +26,11 @@ all work (feature records, ADRs, commits) live in root `AGENTS.md`.
 4. Track every changed and newly created file — they define the review
    scope. Untracked files must reach reviewers through file paths and
    content, not just diffs.
+5. When the task generates a database migration, invoke `migration-reviewer`
+   on the migration (ADR-033) before considering it complete. Its verdict is
+   independent of the Phase 3 gate; required corrections are made through
+   new forward migrations, never by editing the reviewed file, and a
+   corrective migration is reviewed again.
 
 ## Phase 3 — Code Review
 

@@ -1690,3 +1690,111 @@ Docker images, Compose stacks, health checks, and the observability pipeline are
 - Official documentation: https://docs.nestjs.com/http/performance (NodeAdapter), https://docs.nestjs.com/fundamentals/platform-agnosticism
 - Verified package sources: `@nestjs/platform-node` 12.5.0 published tarball (adapter, options, body parser, router), `@nestjs/swagger` 12.1.0 `swagger-module.js` (serve-static branch), `nestjs-cls` 7.0.2 `feature-detection.utils.js` (adapter detection, mount point)
 - `DEFERRED.md` (ETag/304 conditional-request support), `prompts/_049-fastify-to-node-adapter.md`
+
+---
+
+## ADR-033: Immutable Migration Policy and Dedicated Migration Reviewer
+
+- **Status:** Accepted
+- **Date:** 2026-11-16
+
+### Context
+
+ADR-027 mandates that all PostgreSQL schema changes go exclusively through explicit SQL migrations generated with the MikroORM CLI (`pnpm db:migration:*`), never `schema:update` or `synchronize`. The generated migrations are reviewed before execution, but the review is ad hoc: no policy states whether an existing migration file may ever be modified, and no dedicated reviewer owns migration quality. Agent-driven development makes both gaps real risks — a later agent can "fix" a generated migration in place, silently diverging from what any applied environment recorded (MikroORM tracks executed migrations by name in `mikro_orm_migrations`), and nothing enforces the schema-level conventions (snake_case identifiers, no unexpected foreign keys, no data-loss operations) on every future migration.
+
+### Decision
+
+Two permanent governance rules, documented in the root `AGENTS.md`:
+
+1. **Migrations are immutable.** An existing migration file is never edited, deleted, renamed, squashed, or rewritten — regardless of whether it has been executed. Every schema change, and every correction to an earlier migration's effects, is implemented as a **new forward migration** with an appropriate `down()` operation. A migration that needs correcting is never corrected in place.
+2. **Dedicated migration reviewer.** A persistent, read-only `migration-reviewer` subagent joins the `.agents/` framework (canonical definition in `.agents/definitions/`, generated for ZCode and Claude Code by `scripts/agents/sync.mjs`, like `code-reviewer`). Every newly generated migration must pass its structured review (verdict `APPROVED` or `CHANGES REQUIRED`, with schema-change inventory, data-loss risks, naming/type violations, and required corrections) before the task is considered complete. Corrections required by the reviewer are made through new forward migrations, never by editing the reviewed file, and corrective migrations go through the same review.
+
+### Options Considered
+
+- _Status quo (ADR-027 only, ad hoc review):_ works for a hand-reviewed codebase, but gives agents no enforceable boundary and leaves history integrity to discipline.
+- _Editable migrations until first production release:_ tempting pre-1.0, but MikroORM's migration bookkeeping makes edited files silently inconsistent with any environment that already ran them, and the "we have not shipped yet" exception erodes the moment the first dev database exists.
+- _CI-only checksum guard (fail the build when a tracked migration changes):_ useful hardening later, but purely reactive — it detects the drift after the fact instead of preventing it, and does not review semantics (naming, data loss, unexpected constraints).
+
+### Rationale
+
+Forward-only history is the only mode consistent with MikroORM's name-based bookkeeping and with auditability requirements for a banking product. A dedicated reviewer (rather than extending `code-reviewer`) gives migrations their own SQL-focused checklist — inherited-column propagation, entity/table mapping, `up()`/`down()` symmetry — independent of general code quality review, and keeps the two review gates from blurring.
+
+### Security Assessment
+
+The immutability rule prevents an attack/mistake class where a migration is rewritten after review to introduce different SQL than what was audited. The reviewer explicitly screens for data-loss operations (`DROP`, destructive `ALTER`), unauthorized foreign keys, and schema changes outside the entity that motivated the migration. No secrets or credentials may appear in migration files (connection details come from the environment, never hardcoded).
+
+### Performance Implications
+
+None. Forward-only history grows linearly with real schema changes; the correction-on-top pattern adds occasional no-op migrations whose cost is negligible.
+
+### Operational Implications
+
+Environments apply migrations exclusively forward (`db:migration:up`); rollback uses the generated `down()` of the latest migration for development incidents, never file edits. Migration files and the Migrator snapshot are source-controlled artifacts and part of review scope.
+
+### Testing and Migration Implications
+
+Every migration is inspected line-by-line (`up()` and `down()`) before execution and reviewed by the `migration-reviewer` subagent. The migration is verified against the entity metadata (column names, types, nullability, constraints) and executed only against controlled development databases.
+
+### References
+
+- Root `AGENTS.md` (Database Governance section), `apps/api/AGENTS.md` (Database Rules)
+- `.agents/definitions/migration-reviewer.md`, `.agents/README.md`, `scripts/agents/sync.mjs`
+- DECISIONS.md ADR-027 (migration workflow this policy governs), ADR-023 (multi-agent framework the reviewer joins)
+- `prompts/_051-mikroorm-database-lifecycle-enrollment-migration-governance.md`
+
+---
+
+## ADR-034: Database Connection Lifecycle Logging via the pg Pool
+
+- **Status:** Accepted
+- **Date:** 2026-11-16
+
+### Context
+
+PostgreSQL is the architecture-required startup dependency (ADR-027 amendment): the initial connection is established during bootstrap with bounded retries, and its success/failure is logged by `DatabaseConnectionInitializer`. After boot, connection-level events are invisible to the application's Pino logs. Verified against the installed MikroORM 7.2.9 sources: MikroORM exposes **no connection lifecycle event API** — no disconnect or reconnect events exist. The PostgreSQL driver's `PostgreSqlConnection` does expose the underlying `pg` Pool through the public, documented `getNativeClient()` accessor, and the driver internally registers pool/client `'error'` handlers through MikroORM's own logger (`handlePoolErrors` in `PostgreSqlConnection.js`) — a crash guard whose output is silent at the default (non-debug) logging configuration. The result: a server-dropped idle connection or a pool error degrades the service with nothing in the operator's log stream beyond the health indicators flipping.
+
+### Decision
+
+Add a `DatabaseLifecycleLogger` provider to `src/shared/database/`:
+
+- Registered after `DatabaseConnectionInitializer` through a constructor dependency edge: Nest instantiates the initializer first, and because same-level bootstrap hooks run concurrently (a plain providers-array order is not sequencing), the DI edge is what makes the logger's `onApplicationBootstrap` run strictly after the bounded-retry boot connect has succeeded (plus an `orm.isConnected()` guard — the public `getNativeClient()` awaits `ensureConnection()` and must never be the caller that dials the database). _(Mechanism sentence amended 2026-11-16 during implementation — the decision itself is unchanged; see `docs/judge-findings.md` Wave 21 CR-01.)_
+- Obtains the `pg` Pool through the public documented accessor (`orm.em.getConnection().getNativeClient()`) and attaches **pool-level** node-postgres events: `'connect'` (new physical connection; info) and `'error'` (idle-client/pool error; warn). `'acquire'`/`'release'` are skipped (per-query noise) and client-level events are left to the driver's internal handlers.
+- Listeners log through the existing Pino-backed NestJS `Logger`, with no credentials, URLs, or connection parameters in messages.
+- Registration is guarded against duplicates; listeners are removed via `pool.off(...)` in `beforeApplicationShutdown` — before `@mikro-orm/nestjs` closes the ORM in `onApplicationShutdown` — idempotently, so repeated shutdowns are safe and no handler outlives its owner.
+
+No MikroORM configuration changes: the ORM keeps sole ownership of the connection lifecycle (no manual `close()`, no `reconnect()`). Known limitations, accepted: boot-time physical connections are not observed (the initializer already logs boot success explicitly), a pool `'error'` line may duplicate the driver's internal log when debug logging is enabled, and the pool instance is assumed stable for the process lifetime (true unless `orm.reconnect()` is called, which the application never does).
+
+### Options Considered
+
+- _Typed configuration hooks `onCreateConnection` / `onReserveConnection` (`Configuration.d.ts:153/159`):_ supported and typed, but the callback argument is `unknown` and `onReserveConnection` fires per acquisition (noise); neither surfaces pool-level errors.
+- _`driverOptions.onPoolCreated` (consumed by `createKyselyDialect` in the installed driver):_ fires at pool creation (before boot connections), but is an untyped `Dictionary` pass-through — rejected in favor of the fully typed public accessor.
+- _Health-indicator polling only (status quo):_ reports reachability but never the event detail (which connection failed, when the pool grew).
+- _Do nothing:_ connection degradation stays invisible in logs; rejected — the operator surface is Pino/Loki, and the health endpoint alone does not explain degradation.
+
+### Rationale
+
+The pool-event approach uses only documented, public APIs — MikroORM's `getNativeClient()` contract ("for vendor APIs MikroORM does not wrap") plus node-postgres' own EventEmitter events — with full typing inferred from the accessor, no new dependency, no configuration surface, and no second logging mechanism. It fills precisely the gap the internal handlers leave: crash protection exists; operator visibility did not.
+
+### Security Assessment
+
+No credentials or connection URLs are logged — messages carry event names and pool counters only, and pg error messages (e.g. "Connection terminated unexpectedly") do not contain secrets. No new trust boundary: listeners observe events, never touch queries or transactions. No new dependency and no configuration change, so no new supply-chain surface.
+
+### Performance Implications
+
+Two listeners on an EventEmitter; `'connect'` fires only when the pool grows a physical connection and `'error'` only on failures — both rare, log emission cost negligible. No added queries, round trips, or allocations on the request path.
+
+### Operational Implications
+
+Connection growth and degradation become visible in the Pino stream (and therefore Loki, ADR-022). Graceful shutdown ordering is explicit: detach (`beforeApplicationShutdown`) precedes ORM close (`onApplicationShutdown`), so no handler fires during pool teardown.
+
+### Testing and Migration Implications
+
+Unit tests cover: listener registration after connect, `'connect'`/`'error'` log levels, duplicate-registration prevention, and idempotent cleanup (safe repeated shutdown). No migration impact (infrastructure-only change, no schema effect).
+
+### References
+
+- `apps/api/src/shared/database/database.lifecycle.ts`, `apps/api/src/shared/database/database.module.ts`
+- Verified installed sources: `@mikro-orm/core` 7.2.9 `connections/Connection.d.ts` (`getNativeClient` contract), `@mikro-orm/postgresql` 7.2.9 `PostgreSqlConnection.js` (`handlePoolErrors`, dialect/pool creation), `@mikro-orm/core` `utils/Configuration.d.ts` (typed hook alternatives), `@mikro-orm/nestjs` 7.1.0 `mikro-orm-core.module.js` (close in `onApplicationShutdown`)
+- node-postgres Pool events documentation: https://node-postgres.com/apis/pool#events
+- DECISIONS.md ADR-027 (database integration ownership), ADR-008/009 (Pino logging)
+- `prompts/_051-mikroorm-database-lifecycle-enrollment-migration-governance.md`

@@ -284,3 +284,36 @@ requires developer approval before any ADR is created.
 - **Impact:** `apps/api/src/shared/http/etag.ts` (+spec), `conditional-request.interceptor.ts`, `problem-details.filter.ts`, `app.module.ts`, `redis-throttler.guard.ts`, `test/conditional-request.e2e-spec.ts`, `test/http-config.e2e-spec.ts`, `test/create-test-app.ts`, `DEFERRED.md` (item Done), ADR-032 (ETag bullet amended), `docs/current-state.md`.
 - **Reversibility:** Remove the interceptor registration and the filter/guard additions; no contract depends on the headers.
 - **ADR Recommendation:** No — the restoration was already directed and recorded in ADR-032/DEFERRED.md; the mechanism choices are implementation details.
+
+### 16. Bootstrap-hook sequencing for the connection lifecycle logger (database governance task _051)
+
+- **Context:** ADR-034 placed pool-event registration in a new provider whose bootstrap hook must run strictly after `DatabaseConnectionInitializer`'s bounded-retry connect. The first implementation assumed that provider-array order sequences `onApplicationBootstrap` hooks; the code reviewer proved against the installed `@nestjs/core` 12.5.0 sources that same-level providers' bootstrap hooks run concurrently (`on-app-bootstrap.hook.js`), so the logger's `isConnected()` guard would have deterministically seen the pre-connect state and skipped registration on every cold start (tracker Wave 21 CR-01).
+- **Decision:** `DatabaseLifecycleLogger` constructor-injects `DatabaseConnectionInitializer`, creating a real DI dependency edge that makes Nest instantiate the initializer first and order the bootstrap hooks sequentially; the `isConnected()` guard is retained for the `stubDatabaseConnect` test tiers, and the ADR-034 mechanism sentence was amended to describe the edge (marked amendment note; the decision itself is unchanged).
+- **Reasoning:** The DI edge is the framework-supported way to express hook ordering; it changes no behavior or ownership, keeps the lifecycle-observation concern in its own provider, and is provable by a real-boot db-spec assertion (`listenerCount` on the container pool).
+- **Alternatives:** folding listener registration into `DatabaseConnectionInitializer` (conflates connect establishment with observability and would amend ADR-034's design — rejected); re-deriving order from a custom ordering mechanism (over-engineering for a two-provider module — rejected); accepting the concurrent race and re-attaching on the first pool event (nondeterministic — rejected).
+- **Trade-offs:** the injected initializer exposes no runtime API the logger needs (documented as a sequencing edge); one constructor dependency more.
+- **Impact:** `apps/api/src/shared/database/database.lifecycle.ts`, `database.module.ts`, `test/enrollment.db-spec.ts` (real-boot registration proof), DECISIONS.md ADR-034 mechanism note, Wave 21 tracker.
+- **Reversibility:** Trivial (drop the constructor parameter).
+- **ADR Recommendation:** No — the design decision was already accepted in ADR-034; this is a mechanism correction inside its scope, tracked and marked in the ADR text.
+
+### 17. Database-tier entity overrides: `autoLoadEntities: false` with complete explicit lists (database governance task _051)
+
+- **Context:** With the first real `forFeature([Enrollment])` registration in `EnrollmentsModule`, the database tier broke: `@mikro-orm/nestjs` 7.1.0 copies `forFeature` registrations into `entitiesTs` whenever `autoLoadEntities` is on (`mikro-orm.providers.js`), and TypeScript-mode discovery (Vitest) uses `entitiesTs` INSTEAD of `entities` — so db-spec overrides with explicit fixture entity lists were silently reduced to just the autoloaded entities (`MetadataError: Metadata for entity TestArticle not found`), and with `autoLoadEntities: false` the real `forFeature` repository provider resolves eagerly and requires its entity in the explicit list.
+- **Decision:** Every `MIKRO_ORM_MODULE_OPTIONS` test override that supplies an explicit entity list sets `autoLoadEntities: false` and lists the complete set (fixture entities + `BaseEntity` + every `forFeature`-registered entity in the booted module tree); the e2e factory, which supplies no explicit list and relies on real discovery, keeps `autoLoadEntities: true`. The rule is documented in `apps/api/AGENTS.md` Database Rules.
+- **Reasoning:** Explicit lists are deterministic regardless of registration order and discovery mode, and the failure mode without the flag is silent metadata loss, not a boot error; the eager repository resolution makes partial lists fail loudly, which argues for the complete-list rule.
+- **Alternatives:** keeping `autoLoadEntities: true` in db-spec overrides and relying on `entitiesTs` (ignores the explicit list — the observed bug); suppressing `entitiesTs` in the integration package (out of scope, upstream behavior); per-file ad-hoc fixes without a documented rule (would regress with the next entity).
+- **Trade-offs:** future entities must be added to affected db-spec lists (lint/typecheck will not catch a missing one — the eager repository resolution turns it into a boot-time `MetadataError` in that tier, which is the detection mechanism).
+- **Impact:** `apps/api/test/base-entity.db-spec.ts`, `test/enrollment.db-spec.ts`, `apps/api/AGENTS.md`, prompts/_051 gotcha note.
+- **Reversibility:** Trivial per file.
+- **ADR Recommendation:** No — testing convention, not architecture; captured in the workspace agent instructions.
+
+### 18. oxfmt normalization of the generated migration (database governance task _051)
+
+- **Context:** The MikroORM CLI generated `Migration20261116181139.ts`; the formatter (`oxfmt --write .` over the workspace, which lint-staged will also run on commit) rewrapped the two `addSql(...)` call sites after generation but after the migration had already been executed against the dev database and approved by the migration reviewer, while the root AGENTS.md immutability rule forbids editing existing migrations.
+- **Decision:** Keep the formatted file rather than restoring the CLI's byte-exact output, treating whitespace-only normalization that does not alter any SQL string as outside the immutability rule's intent; the fact is recorded in the prompt record.
+- **Reasoning:** The immutability rule protects schema semantics and the review/apply correspondence — the executed DDL is byte-identical (only call-site line wrapping changed), and fighting the formatter would make lint-staged rewrite the file at commit time anyway, recreating the same file state under less review.
+- **Alternatives:** restoring the CLI formatting byte-for-byte (would be re-formatted by the commit hook — rejected); excluding migrations from oxfmt (a tooling carve-out for one file — rejected as unjustified).
+- **Trade-offs:** the file on disk differs in whitespace from what the CLI printed at generation time; the SQL is unchanged.
+- **Impact:** `apps/api/src/shared/database/migrations/Migration20261116181139.ts` only.
+- **Reversibility:** Trivial.
+- **ADR Recommendation:** No — interpretation of an existing policy for a whitespace-only case; recorded here and in the prompt record. If a future migration ever needs a semantic post-generation change, the immutability rule governs and a new forward migration is required.

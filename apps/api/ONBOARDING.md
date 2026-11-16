@@ -16,10 +16,13 @@ failures are deliberately generic and indistinguishable; both endpoints
 have rate limits aligned with the OTP window). Delivery via SMS and the
 registration steps after verification are not implemented yet. A PostgreSQL
 persistence layer (MikroORM v7, [ADR-027](../../DECISIONS.md)) is integrated
-at infrastructure level — connection, health checks, and migrations — and a
+at infrastructure level — connection, health checks, pool lifecycle logging
+([ADR-034](../../DECISIONS.md)), and migrations — and a
 shared abstract `BaseEntity` ([ADR-029](../../DECISIONS.md)) defines the
-columns every future entity inherits; no feature entities exist yet, and
-Redis remains the only store feature code currently uses. The UTC-first
+columns every future entity inherits. The first feature entity exists
+(`Enrollment`, table `enrollments`, governed by the immutable-migration
+policy [ADR-033](../../DECISIONS.md)), but Redis remains the only store
+feature code currently uses. The UTC-first
 date/time storage policy has its own guide:
 [../../docs/utc-datetime.md](../../docs/utc-datetime.md)
 ([ADR-030](../../DECISIONS.md)).
@@ -162,14 +165,16 @@ src/
                            # registration (i18n.types.ts), catalog-consistency spec
   modules/
     app/                   # AppModule wiring, health check, Problem Type docs page
-    enrollments/           # first feature module (OTP endpoint)
+    enrollments/           # first feature module (OTP endpoints) with its
+                           # entities/ folder (Enrollment — table enrollments)
   shared/
     actor-context/         # per-request actor context (ADR-029/031): nestjs-cls
                            # ClsModule + typed actor-store bridge for audit attribution
     config/                # config.ts wiring, env/ Zod schemas, registerAs factories
     database/              # global DatabaseModule (ADR-027): MikroORM v7 PostgreSQL
-                           # connection, health indicator, shared ORM options, CLI
-                           # config, migrations/, shared BaseEntity (base.entity.ts)
+                           # connection, health indicator, pool lifecycle logging
+                           # (ADR-034), shared ORM options, CLI config, migrations/,
+                           # shared BaseEntity (base.entity.ts)
     datetime/              # UTC boundary helper: calendarDayUtcRange (ADR-030)
     enums/                 # AppEnv enum
     errors/                # AppHttpException, ErrorCode, Problem Details helpers
@@ -194,7 +199,11 @@ env/                       # .env.development / .env.test / .env.redis-test /
 
 **Where new features go:** create `src/modules/<feature>/` with a module,
 controller, service, Zod schemas, and co-located `*.spec.ts` files, then
-register the module in `src/modules/app/app.module.ts`. Cross-cutting code
+register the module in `src/modules/app/app.module.ts`. Entities live in the
+feature's `entities/` folder (`<name>.entity.ts`, registered with
+`MikroOrmModule.forFeature`), and every schema change is a new, immutable,
+migration-reviewer-approved migration ([ADR-033](../../DECISIONS.md); root
+`AGENTS.md` "Database Entity and Migration Governance"). Cross-cutting code
 that a second feature would need belongs in `src/shared/`.
 
 **Routes:** every controller gets `/api/v1` automatically (global prefix +
@@ -299,7 +308,7 @@ tooling (lint, format, Turbo tasks) comes from the root; see
   (`calendarDayUtcRange` for calendar-day ranges) — see
   [../../docs/utc-datetime.md](../../docs/utc-datetime.md).
 - All ADRs ([../../DECISIONS.md](../../DECISIONS.md)) ADR-001 through
-  ADR-030 are **Accepted** and implemented — follow them; don't
+  ADR-034 are **Accepted** and implemented — follow them; don't
   reintroduce alternatives.
 
 ## 8. Useful Commands

@@ -134,14 +134,18 @@ repository (not a Turbo task), so formatting is repository-wide.
   the initial connection is established during bootstrap with bounded
   retries and startup fails when the database cannot be reached, while
   post-boot outages apply the identical health contract (degraded `/health`,
-  strict `/health/ready`). No feature entities exist yet: a shared abstract
-  `BaseEntity` ([ADR-029](../DECISIONS.md)) defines the columns every future
-  entity inherits (BIGINT primary key, `timestamptz(3)` timestamps, actor
-  audit attribution, optimistic-lock version, soft-delete surface), and a
-  UTC-first TIMESTAMPTZ storage policy ([ADR-030](../DECISIONS.md)) governs
+  strict `/health/ready`); after boot, a pool-level lifecycle logger
+  (ADR-034) logs new physical connections and pool errors through the
+  application logger. The first feature entity exists: `Enrollment` (table
+  `enrollments`, created by migration `Migration20261116181139` — applied
+  to the dev PostgreSQL) inherits the shared abstract `BaseEntity`
+  ([ADR-029](../DECISIONS.md)) columns (BIGINT primary key, `timestamptz(3)`
+  timestamps, actor audit attribution, optimistic-lock version, soft-delete
+  surface); migrations are immutable and gated by the dedicated
+  `migration-reviewer` subagent (ADR-033). A UTC-first TIMESTAMPTZ storage
+  policy ([ADR-030](../DECISIONS.md)) governs
   how timestamps are stored and converted — developer guide:
-  [utc-datetime.md](./utc-datetime.md). No tables are persisted yet; the
-  first feature entity's migration carries the base columns.
+  [utc-datetime.md](./utc-datetime.md). No feature flow persists rows yet.
 - **Applications ↔ observability:** none at runtime. The monitoring stack
   (`docker/compose.monitoring.yml`, ADR-022) is a separate Compose project with its
   own network; Grafana Alloy collects container stdout/stderr through the
@@ -152,10 +156,10 @@ repository (not a Turbo task), so formatting is repository-wide.
 
 - No shared packages: types, validation schemas, and API contracts cannot be
   shared between the API and frontends yet; they would be duplicated today.
-- The persistence layer is infrastructure-only: MikroORM v7 and PostgreSQL
-  are wired in (ADR-027) with migrations configured, but no feature entities
-  exist yet (only the shared `BaseEntity` base, ADR-029), so no data is
-  persisted.
+- The persistence layer has no feature writes yet: MikroORM v7 and
+  PostgreSQL are wired in (ADR-027) with migrations configured, and the
+  first feature entity exists (`Enrollment`, table `enrollments`, ADR-029
+  base columns), but no application flow persists rows.
 - No authentication/authorization anywhere.
 - The frontends are scaffolds: no routing beyond the index page, no state
   management, no styling system, no tests.

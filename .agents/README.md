@@ -27,12 +27,13 @@ Supported platforms: **ZCode** (via the local `monorepo-workflow` plugin) and
 | `project-explorer`       | `Read, Grep, Glob`                                              | Establish session context at session start; produces the Project Context Report                                                                          |
 | `code-reviewer`          | `Read, Grep, Glob`                                              | Independent quality judge; `APPROVED` / `APPROVED_WITH_SUGGESTIONS` / `CHANGES_REQUIRED`                                                                 |
 | `code-security-analyzer` | `Read, Grep, Glob`                                              | Independent security judge (attacker's perspective); `SECURITY_APPROVED` / `SECURITY_APPROVED_WITH_INFORMATIONAL_FINDINGS` / `SECURITY_CHANGES_REQUIRED` |
+| `migration-reviewer`     | `Read, Grep, Glob`                                              | Strict database migration judge (ADR-033); `APPROVED` / `APPROVED_WITH_SUGGESTIONS` / `CHANGES_REQUIRED`                                                 |
 | `documentation-writer`   | `Read, Grep, Glob, Write, Edit` (doc paths only, hook-enforced) | Keeps documentation synchronized with the implementation                                                                                                 |
 
 Definitions in `definitions/` carry identity, description, responsibilities,
 input expectations, output contract, restrictions, and review criteria.
-The two reviewers are mutually independent: neither ever receives the
-other's report or conclusions.
+The three reviewers are mutually independent: none ever receives another
+reviewer's report or conclusions.
 
 ## Canonical definitions and synchronization
 
@@ -107,7 +108,7 @@ a broken hook never blocks the session).
 
 Enforced by platform mechanisms, not by prompt alone:
 
-- Tool allowlists: the three read-only agents have no `Write`/`Edit`/`Bash`;
+- Tool allowlists: the four read-only agents have no `Write`/`Edit`/`Bash`;
   no subagent can execute commands or tests.
 - Documentation-only writes: the `PreToolUse` guard denies `Write`/`Edit`
   outside documentation paths **only when the hook input identifies the

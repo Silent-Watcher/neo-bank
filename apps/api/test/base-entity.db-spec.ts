@@ -8,6 +8,7 @@ import type { NestNodeApplication } from '@nestjs/platform-node';
 
 import { BaseEntity } from '#database/base.entity.js';
 import { buildRuntimeMikroOrmOptions } from '#database/mikro-orm.options.js';
+import { Enrollment } from '#modules/enrollments/entities/enrollment.entity.js';
 import { runWithActorContext } from '#src/shared/actor-context/actor-context.js';
 
 import { createTestApp } from './create-test-app.js';
@@ -44,10 +45,18 @@ function createProbeApp(): Promise<NestNodeApplication> {
       // and does not observe provider overrides on it). The fixture entity
       // rides in the explicit entities list; per the MikroORM rule for
       // explicit entities, its abstract base is listed alongside it.
+      // Enrollment must ride in too: the real EnrollmentsModule registers
+      // forFeature([Enrollment]), and with autoLoadEntities off its
+      // repository provider resolves eagerly against the explicit list.
+      // autoLoadEntities must stay off here: with it on, @mikro-orm/nestjs
+      // copies the forFeature registrations into `entitiesTs`, and TS-mode
+      // discovery (Vitest) uses `entitiesTs` INSTEAD of `entities` — the
+      // explicit fixture list would be silently ignored.
       builder.overrideProvider(MIKRO_ORM_MODULE_OPTIONS).useValue({
         driver: PostgreSqlDriver,
         ...buildRuntimeMikroOrmOptions(databaseUrl),
-        entities: [BaseEntity, TestArticle],
+        entities: [BaseEntity, TestArticle, Enrollment],
+        autoLoadEntities: false,
       });
       // Probe routes are guarded by the global throttler, which would
       // contact the placeholder Redis; the official in-memory storage keeps

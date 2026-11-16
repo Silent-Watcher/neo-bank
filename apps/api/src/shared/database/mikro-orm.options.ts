@@ -36,9 +36,6 @@ export function buildMikroOrmOptions<D extends IDatabaseDriver = IDatabaseDriver
     // tsc pipeline emits; v7 requires the provider to be configured
     // deliberately (explicit here regardless of the library default).
     metadataProvider: ReflectMetadataProvider,
-    // ADR-027 is infrastructure-only: no entities exist yet, so discovery
-    // must not warn. The first feature entity can drop this override.
-    discovery: { warnWhenNoEntities: false },
     // UTC-first storage policy (ADR-030): forces UTC serialization for
     // timezone-less datetime columns. Verified supported in 7.2.9 (and the
     // installed default) — set explicitly to document the policy; it does
@@ -64,8 +61,8 @@ export function buildMikroOrmOptions<D extends IDatabaseDriver = IDatabaseDriver
  * runtime's autoLoadEntities mechanism (only forFeature registrations).
  * Entities live in each feature's `entities/` folder — one entity per file,
  * `<name>.entity.ts` — so the CLI discovers them from the compiled output
- * and from the TypeScript sources. No entities exist yet; the first feature
- * entity needs no change here.
+ * and from the TypeScript sources. New feature entities need no change
+ * here as long as they follow that folder convention.
  */
 export const CLI_ENTITY_PATHS: { entities: string[]; entitiesTs: string[] } = {
   entities: ['dist/modules/*/entities/*.entity.js'],

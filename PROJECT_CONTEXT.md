@@ -3,7 +3,7 @@
 Primary architectural and technical context for development sessions. Read
 after the root `AGENTS.md`; use it to decide which further documentation or
 source files a task needs. Detailed documents stay independent — see the
-Documentation Index. Last verified: 2026-11-15.
+Documentation Index. Last verified: 2026-11-16.
 
 ## Repository Overview
 
@@ -23,9 +23,10 @@ commitlint, `pnpm test` on pre-push.
 
 Frontends contain no API client code; client→API communication is not
 implemented. No authentication/authorization, no shared types. The API has a
-PostgreSQL persistence layer (MikroORM v7, ADR-027) at infrastructure level
-— a shared `BaseEntity` (ADR-029) exists, but no feature entities/tables
-yet — and Redis remains the only store feature code uses.
+PostgreSQL persistence layer (MikroORM v7, ADR-027): the shared `BaseEntity`
+(ADR-029) and the first feature entity — `Enrollment` (table `enrollments`,
+first migration `Migration20261116181139` applied to dev) — exist, and
+Redis remains the only store feature code uses.
 
 ## API Architecture (`apps/api`)
 
@@ -75,9 +76,12 @@ Core contracts:
   register per feature with `MikroOrmModule.forFeature`, schema changes go
   only through migrations (`db:migration:*`). An unreachable PostgreSQL
   after a successful boot degrades `/health` (HTTP 200) and fails
-  `/health/ready` (503). Infrastructure-only: the shared `BaseEntity`
-  (ADR-029) and the UTC-first timestamp policy (ADR-030) are in place; no
-  feature entities yet.
+  `/health/ready` (503). After boot, a pool-level lifecycle logger (ADR-034)
+  logs new physical connections and pool errors. The shared `BaseEntity`
+  (ADR-029) and the UTC-first timestamp policy (ADR-030) are in place, the
+  first feature entity `Enrollment` (table `enrollments`) exists, and
+  migrations are immutable and migration-reviewer-gated (ADR-033); no
+  feature flow persists rows yet.
 - **Logging:** Pino only (ADR-008/009); JSON in production, pretty in dev,
   `LOG_PRETTY` override; never `console.log`, never log OTPs/secrets.
 - **Memory protection:** `src/shared/memory-protection/` (ADR-026) samples
@@ -114,8 +118,9 @@ Core contracts:
   dev-only pgAdmin :5050 for PostgreSQL administration (ADR-028).
   Ops: `docs/docker.md`.
 - **Database:** PostgreSQL persistence layer in the API (MikroORM v7,
-  ADR-027) — infrastructure level only (no feature entities yet; shared
-  `BaseEntity` in place, ADR-029); the dev/prod
+  ADR-027) — first feature entity `Enrollment` (table `enrollments`,
+  migration applied to dev) with the shared `BaseEntity` in place (ADR-029);
+  the dev/prod
   Compose stacks provide the server (containers pinned to UTC, ADR-030) and
   inject `DATABASE_URL` into the API service.
 - **Monitoring:** independent Compose stack (ADR-022) — Grafana :3002 (loopback),
@@ -131,8 +136,9 @@ Core contracts:
 - One user prompt = one feature = one record in `prompts/`; ADR-first
   workflow for significant decisions (`DECISIONS.md`); context-blind judge
   review after each atomic implementation unit (`docs/judge-findings.md`).
-- Multi-agent development workflow (ADR-023): four subagents (`project-explorer`,
-  `code-reviewer`, `code-security-analyzer`, `documentation-writer`) defined in
+- Multi-agent development workflow (ADR-023): five subagents (`project-explorer`,
+  `code-reviewer`, `code-security-analyzer`, `documentation-writer`,
+  `migration-reviewer`) defined in
   `.agents/definitions/` and generated for ZCode + Claude Code by
   `node scripts/agents/sync.mjs`; review gates, context-delivery, and session
   initialization rules in root `AGENTS.md` and
@@ -149,7 +155,7 @@ Core contracts:
 | `docs/api.md`                               | Human-readable API reference (nestbruno route inventory + source-verified contracts) |
 | `docs/current-state.md`                     | Feature/state snapshot (verified per feature)                                        |
 | `docs/utc-datetime.md`                      | UTC-first date/time storage policy and usage guide (ADR-030)                         |
-| `DECISIONS.md`                              | ADR-001…ADR-030, all Accepted                                                        |
+| `DECISIONS.md`                              | ADR-001…ADR-034, all Accepted                                                        |
 | `docs/docker.md`                            | Docker stacks: setup, env files, commands                                            |
 | `docs/observability/README.md`              | Monitoring stack operations                                                          |
 | `docs/observability/manual-testing.md`      | Reproducible monitoring verification scenarios                                       |

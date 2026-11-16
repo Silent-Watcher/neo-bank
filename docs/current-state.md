@@ -1,6 +1,6 @@
 # Current Development State
 
-Snapshot of what exists in the repository. Last verified: 2026-11-15.
+Snapshot of what exists in the repository. Last verified: 2026-11-16.
 Legend: **Implemented** / **Partial** / **Planned** / **Unknown**.
 
 ## Maturity
@@ -8,8 +8,9 @@ Legend: **Implemented** / **Partial** / **Planned** / **Unknown**.
 Early-stage pre-product. The backend has real infrastructure (config, logging,
 error contracts, request IDs, a Redis integration module, a PostgreSQL
 persistence layer) and one small feature; both frontends are untouched
-framework scaffolds. No auth, no deployment setup; the persistence layer is
-infrastructure-only (shared entity base in place, no feature entities yet).
+framework scaffolds. No auth, no deployment setup; the persistence layer has
+its shared entity base plus the first feature entity (`Enrollment`, table
+`enrollments`).
 
 ## Applications
 
@@ -60,13 +61,26 @@ infrastructure-only (shared entity base in place, no feature entities yet).
   unreachable server never blocks startup; a bounded (5 s) Terminus
   indicator named `postgres` reports `degraded` (HTTP 200) on `/health` and
   `down` (HTTP 503) on `/health/ready`, and the connection closes on
-  application shutdown (`enableShutdownHooks()`). Schema changes go
+  application shutdown (`enableShutdownHooks()`). After a successful boot, a
+  pool-level lifecycle logger (`DatabaseLifecycleLogger`,
+  `src/shared/database/database.lifecycle.ts`, ADR-034) logs new physical
+  connections (info) and pool errors (warn) through the Pino-backed logger
+  and removes its listeners in `beforeApplicationShutdown` — the ORM keeps
+  sole ownership of closing the connection. Schema changes go
   exclusively through explicit migrations (folder
   `src/shared/database/migrations/`, CLI config `mikro-orm.config.ts`,
   scripts `pnpm db:migration:create/up/down`) — no schema synchronization.
-  Infrastructure level only: the shared abstract `BaseEntity` (ADR-029)
-  exists; no feature entities or tables yet — the first feature entity's
-  migration carries the base columns.
+  Existing migrations are immutable (never edit, delete, rename, or squash
+  one; corrections are new forward migrations) and every migration passes
+  the `migration-reviewer` subagent's structured review before the task
+  completes (ADR-033, root "Database Entity and Migration Governance"). The
+  first feature entity exists: `Enrollment`
+  (`src/modules/enrollments/entities/enrollment.entity.ts`, table
+  `enrollments` — the shared abstract `BaseEntity` (ADR-029) base columns
+  plus `phone_number`), registered by `EnrollmentsModule` via
+  `MikroOrmModule.forFeature([Enrollment])`; the first migration
+  `Migration20261116181139` created the table and is applied to the dev
+  Compose PostgreSQL.
 - Shared entity base and actor audit context (ADR-029): abstract `BaseEntity`
   (`src/shared/database/base.entity.ts`) inlined into every future entity —
   BIGINT `bigserial` id (TypeScript `string`, propagated `id > 0` check),
@@ -80,8 +94,8 @@ infrastructure-only (shared entity base in place, no feature entities yet).
   `mapOptimisticLockError` (`src/shared/errors/optimistic-lock.mapper.ts`)
   to `ErrorCode.VersionConflict` (HTTP 409) with bilingual Problem Details.
   Covered by metadata tests (`base.entity.spec.ts`, 5 tests) and a
-  database-tier spec (`test/base-entity.db-spec.ts`, 11 tests; the db-tier
-  run is pending — see the Tests bullet).
+  database-tier spec (`test/base-entity.db-spec.ts`, 11 tests — see the
+  Tests bullet).
 - UTC-first storage policy (ADR-030): all timestamps are `timestamptz(3)`
   absolute instants (`forceUtcTimezone: true` explicit in the shared ORM
   options), the dev/prod Compose PostgreSQL services and the Testcontainers
@@ -201,29 +215,33 @@ infrastructure-only (shared entity base in place, no feature entities yet).
   revalidation for other methods, SSE skipped; proxy trust is
   optionally narrowed by `TRUST_PROXY_PROXIES` (see the env table in
   `apps/api/ONBOARDING.md`).
-- Tests: Vitest unit (43 files / 377 tests), e2e (16 files / 95 tests), Redis
+- Tests: Vitest unit (45 files / 386 tests), e2e (16 files / 96 tests), Redis
   integration (4 files / 60 tests via `pnpm test:redis`), database
-  integration (2 files / 17 tests via `pnpm test:db`, ADR-027/029/030/031). All integration
+  integration (3 files / 20 tests via `pnpm test:db`, ADR-027/029/030/031 —
+  `base-entity.db-spec.ts`, `enrollment.db-spec.ts` (the first feature
+  entity), `database.db-spec.ts`). All integration
   and e2e tests use Testcontainers (`apps/api/test/testcontainers.ts`,
   ADR-016): the Redis and database integration tiers start isolated
   containers per test file (`redis:8.2-alpine`, `postgres:17.6-alpine`), and
   the e2e tier shares one Redis and one PostgreSQL container per test run
   via the Vitest globalSetup
   (`apps/api/test/e2e.global-setup.ts`, ADR-025) — all with dynamic ports;
-  no manual Docker Compose required. All tier counts verified 2026-11-15 during the ADR-032 platform migration
-  (unit 362/362, e2e 85/85, Redis 60/60, database 17/17 on NodeAdapter).
+  no manual Docker Compose required. Unit, e2e, database, and Redis counts
+  verified 2026-11-16 (unit 386/386, e2e 96/96, database 20/20, Redis 60/60).
 
 **Partial**
 
 - `enrollments` module: the OTP is generated, stored (120s TTL), and
-  verified atomically; SMS delivery and the registration flow after
-  verification are planned.
+  verified atomically; the `Enrollment` entity and its `enrollments` table
+  exist (registered via `forFeature`), but no flow writes rows yet — SMS
+  delivery and the registration flow after verification are planned.
 
 **Planned / Not started**
 
-- Persistence features (entities/repositories — the persistence layer itself
-  is implemented at infrastructure level), authentication/authorization,
-  remaining banking features, SMS provider integration.
+- Further persistence features (more entities/repositories — the
+  persistence layer is implemented at infrastructure level and carries the
+  first feature entity), authentication/authorization, remaining banking
+  features, SMS provider integration.
 
 ### `apps/web` — Next.js 16 customer app (scaffold)
 
@@ -257,9 +275,11 @@ MikroORM v7 — the initial connection is established during bootstrap with
 bounded retries (5 attempts, capped backoff, per-attempt timeout; startup
 fails if the database cannot be reached, and permanent authentication or
 configuration errors are not retried), while post-boot outages keep
-degraded-liveness/strict-readiness health; explicit migrations only — at
-infrastructure level (the shared `BaseEntity`, ADR-029, exists; no feature
-entities yet); the dev and prod Compose stacks
+degraded-liveness/strict-readiness health, and a pool-level lifecycle
+logger records new connections and pool errors (ADR-034); explicit
+migrations only (immutable, migration-reviewer-gated — ADR-033); the first
+feature entity `Enrollment` (table `enrollments`) exists with migration
+`Migration20261116181139` applied to dev; the dev and prod Compose stacks
 inject `DATABASE_URL` into the API service and pin the PostgreSQL services
 to UTC (`TZ: UTC`, ADR-030 — the Testcontainers test image does the same).
 The development Compose stack runs
@@ -348,6 +368,6 @@ Per-app commands are listed in each `apps/<app>/ONBOARDING.md`.
 
 All ADRs live in [DECISIONS.md](../DECISIONS.md). Status as of this snapshot:
 
-- **Accepted:** ADR-001 (Turborepo), ADR-002 (Fastify — superseded by ADR-032), ADR-003 (SWC), ADR-004 (@nestjs/config + Zod), ADR-005 (URI versioning), ADR-006 (1 MiB body limit), ADR-007 (`api` prefix), ADR-008/009 (Pino / nestjs-pino), ADR-010 (UUIDv4 request IDs), ADR-011 (envelope exclusions), ADR-012 (ioredis without a wrapper), ADR-013 (Redis module architecture), ADR-014 (Swagger/OpenAPI, development-only), ADR-015 (Global HTTP rate limiting with Redis-backed @nestjs/throttler), ADR-016 (Testcontainers for integration and e2e testing), ADR-017 (OTP verification attempt lockout for enrollment security), ADR-018 (HMAC-SHA-256 digest storage for enrollment OTPs), ADR-019 (OTP verification hardening — conditional attempt counting and challenge identity), ADR-020 (development Redis service migrated to Redis Stack with bundled Redis Insight), ADR-021 (bilingual internationalization en/fa via the official @nestjs/i18n), ADR-022 (centralized logging with Grafana Alloy, Loki, and Grafana), ADR-023 (project-level multi-agent development workflow for ZCode + Claude Code), ADR-024 (MockServer for development-time resilience testing), ADR-025 (managing the e2e Redis with Testcontainers — one shared container per run), ADR-026 (memory-based load shedding and health-aware readiness), ADR-027 (Use MikroORM v7 with PostgreSQL for Persistence), ADR-028 (pgAdmin 4 as the development-only PostgreSQL web UI), ADR-029 (Shared MikroORM BaseEntity with Actor Audit Context and Native Optimistic Locking), ADR-030 (UTC-First TIMESTAMPTZ Storage Policy), ADR-031 (Use nestjs-cls for the Application Actor Context), ADR-032 (Migrate the API HTTP Platform from Fastify to the NestJS NodeAdapter — supersedes ADR-002).
+- **Accepted:** ADR-001 (Turborepo), ADR-002 (Fastify — superseded by ADR-032), ADR-003 (SWC), ADR-004 (@nestjs/config + Zod), ADR-005 (URI versioning), ADR-006 (1 MiB body limit), ADR-007 (`api` prefix), ADR-008/009 (Pino / nestjs-pino), ADR-010 (UUIDv4 request IDs), ADR-011 (envelope exclusions), ADR-012 (ioredis without a wrapper), ADR-013 (Redis module architecture), ADR-014 (Swagger/OpenAPI, development-only), ADR-015 (Global HTTP rate limiting with Redis-backed @nestjs/throttler), ADR-016 (Testcontainers for integration and e2e testing), ADR-017 (OTP verification attempt lockout for enrollment security), ADR-018 (HMAC-SHA-256 digest storage for enrollment OTPs), ADR-019 (OTP verification hardening — conditional attempt counting and challenge identity), ADR-020 (development Redis service migrated to Redis Stack with bundled Redis Insight), ADR-021 (bilingual internationalization en/fa via the official @nestjs/i18n), ADR-022 (centralized logging with Grafana Alloy, Loki, and Grafana), ADR-023 (project-level multi-agent development workflow for ZCode + Claude Code), ADR-024 (MockServer for development-time resilience testing), ADR-025 (managing the e2e Redis with Testcontainers — one shared container per run), ADR-026 (memory-based load shedding and health-aware readiness), ADR-027 (Use MikroORM v7 with PostgreSQL for Persistence), ADR-028 (pgAdmin 4 as the development-only PostgreSQL web UI), ADR-029 (Shared MikroORM BaseEntity with Actor Audit Context and Native Optimistic Locking), ADR-030 (UTC-First TIMESTAMPTZ Storage Policy), ADR-031 (Use nestjs-cls for the Application Actor Context), ADR-032 (Migrate the API HTTP Platform from Fastify to the NestJS NodeAdapter — supersedes ADR-002), ADR-033 (Immutable Migration Policy and Dedicated Migration Reviewer), ADR-034 (Database Connection Lifecycle Logging via the pg Pool).
 
 All architectural decisions are accepted and implemented. Do not build on rejected alternatives (e.g. do not introduce header versioning or a second logger).

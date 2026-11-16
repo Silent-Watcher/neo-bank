@@ -1967,3 +1967,118 @@ All Wave 20 WARNING findings verified FIXED; CR-08 residual accepted. One
 comment-only remnant (CR-07's scope note in `conditional-request.interceptor.ts`
 still claimed the request-ID rejection carried no ETag) corrected in the same
 pass with the reviewer's wording.
+
+---
+
+## Wave 21 — _051 database lifecycle + Enrollment entity (iteration 1, 2026-11-16) — CHANGES_REQUIRED
+
+Code-reviewer report on the `DatabaseLifecycleLogger` provider, the `Enrollment`
+entity/module registration, the ORM-options change, and the database-tier test
+updates. Migration SQL reviewed separately by `migration-reviewer` (APPROVED,
+zero findings).
+
+### CR-01 — Lifecycle logger's bootstrap hook races the boot connect and skips registration on every cold start
+
+- **Status:** Resolved (2026-11-16, verified FIXED in iterations 2–3)
+- **Severity:** BLOCKER (iteration 1) → verified valid
+- **Category:** Correctness (NestJS lifecycle ordering)
+- **Locations:** `src/shared/database/database.lifecycle.ts`, `src/shared/database/database.module.ts`
+- **Technical explanation:** both providers sit at the same DI hierarchy level;
+  Nest 12 runs same-level `onApplicationBootstrap` hooks concurrently
+  (`on-app-bootstrap.hook.js` uses `Promise.all`). The logger's synchronous
+  prefix reaches `orm.isConnected()` before the initializer's `connect()` flips
+  the connection's `connected` flag, so the guard deterministically logs the
+  warn and returns — the pool listeners would never register in production.
+  The "registration order defines bootstrap hook order" comments asserted an
+  ordering guarantee that does not exist for same-level providers. Confirmed
+  against the installed sources (`@nestjs/core` 12.5.0, `@mikro-orm/sql`
+  `checkConnection`).
+- **Agreed resolution:** constructor-inject `DatabaseConnectionInitializer`
+  into `DatabaseLifecycleLogger` — a real DI dependency edge, which lowers the
+  logger's hierarchy level ordering so Nest runs its bootstrap hook strictly
+  after the initializer's, without changing ADR-034's design (same provider,
+  same behavior, same cleanup). The `isConnected()` guard stays (legitimately
+  `false` for the `stubDatabaseConnect` test tiers). Comments corrected to
+  describe the dependency-edge mechanism; ADR-034's mechanism sentence
+  amended to match (decision itself unchanged).
+
+### CR-02 — Two different `#` aliases used for the same BaseEntity module within one feature
+
+- **Status:** Resolved (2026-11-16, verified FIXED in iterations 2–3)
+- **Severity:** Low (SUGGESTION)
+- **Category:** Consistency (import aliases)
+- **Locations:** `src/modules/enrollments/entities/enrollment.entity.ts`, `enrollment.entity.spec.ts`
+- **Agreed resolution:** switch both to the dedicated `#database/base.entity.js`
+  alias, matching every other consumer.
+
+### CR-03 — Lifecycle spec reaches into a private field via `as unknown as` instead of the repo's logger-spy pattern
+
+- **Status:** Resolved (2026-11-16, verified FIXED in iterations 2–3)
+- **Severity:** Low (SUGGESTION)
+- **Category:** Test fragility
+- **Locations:** `src/shared/database/database.lifecycle.spec.ts`
+- **Agreed resolution:** spy on `Logger.prototype` (`log`/`warn`) exactly like
+  `redis.service.spec.ts` and `memory-protection.service.spec.ts`; drop the
+  private-field cast and the `loggerOf` helper.
+
+### CR-04 — Real-boot listener test cannot detect a regression of the CR-01 fix (iteration 2)
+
+- **Status:** Resolved (2026-11-16, verified FIXED in iteration 3)
+- **Severity:** WARNING
+- **Category:** Test discriminating power
+- **Locations:** `test/enrollment.db-spec.ts` (ADR-034 boot test)
+- **Technical explanation:** the driver's `handlePoolErrors` pre-registers
+  pool-level `'connect'` and `'error'` listeners on every pool
+  (`PostgreSqlConnection.js`), so `listenerCount >= 1` holds even when the
+  lifecycle logger never registers; the manual `onApplicationBootstrap()`
+  call in the test would also mask a boot-time registration failure.
+- **Agreed resolution:** rework the test to identify the logger's own
+  listeners: record baseline counts after boot, run
+  `beforeApplicationShutdown()` and assert both counts drop by exactly one,
+  then `onApplicationBootstrap()` and assert both counts return to baseline
+  — proving boot-time registration, cleanup, and re-registration in one
+  discriminating pass.
+
+## Wave 21 final (iteration 3, 2026-11-16) — APPROVED
+
+All four findings verified FIXED. CR-01's DI-edge sequencing confirmed
+deterministic against the installed Nest core sources; CR-04's reworked
+baseline/detach/reattach test fails deterministically on the CR-01 regression
+signature (zero listener drop) and proves registration, cleanup identity, and
+re-registration in one pass. The ADR-034 amendment in DECISIONS.md was not
+judged by the reviewer (out of its scope per dispatch).
+
+## Wave 21 security review (2026-11-16) — SECURITY_APPROVED_WITH_INFORMATIONAL_FINDINGS
+
+Independent code-security-analyzer pass over the same change; no confirmed
+vulnerabilities. Two informational findings recorded, neither requires a code
+change for approval.
+
+### SEC-01 — PostgreSQL pool error objects logged in full to server-side logs
+
+- **Status:** Won't Fix (accepted residual, informational)
+- **Severity:** INFORMATIONAL — CWE-532
+- **Locations:** `src/shared/database/database.lifecycle.ts` (pool `'error'` listener)
+- **Technical explanation:** pg error objects carry messages, SQLSTATE, stacks,
+  and occasionally internal topology — never the connection URL or password.
+  Destination is the operator-controlled Pino pipeline (the sanctioned channel
+  for raw diagnostics, same pattern as `database.health.ts`).
+- **Agreed resolution:** no code change; hardening note recorded — if log
+  aggregation ever widens its audience, trim pg errors to `message`/`code`
+  before serialization.
+
+### SEC-02 — Plaintext PII column created ahead of any write path
+
+- **Status:** Deferred (informational)
+- **Severity:** INFORMATIONAL — CWE-312
+- **Locations:** `Migration20261116181139.ts`, `enrollment.entity.ts`
+- **Technical explanation:** `phone_number` is provisioned plaintext with no
+  retention decision made; today the entity has no read/write path and no
+  HTTP surface, so nothing exploitable exists. Uniqueness is explicitly
+  rejected by the developer (2026-11-16, business logic): multiple
+  `Enrollment` rows with the same `phone_number` are valid.
+- **Agreed resolution:** deferred to the first write-path task (tracked in
+  `DEFERRED.md`): decide retention, backup posture, and reconcile
+  the E.164 documentation shape with the HTTP-facing `09XXXXXXXXX`
+  normalization before persisting unvalidated input. No unique constraint on
+  `phone_number`, ever.
