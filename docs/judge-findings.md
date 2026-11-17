@@ -2674,3 +2674,149 @@ ahead of the pipeline). Four informational findings:
   root not-found fallback keep their never-revalidating tags (server-assigned
   IDs only). No test pinned the removed header; ADR-038 Decision 1,
   `docs/current-state.md`, and the prompt record updated to match.
+
+## Wave 26 — Phase 1 Swagger transform & 304-safe envelope (_055, code-reviewer, 2026-11-17) — APPROVED_WITH_SUGGESTIONS
+
+Context-blind review of the centralized OpenAPI transform, its wiring, the
+envelope's map-time bodyless-status bypass, the serialization-free 304 return
+path, and the extended specs. The reviewer verified mutation safety,
+idempotency, $ref resolution, prototype-pollution safety of the spreads, the
+undefined-return path through rxjs and the router, byte-identical behavior for
+normal 200 responses, and the SUCCESS_STATUSES_MAX_EXCLUSIVE enum rationale.
+Three suggestions, all applied in-iteration:
+
+### CR-01 — The transform documented non-JSON-only GETs as revalidatable
+
+- **Status:** Resolved (2026-11-17)
+- **Severity:** Suggestion | **Category:** Correctness (documented contract vs. runtime)
+- **Location:** `apps/api/src/shared/swagger/conditional-get.openapi.ts`.
+- **Explanation:** the transform stamped `If-None-Match`/`304`/`ETag` on every
+  GET, including `/problems/application-error` (text/html success content),
+  which the runtime never tags (non-JSON representation bypass) — a factually
+  wrong contract on a development-only artifact.
+- **Agreed resolution:** the transform skips GET operations whose documented
+  `200` carries solely non-JSON media types (same `application/json`/`+json`
+  rule as the runtime; absent or `$ref` success responses stay documented);
+  unit cases for the skip and mixed-content shape, and an e2e assertion that
+  the Problem Type page keeps only its global Accept-Language parameter.
+
+### CR-02 — Meaningless `required: false` emitted on response-header objects
+
+- **Status:** Resolved (2026-11-17)
+- **Severity:** Suggestion | **Category:** Syntax/Code Quality (OAS 3.1 compatibility)
+- **Location:** `conditional-get.openapi.ts` `etagHeaderSchema`.
+- **Agreed resolution:** `required` removed from the response-header constant
+  (headers are always optional; the field is not available to OAS 3.1 Header
+  Objects). The request-side parameter keeps its own `required: false`.
+
+### CR-03 — Manual-ETag-wins merge order unpinned by tests
+
+- **Status:** Resolved (2026-11-17)
+- **Severity:** Suggestion | **Category:** Edge Case / test completeness
+- **Location:** `conditional-get.openapi.spec.ts` (200-header merge).
+- **Agreed resolution:** a spec case pins that a manually documented `ETag`
+  header on the `200` response survives the transform verbatim.
+
+## Wave 26 security review (_055 Phase 1, code-security-analyzer, 2026-11-17) — SECURITY_APPROVED_WITH_INFORMATIONAL_FINDINGS
+
+Security review of the Phase 1 unit. The changed surface produced **no
+Critical/High/Medium/Low findings**: header injection impossible (hex tags,
+allowlist-pinned locale, compile-time constants in the document), the
+undefined-return 304 path verified leak- and desync-free (fresh payload hash,
+envelope double-guard, bodyless adapter end), cross-user/cross-locale 304
+misuse unreachable (per-request hash, 2xx gate, guards upstream), revalidation
+never bypasses guards/handler execution, timing non-exploitable, interceptor
+order fails safe, and the non-JSON documentation skip mirrors the runtime
+(e2e-pinned). Four informational findings:
+
+### SEC-01 — `APP_ENV` defaults to `development`; the Swagger gate fails open under operator misconfiguration
+
+- **Status:** Deferred (2026-11-17) — `DEFERRED.md` (fail-closed environment default)
+- **Severity:** Informational | **CWE-1188** | pre-existing, not attacker-reachable
+- **Location:** `apps/api/src/shared/config/env/schema/server.env.ts:33` + `main.ts:108-111`.
+- **Explanation:** no request input reaches the gate; the only exposure path is
+  an operator booting without `APP_ENV` (the schema default), registering the
+  dev-only Swagger routes in an intended-production deployment (API-surface
+  disclosure; the document contains no secrets).
+- **Agreed resolution:** deferred — changing the `APP_ENV` default to
+  fail-closed is an environment-validation behavior decision outside this
+  feature's scope, requiring developer direction.
+
+### SEC-02 — Prototype pollution via document spreads: verified non-exploitable
+
+- **Status:** Accepted residual — no action (2026-11-17)
+- **Severity:** Informational | **CWE-1321** (verified non-exploitable)
+- **Explanation:** every written key is a compile-time constant; spread sources
+  come from application metadata, never request input; object spread uses
+  `CreateDataProperty` (no `__proto__` setter); the document is regenerated
+  fresh per dev-only setup call.
+- **Agreed resolution:** no change — the code is safe as written.
+
+### SEC-03 — Unbounded `$ref` resolution recursion (theoretical, dev-only)
+
+- **Status:** Accepted documented residual (2026-11-17)
+- **Severity:** Informational | **CWE-674** (theoretical; no remote trigger)
+- **Location:** `conditional-get.openapi.ts` `isHeaderNamed`.
+- **Explanation:** a cyclic parameter `$ref` in `components.parameters` — only
+  reachable through developer-authored application metadata, never request
+  input — would overflow the stack at dev startup. Both reviews assessed it
+  non-actionable.
+- **Agreed resolution:** accepted — the documented contract is one-level
+  resolution; adding a depth bound for a non-exploitable, dev-only,
+  developer-authored path would be defensive noise (YAGNI).
+
+### SEC-04 — Cache-Control policy for revalidatable responses (forward-looking)
+
+- **Status:** Deferred (2026-11-17) — merged into the existing Wave 25 SEC-01
+  `DEFERRED.md` item (cache-control policy), extended with this review's
+  guidance: a 304 should echo the 200's cache directives (RFC 9110 §15.4.5),
+  and the policy must be fixed when the first authenticated, per-user GET
+  endpoint lands.
+- **Severity:** Informational | CWE-1188 / RFC 9110 §13 cache-semantics class.
+
+## Wave 26 resolution (2026-11-18, developer-directed hardening before the Phase 1 commit)
+
+The developer directed that all four Wave 26 informational findings be fixed
+before the Phase 1 commit rather than deferred. All four are now Resolved:
+
+### SEC-01 — `APP_ENV` default removed (fail-closed) — **Resolved**
+
+`APP_ENV` is now required (`z.enum(AppEnv)`, no default — `server.env.ts`), so an
+omitted value fails startup validation instead of silently booting a
+development-gated process with Swagger exposed. The ONBOARDING env table already
+documented `APP_ENV` as required (the default contradicted the documented intent);
+`.env.example` now states the requiredness explicitly; every environment (dev /
+test variants / production, both Compose stacks via the app env files) already
+declared it, so no deployment input was overwritten. Validation specs updated to
+the stricter contract (requiredness case + fixtures); unit tier green.
+
+### SEC-02 — Prototype-pollution invariant pinned — **Resolved (documentation hardening)**
+
+The transform's header comment now pins the invariant the review verified: the
+document is generated from application controller metadata and never derived from
+request input, and every written key is a compile-time constant. (The code itself
+was verified non-exploitable; no runtime change was needed.)
+
+### SEC-03 — `$ref` resolution bounded to one hop — **Resolved**
+
+`isHeaderNamed` is now an iterative single-hop resolution (a parameter may
+reference a concrete `components.parameters` header; chained `$ref`s are not
+followed), matching the documented ADR-038 §6 contract and eliminating the
+unbounded-recursion class entirely. Spec cases added: a chained `$ref` (adds the
+generated parameter exactly once, no follow-through) and a cyclic self-referencing
+component (terminates immediately).
+
+### SEC-04 — Explicit cache directives implemented — **Resolved**
+
+Tagged (revalidatable) responses now carry `Cache-Control: private, no-cache`:
+shared intermediaries never store, private caches must revalidate before every
+reuse — the semantics the entity tag exists for. Set by the conditional
+interceptor alongside the ETag, never overwriting an explicit declaration (the
+health routes' `no-store` wins), and echoed by the 304 per RFC 9110 §15.4.5.
+Unit cases (set + no-overwrite) and e2e assertions (200 and 304 carry the
+directives) added; ADR-038 Decision 5, `docs/api.md`, `docs/current-state.md`,
+and `DEFERRED.md` (item 2 → Done) updated. The forward-looking residual stands:
+the first authenticated, per-user GET endpoint defines its stricter per-endpoint
+policy.
+
+`DEFERRED.md` items 2 and 3 of the _055 section are marked Done.

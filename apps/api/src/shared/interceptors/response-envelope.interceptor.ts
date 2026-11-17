@@ -33,15 +33,17 @@ export class ResponseEnvelopeInterceptor implements NestInterceptor {
       map((data: unknown) => {
         // A handler may finish or start the response itself (raw response
         // usage, streaming), set a non-JSON content type mid-execution (the
-        // eager skip above ran before the handler and could not see it), or
-        // produce a payload with no JSON representation; none of these get
-        // wrapped.
+        // eager skip above ran before the handler and could not see it),
+        // decide on a bodyless 304/204 mid-pipeline (the conditional-request
+        // interceptor runs inside this one), or produce a payload with no
+        // JSON representation; none of these get wrapped.
         if (
           reply.writableEnded ||
           reply.headersSent ||
           data === undefined ||
           data instanceof StreamableFile ||
           ArrayBuffer.isView(data) ||
+          NO_BODY_STATUSES.has(reply.statusCode) ||
           isNonJsonRepresentation(context.getHandler(), reply)
         ) {
           return data;

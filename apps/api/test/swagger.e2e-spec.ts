@@ -96,6 +96,51 @@ describe('Swagger (e2e)', () => {
     await app.close();
   });
 
+  it('documents conditional-GET support on GET operations only', async () => {
+    // Arrange — the centralized transform documents every GET operation as
+    // revalidatable (Phase 1: revalidation is still global; Phase 2 narrows
+    // this to decorator-marked routes, ADR-038 §6).
+    const app = await createE2eTestApp((devApp) => setupSwagger(devApp));
+
+    // Act
+    const json = await request(app.getHttpServer()).get(`/${SWAGGER_DOCS_PATH}/json`);
+    const health = json.body.paths['/health'].get;
+    const root = json.body.paths['/api/v1'].get;
+    const challenge = json.body.paths['/api/v1/enrollments/challenge'].post;
+
+    // Assert — GETs carry the optional If-None-Match header parameter and a
+    // bodyless 304 response with the ETag header; POSTs are untouched.
+    for (const operation of [health, root]) {
+      const ifNoneMatch = operation.parameters.find(
+        (parameter: { in?: string; name?: string }) =>
+          parameter.in === 'header' && parameter.name?.toLowerCase() === 'if-none-match',
+      );
+      expect(ifNoneMatch).toMatchObject({ required: false, schema: { type: 'string' } });
+      expect(operation.responses['304']).toBeDefined();
+      expect(operation.responses['304'].content).toBeUndefined();
+      expect(operation.responses['304'].headers.ETag).toBeDefined();
+    }
+    // POSTs keep their global Accept-Language parameter but gain no
+    // If-None-Match header and no 304 response.
+    const challengeHeaderNames = (challenge.parameters ?? []).map((parameter: { name?: string }) =>
+      parameter.name?.toLowerCase(),
+    );
+    expect(challengeHeaderNames).toContain('accept-language');
+    expect(challengeHeaderNames).not.toContain('if-none-match');
+    expect(challenge.responses['304']).toBeUndefined();
+    // The Problem Type page serves text/html — the runtime never tags it, so
+    // it must not be documented as revalidatable (Wave 26 CR-01); it keeps
+    // only its global Accept-Language parameter.
+    const problemType = json.body.paths['/problems/application-error'].get;
+    const problemTypeHeaderNames = (problemType.parameters ?? []).map(
+      (parameter: { name?: string }) => parameter.name?.toLowerCase(),
+    );
+    expect(problemTypeHeaderNames).toContain('accept-language');
+    expect(problemTypeHeaderNames).not.toContain('if-none-match');
+    expect(problemType.responses['304']).toBeUndefined();
+    await app.close();
+  });
+
   it('documents the health probe with degraded-mode semantics', async () => {
     // Arrange
     const app = await createE2eTestApp((devApp) => setupSwagger(devApp));

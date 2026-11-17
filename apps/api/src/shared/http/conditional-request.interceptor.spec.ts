@@ -18,6 +18,7 @@ interface Fixture {
   locale?: string;
   sseHandler?: boolean;
   contentType?: string;
+  cacheControl?: string;
 }
 
 function createInterceptorContext(
@@ -42,7 +43,11 @@ function createInterceptorContext(
     writableEnded: fixture.writableEnded ?? false,
     headersSent: fixture.headersSent ?? false,
   };
-  reply.getHeader = vi.fn<() => string | undefined>(() => fixture.contentType);
+  reply.getHeader = vi.fn<(name: string) => string | undefined>((name: string) => {
+    if (name.toLowerCase() === 'content-type') return fixture.contentType;
+    if (name.toLowerCase() === 'cache-control') return fixture.cacheControl;
+    return undefined;
+  });
   reply.header = vi.fn<(name: string, value: string) => unknown>(function header(
     name: string,
     value: string,
@@ -95,6 +100,29 @@ describe('ConditionalRequestInterceptor', () => {
     );
   });
 
+  it('sets the revalidation cache directives on tagged responses', async () => {
+    const { context, next, reply } = createInterceptorContext({}, { example: true });
+
+    await interceptOnce(context, next, 'en');
+
+    expect(reply.header).toHaveBeenCalledWith('Cache-Control', 'private, no-cache');
+  });
+
+  it('never overwrites an explicitly declared Cache-Control header', async () => {
+    // A route that controls its own caching policy (e.g. the health routes'
+    // no-store) wins over the interceptor's revalidation directives
+    // (Wave 25/26 SEC-04).
+    const { context, next, reply } = createInterceptorContext(
+      { cacheControl: 'no-store' },
+      { example: true },
+    );
+
+    await interceptOnce(context, next, 'en');
+
+    expect(reply.header).toHaveBeenCalledWith('ETag', expect.any(String));
+    expect(reply.header).not.toHaveBeenCalledWith('Cache-Control', expect.anything());
+  });
+
   it('emits distinct validators for distinct locales', async () => {
     const en = createInterceptorContext({}, { example: true });
     const fa = createInterceptorContext({}, { example: true });
@@ -112,16 +140,19 @@ describe('ConditionalRequestInterceptor', () => {
     );
   });
 
-  it('answers a matching If-None-Match on a successful GET with 304', async () => {
+  it('answers a matching If-None-Match on a successful GET with a serialization-free 304', async () => {
     const etag = weakEtagFor(JSON.stringify({ example: true }), 'en');
     const { context, next, reply } = createInterceptorContext(
       { ifNoneMatch: etag },
       { example: true },
     );
 
-    await interceptOnce(context, next, 'en');
+    const result = await interceptOnce(context, next, 'en');
 
     expect(reply.status).toHaveBeenCalledWith(304);
+    // ADR-038 §5: nothing is serialized after the 304 decision — the payload
+    // is dropped in the map, so the pipeline cannot emit a response body.
+    expect(result).toBeUndefined();
   });
 
   it('keeps the full response when the candidate does not match', async () => {
@@ -130,9 +161,10 @@ describe('ConditionalRequestInterceptor', () => {
       { example: true },
     );
 
-    await interceptOnce(context, next);
+    const result = await interceptOnce(context, next);
 
     expect(reply.status).not.toHaveBeenCalled();
+    expect(result).toEqual({ example: true });
   });
 
   it('never revalidates an error-status response to 304', async () => {
@@ -143,10 +175,11 @@ describe('ConditionalRequestInterceptor', () => {
       payload,
     );
 
-    await interceptOnce(context, next, 'en');
+    const result = await interceptOnce(context, next, 'en');
 
     expect(reply.header).toHaveBeenCalledWith('ETag', etag);
     expect(reply.status).not.toHaveBeenCalled();
+    expect(result).toEqual(payload);
   });
 
   it('never revalidates methods other than GET and HEAD', async () => {
@@ -168,9 +201,10 @@ describe('ConditionalRequestInterceptor', () => {
       { example: true },
     );
 
-    await interceptOnce(context, next, 'en');
+    const result = await interceptOnce(context, next, 'en');
 
     expect(reply.status).toHaveBeenCalledWith(304);
+    expect(result).toBeUndefined();
   });
 
   it('tags primitive payloads too', async () => {

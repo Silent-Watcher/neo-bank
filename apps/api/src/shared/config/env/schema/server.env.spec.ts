@@ -8,27 +8,30 @@ import {
 } from './server.env.js';
 
 const validBaseEnv = {
+  // APP_ENV is required (Wave 26 SEC-01): every case that does not test its
+  // absence pins a valid value here.
+  APP_ENV: 'test',
   HOST: 'localhost',
   PORT: '3001',
 };
 
 describe('serverEnvSchema', () => {
   describe('APP_ENV', () => {
-    it('defaults to AppEnv.Development when the variable is missing', () => {
-      // Arrange
-      const input = { ...validBaseEnv };
+    it('is required — a missing variable fails validation (fail-closed, Wave 26 SEC-01)', () => {
+      // Arrange — omit APP_ENV while keeping every other variable valid.
+      const input = { HOST: validBaseEnv.HOST, PORT: validBaseEnv.PORT };
 
       // Act
-      const result = serverEnvSchema.parse(input);
+      const result = serverEnvSchema.safeParse(input);
 
       // Assert
-      expect(result.APP_ENV).toBe(AppEnv.Development);
+      expect(result.success).toBe(false);
     });
 
     it('accepts every value defined in the AppEnv enum', () => {
       // Arrange & Act & Assert
       for (const appEnv of Object.values(AppEnv)) {
-        const result = serverEnvSchema.parse({ APP_ENV: appEnv, ...validBaseEnv });
+        const result = serverEnvSchema.parse({ ...validBaseEnv, APP_ENV: appEnv });
 
         expect(result.APP_ENV).toBe(appEnv);
       }
@@ -36,7 +39,7 @@ describe('serverEnvSchema', () => {
 
     it('rejects values that are not part of the AppEnv enum', () => {
       // Arrange
-      const input = { APP_ENV: 'staging', ...validBaseEnv };
+      const input = { ...validBaseEnv, APP_ENV: 'staging' };
 
       // Act
       const result = serverEnvSchema.safeParse(input);

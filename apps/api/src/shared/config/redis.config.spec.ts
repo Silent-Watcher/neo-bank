@@ -13,6 +13,7 @@ describe('redisConfig factory', () => {
   }
 
   function stubRedisEnv(overrides: Record<string, string> = {}) {
+    vi.stubEnv('APP_ENV', 'test');
     vi.stubEnv('HOST', '0.0.0.0');
     vi.stubEnv('PORT', '3000');
     vi.stubEnv('DATABASE_URL', 'postgres://localhost:5432/neo_bank');

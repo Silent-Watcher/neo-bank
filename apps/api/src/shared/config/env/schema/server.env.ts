@@ -30,7 +30,11 @@ export function isCorsOriginRequiredInProduction(env: {
 }
 
 export const serverEnvSchema = z.object({
-  APP_ENV: z.enum(AppEnv).default(AppEnv.Development),
+  // Required (no default, fail-closed): an omitted APP_ENV must fail startup
+  // rather than silently booting a development-gated process in an intended
+  // production deployment — the development gate is what keeps the Swagger
+  // surface and pino-pretty off production (Wave 26 SEC-01).
+  APP_ENV: z.enum(AppEnv),
   HOST: z
     .union([z.ipv4(), z.ipv6(), z.hostname()])
     .describe('Server bind address: a hostname, IPv4, or IPv6 address.'),

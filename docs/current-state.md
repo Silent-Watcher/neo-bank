@@ -256,8 +256,11 @@ its shared entity base plus the first feature entity (`Enrollment`, table
   routes controlling their own non-JSON representation (declared or
   reply-set non-JSON content type, shared `json-content-type.ts` helpers
   with the envelope) are skipped; primitive payloads (strings, numbers) are
-  tagged like records; proxy trust is optionally narrowed by
-  `TRUST_PROXY_PROXIES` (see the env table in `apps/api/ONBOARDING.md`).
+  tagged like records; every tagged response carries an explicit
+  `Cache-Control: private, no-cache` (never overwriting an explicit
+  declaration, echoed by the 304 per RFC 9110 §15.4.5 — Wave 26 SEC-04);
+  proxy trust is optionally narrowed by `TRUST_PROXY_PROXIES` (see the env
+  table in `apps/api/ONBOARDING.md`).
 - Tests: Vitest unit (49 files / 438 tests), e2e (16 files / 100 tests), Redis
   integration (5 files / 65 tests via `pnpm test:redis`), database
   integration (4 files / 28 tests via `pnpm test:db`,
@@ -298,10 +301,16 @@ its shared entity base plus the first feature entity (`Enrollment`, table
   persistence layer is implemented at infrastructure level and carries the
   first feature entity), authentication/authorization, remaining banking
   features, SMS provider integration.
-- The remaining ADR-038 phases: centralized Swagger `If-None-Match`/`304`
-  documentation, strict RFC 9110 `If-None-Match` parsing, the 304-aware
-  envelope bypass, and opt-in `@ConditionalGet()` revalidation (undecorated
-  GET routes stop revalidating; HEAD revalidation is removed).
+- The remaining ADR-038 phases (Phase 2): the strict RFC 9110
+  `If-None-Match` parser (replacing the fail-safe naive one) and opt-in
+  `@ConditionalGet()` revalidation — undecorated GET routes stop
+  revalidating, HEAD revalidation is removed, and the Swagger transform
+  narrows to decorator-marked routes. Phase 1 is done: the centralized
+  OpenAPI transform documents `If-None-Match` and the bodyless `304`
+  response per JSON-success GET operation (idempotent, custom 304s
+  preserved, one-level `$ref` resolution, development-only), the envelope
+  bypasses bodyless statuses at map time, and a decided 304 serializes
+  nothing.
 
 ### `apps/web` — Next.js 16 customer app (scaffold)
 

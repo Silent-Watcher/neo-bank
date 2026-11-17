@@ -141,3 +141,35 @@ Per the "Subagent Findings: Persistence, Derived Rules, and Test Integrity" rule
 **Status**: Open — cache-control policy decision, taken when authenticated, user-specific routes appear.
 **Requirement**: decide which `Cache-Control` directives response classes carry now that revalidation (ETag/304) makes private-cache reuse of stored envelope bodies possible. Only the health routes set `Cache-Control: no-store` today; `Vary: Accept-Language` is already emitted by the i18n middleware. Candidate remediation when the decision matures: `Cache-Control: no-cache, private` (or `no-store`) on user-specific responses so revalidation semantics are explicit and shared intermediaries never store.
 **Rationale**: cross-session reuse requires byte-identical application payloads and can only serve the prior envelope's metadata (random UUID + timestamp) — negligible today with no authentication; the policy should be fixed deliberately before user-specific data exists, not retrofitted.
+
+### 3. Fail-closed `APP_ENV` default (SEC-INFO, Wave 26)
+
+**Origin**: code-security-analyzer SEC-01 (informational, CWE-1188, 2026-11-17) — Wave 26 security review of the ADR-038 Phase 1 unit; pre-existing condition, not attacker-reachable.
+**Status**: Open — environment-validation behavior decision awaiting developer direction.
+**Requirement**: decide whether `APP_ENV` should stop defaulting to `development` (currently `z.enum(AppEnv).default(AppEnv.Development)` in `server.env.ts`): either default to `production` (fail-closed) or add a `superRefine` rule rejecting an unset `APP_ENV` outside development. Today an operator who boots without `APP_ENV` gets a development-gated process — including the publicly served Swagger routes (`/docs`, `/docs/json`, `/docs/yaml`) in an intended-production deployment.
+**Rationale**: API-surface disclosure only (the document contains no secrets — e2e-pinned), and no request input reaches the gate; but the development default makes the production posture depend on operator vigilance. Changing a default is an environment-stability decision under the environment-variable rules.
+
+---
+
+**Wave 26 SEC-04 extension (2026-11-17) to "Cache-Control directives for revalidatable responses" (item 2 above)**: the Wave 26 security review confirmed `Vary: Accept-Language` and locale-composed validators defend variant identity today, and added that a 304 should echo the 200's cache directives (RFC 9110 §15.4.5). The policy decision (which directives per response class) is to be fixed when the first authenticated, per-user GET endpoint lands.
+
+### Status update (2026-11-18, developer-directed hardening before the Phase 1 commit)
+
+- **Item 2 (Cache-Control directives) — Done.** The interim policy the item
+  awaited is now implemented: every tagged (revalidatable) response carries
+  `Cache-Control: private, no-cache` — shared intermediaries never store,
+  private caches must revalidate before every reuse — set by the conditional
+  interceptor alongside the ETag, never overwriting an explicit per-route
+  declaration (the health routes keep `no-store`), and echoed by the 304 per
+  RFC 9110 §15.4.5. Documented in ADR-038 Decision 5 and `docs/api.md`. The
+  residual forward-looking piece stands: the first authenticated, per-user
+  GET endpoint must still define its stricter per-endpoint policy.
+- **Item 3 (fail-closed `APP_ENV` default) — Done.** The developer directed
+  removing the default: `APP_ENV` is now required (`z.enum(AppEnv)` with no
+  default in `server.env.ts`), so an omitted value fails startup instead of
+  silently booting a development-gated process. All environments already
+  declared it (`.env.development`/`.env.test` variants/`.env.production`,
+  injected into both Compose stacks through the app env files);
+  `.env.example` documents the requiredness; the ONBOARDING env table
+  already described it as required. Validation specs updated to the stricter
+  contract.

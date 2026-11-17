@@ -41,6 +41,19 @@ All versioned endpoints follow the application-global contracts:
   accepted only as a valid UUIDv4; every response echoes `x-request-id`.
 - **Localization** (ADR-021) — `Accept-Language: en` (default) or `fa`;
   responses carry `Content-Language` and `Vary: Accept-Language`.
+- **Conditional requests** (ADR-032, ADR-038) — every JSON success response
+  carries a weak `ETag` (`W/"<sha256>"` over the application payload and the
+  resolved response locale) and an explicit
+  `Cache-Control: private, no-cache` (shared intermediaries never store;
+  private caches must revalidate before reuse; explicit per-route
+  declarations, e.g. the health routes' `no-store`, win). GET and HEAD
+  requests may send `If-None-Match` (one or more entity tags, compared
+  weakly — the `W/` prefix is ignored; `*` matches any current
+  representation): a matching tag on a successful (2xx) response is answered
+  with `304 Not Modified`, bodyless, echoing the current `ETag` and cache
+  directives. Malformed values, error responses, and redirects never produce
+  a 304. The development Swagger document documents the parameter and the
+  304 response per JSON-success GET operation.
 - **Authentication** — none implemented yet.
 - **Rate limiting** (ADR-015) — per-IP: 10 requests/second (short) and
   100 requests/minute (long) on all non-exempt routes. Exceeding the limit

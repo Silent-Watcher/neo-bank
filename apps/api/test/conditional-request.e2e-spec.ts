@@ -21,9 +21,11 @@ describe('Conditional requests (e2e)', () => {
     // Act
     const response = await request(app.getHttpServer()).get('/api/v1/echo');
 
-    // Assert
+    // Assert — revalidation semantics are explicit: private caches store but
+    // must revalidate before every reuse (Wave 25/26 SEC-04).
     expect(response.status).toBe(200);
     expect(response.headers.etag).toMatch(/^W\/"[0-9a-f]{64}"$/);
+    expect(response.headers['cache-control']).toBe('private, no-cache');
     await app.close();
   });
 
@@ -37,11 +39,13 @@ describe('Conditional requests (e2e)', () => {
       .get('/api/v1/echo')
       .set('If-None-Match', etag);
 
-    // Assert — bodyless 304: no content type describing a body, no payload.
+    // Assert — bodyless 304: no content type describing a body, no payload;
+    // the cache directives are echoed per RFC 9110 §15.4.5.
     expect(response.status).toBe(304);
     expect(response.headers['content-type']).toBeUndefined();
     expect(response.text).toBe('');
     expect(response.headers.etag).toBe(etag);
+    expect(response.headers['cache-control']).toBe('private, no-cache');
     await app.close();
   });
 

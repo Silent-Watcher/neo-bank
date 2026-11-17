@@ -1,6 +1,8 @@
 import type { INestApplication } from '@nestjs/common';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 
+import { applyConditionalGetDocumentation } from './conditional-get.openapi.js';
+
 // Root-level path, deliberately outside the `api` prefix: the Swagger UI is a
 // development aid for humans, not part of the versioned API surface, and the
 // global prefix/versioning applies to Nest routes, not to this registration.
@@ -37,7 +39,7 @@ export function setupSwagger(app: INestApplication): void {
     })
     .build();
 
-  const document = SwaggerModule.createDocument(app, config);
+  const document = applyConditionalGetDocumentation(SwaggerModule.createDocument(app, config));
   SwaggerModule.setup(SWAGGER_DOCS_PATH, app, document, {
     jsonDocumentUrl: `${SWAGGER_DOCS_PATH}/json`,
     yamlDocumentUrl: `${SWAGGER_DOCS_PATH}/yaml`,

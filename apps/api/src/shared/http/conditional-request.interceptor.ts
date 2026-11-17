@@ -15,6 +15,14 @@ import { isNonJsonRepresentation } from './json-content-type.js';
 // no `MULTIPLE_CHOICES` member, so the 3xx boundary is written explicitly.
 const SUCCESS_STATUSES_MAX_EXCLUSIVE = 300;
 
+// Cache directives for revalidatable responses (Wave 25/26 SEC-04, RFC 9110
+// §15.4.5): `private` keeps shared intermediaries from storing the response
+// at all, and `no-cache` makes every private-cache reuse conditional on a
+// successful revalidation — the exact semantics the entity tag exists for.
+// Set before the 304 decision so the 304 echoes it; an explicitly declared
+// header (e.g. the health routes' no-store) is never overwritten.
+const REVALIDATABLE_CACHE_CONTROL = 'private, no-cache';
+
 /**
  * Conditional-request support for JSON responses (ADR-032; reworked by
  * ADR-038): every response with a JSON representation carries a weak entity
@@ -83,6 +91,9 @@ export class ConditionalRequestInterceptor implements NestInterceptor {
 
         const etag = weakEtagFor(serialized, this.i18nContext.locale);
         response.header('ETag', etag);
+        if (response.getHeader('cache-control') === undefined) {
+          response.header('Cache-Control', REVALIDATABLE_CACHE_CONTROL);
+        }
 
         // Revalidation applies to GET and HEAD only (as with Fastify), and
         // only to successful selected representations: other methods keep
@@ -94,9 +105,12 @@ export class ConditionalRequestInterceptor implements NestInterceptor {
           response.statusCode < SUCCESS_STATUSES_MAX_EXCLUSIVE &&
           ifNoneMatchSatisfied(request.headers['if-none-match'], etag)
         ) {
-          // 304: the adapter's 304 handling strips Content-Type and ends the
-          // response without the payload; Node discards it natively.
+          // 304: the adapter strips Content-Type and ends the response
+          // body-less natively. Nothing is serialized after the decision —
+          // the payload is dropped here, so the response stays genuinely
+          // bodyless end to end (ADR-038 §5).
           response.status(304);
+          return undefined;
         }
 
         return data;

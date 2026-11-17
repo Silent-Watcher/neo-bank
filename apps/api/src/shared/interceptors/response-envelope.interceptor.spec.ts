@@ -180,6 +180,37 @@ describe('ResponseEnvelopeInterceptor', () => {
     expect(result).toEqual({ example: true });
   });
 
+  it('does not wrap a response that becomes 304 mid-pipeline', async () => {
+    // Arrange — the conditional-request interceptor runs inside this one and
+    // may set 304 between the eager skip (which saw 200) and the map; the
+    // map-time check must still bypass the wrap (Wave 25 follow-up, ADR-038
+    // §5). The statusCode stub reports 200 for the eager check and 304 after.
+    let statusCodeReads = 0;
+    const reply = {
+      writableEnded: false,
+      headersSent: false,
+      getHeader: vi.fn(() => undefined),
+      get statusCode() {
+        statusCodeReads += 1;
+        return statusCodeReads === 1 ? 200 : 304;
+      },
+    };
+    const context = {
+      switchToHttp: () => ({
+        getRequest: () => ({ method: 'GET', url: '/api/v1/hello', id: REQUEST_ID }),
+        getResponse: () => reply,
+      }),
+      getHandler: () => function handler() {},
+    } as unknown as ExecutionContext;
+    const next: CallHandler = { handle: () => of({ example: true }) };
+
+    // Act
+    const result = await interceptOnce(context, next);
+
+    // Assert
+    expect(result).toEqual({ example: true });
+  });
+
   it('does not wrap a payload whose handler set a non-JSON content type mid-execution', async () => {
     // Arrange — the eager skip runs before the handler and cannot see a
     // content type the handler sets during execution; the map-time re-check
