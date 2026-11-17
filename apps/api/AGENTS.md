@@ -38,9 +38,11 @@ development/test.
 - **Shared infrastructure:** `src/shared/` — `config/` (Zod env schemas +
   `registerAs` factories), `logging/` (nestjs-pino), `database/` (global
   DatabaseModule: MikroORM v7 PostgreSQL connection with bounded-retry
-  bootstrap connect, health indicator, migrations — ADR-027), `redis/` (global
+  bootstrap connect, bounded coalescing health probe + health indicator,
+  migrations — ADR-027/036), `redis/` (global
   RedisModule: ioredis client provider, `RedisService`,
-  `@InjectRedis()`, health indicator), `memory-protection/` (ADR-026
+  `@InjectRedis()`, health indicator through the coalesced
+  `RedisHealthProbe` — ADR-037), `memory-protection/` (ADR-026
   memory-based load shedding: RSS sampler with a hysteresis state machine,
   global `MemoryProtectionGuard`, `@SkipMemoryProtection()`, memory
   readiness indicator), `swagger/` (dev-only OpenAPI setup +
@@ -193,6 +195,13 @@ Constraints:
 - Use atomic Redis operations (e.g. `INCRBY`) when the use case needs them;
   do not add transactions, Lua scripts, or locks without a concrete
   requirement, and never treat pipelining as atomicity.
+- Health checks stay bounded and coalesced (ADR-037): the Terminus
+  indicators delegate to `RedisHealthProbe` (`redis.probe.ts` —
+  single-flight over PING, 5 s success / 3 s failure cache, 3 s probe
+  deadline); never reintroduce per-request PINGs, and keep the probe
+  deadline below the client's `commandTimeout`. The client's black-hole
+  recovery bound is `socketTimeout` (`REDIS_SOCKET_TIMEOUT_MS`, default 6000) — keep it above `commandTimeout` so per-command failures surface
+  first.
 - Unit tests must not require a running Redis server: use `lazyConnect`
   client instances and provider overrides. Real-Redis tests use
   Testcontainers (`test/testcontainers.ts`, ADR-016) in two tiers: the Redis
@@ -276,6 +285,14 @@ Constraints:
   unreachable PostgreSQL degrades `/health` (HTTP 200) and fails
   `/health/ready` with HTTP 503. The integration closes the connection
   on application shutdown (`enableShutdownHooks()` in `main.ts`).
+- Health probes stay bounded and coalesced (ADR-036): `DatabaseHealthProbe`
+  borrows one pool client under a 3 s deadline with a 2 s server-enforced
+  `statement_timeout`, releases the client exactly once (an errored release
+  evicts it locally), and single-flights concurrent probes behind a short TTL
+  cache — never reintroduce unbounded per-request probes
+  (`orm.checkConnection()`). Pool sizing and deadlines are explicit in
+  `mikro-orm.options.ts` (`DATABASE_POOL_MAX`, default 10); the CLI migration
+  configuration keeps `statement_timeout` off.
 - Database integration tests use Testcontainers (`pnpm test:db`,
   image `postgres:17.6-alpine`): each
   `*.db-spec.ts` file boots the real AppModule against its own container
@@ -303,12 +320,13 @@ src/
   shared/
     config/                # config.ts wiring + env/ Zod schemas + factories
     database/              # global DatabaseModule (ADR-027): MikroOrmModule.forRootAsync,
-                           # health indicator, shared ORM options + CLI config, migrations/
+                           # health probe + indicator (ADR-036), shared ORM options +
+                           # CLI config, migrations/
     memory-protection/     # ADR-026 load shedding: RSS sampler (hysteresis),
                            # MemoryProtectionGuard, @SkipMemoryProtection,
                            # memory health indicator
     redis/                 # global RedisModule: provider, RedisService, InjectRedis,
-                           # key builder (redis-keys.ts)
+                           # key builder (redis-keys.ts), health probe (ADR-037)
     swagger/               # OpenAPI setup (dev-only), shared response schemas
     throttler/             # global rate limiting: RedisThrottlerStorage, Guard,
                            # module, keys
@@ -320,8 +338,8 @@ test/
   e2e.global-setup.ts      # Vitest globalSetup: one shared Testcontainers
                            # Redis + one shared PostgreSQL per e2e run
                            # (ADR-025/027, provide/inject)
-  testcontainers.ts        # Testcontainers helpers: TestRedis, TestPostgres
-                           # (start/stop/getConfig)
+  testcontainers.ts        # Testcontainers helpers: TestRedis, TestPostgres,
+                           # TestToxiproxy (start/stop/getConfig)
   *.e2e-spec.ts            # supertest-based e2e suites
   *.redis-spec.ts          # real-Redis integration tests via Testcontainers (pnpm test:redis)
   *.db-spec.ts             # real-PostgreSQL integration tests via Testcontainers (pnpm test:db)
@@ -389,6 +407,7 @@ pnpm lint         # oxlint
 pnpm format       # oxfmt --write .
 pnpm typecheck    # tsc --noEmit
 pnpm test         # Vitest unit tests (mocks, no Docker)
+pnpm test:coverage # unit tests + Vitest coverage (text/HTML/LCOV in coverage/)
 pnpm test:e2e     # supertest e2e suite (one shared Testcontainers Redis + PostgreSQL per run)
 pnpm test:redis   # real-Redis integration suite via Testcontainers
 pnpm test:db      # real-PostgreSQL integration suite via Testcontainers (per test file)
@@ -400,7 +419,7 @@ pnpm db:migration:down   # revert the most recent migration
 ## Constraints
 
 - Follow the decision records in [../../DECISIONS.md](../../DECISIONS.md) —
-  all ADRs ADR-001 through ADR-030 are **Accepted** and implemented; do not
+  all ADRs ADR-001 through ADR-037 are **Accepted** and implemented; do not
   build against their rejected alternatives.
 - New architectural decisions follow the ADR-first workflow in the root
   [AGENTS.md](../../AGENTS.md): propose the ADR, get explicit user approval,

@@ -9,6 +9,7 @@ import type { DatabaseConfig } from '#config/database.config.js';
 
 import { DatabaseConnectionInitializer } from './database.connect.js';
 import { DatabaseLifecycleLogger } from './database.lifecycle.js';
+import { DatabaseHealthProbe } from './database.probe.js';
 import { DatabaseHealthIndicator } from './database.health.js';
 import { buildRuntimeMikroOrmOptions } from './mikro-orm.options.js';
 
@@ -41,9 +42,9 @@ import { buildRuntimeMikroOrmOptions } from './mikro-orm.options.js';
       driver: PostgreSqlDriver,
       inject: [ConfigService],
       useFactory: (configService: ConfigService) => {
-        const { url } = configService.getOrThrow<DatabaseConfig>(DATABASE_CONFIG);
+        const { url, poolMax } = configService.getOrThrow<DatabaseConfig>(DATABASE_CONFIG);
 
-        return buildRuntimeMikroOrmOptions(url);
+        return buildRuntimeMikroOrmOptions(url, poolMax);
       },
     }),
     TerminusModule,
@@ -51,8 +52,14 @@ import { buildRuntimeMikroOrmOptions } from './mikro-orm.options.js';
   // The lifecycle logger constructor-injects the connection initializer —
   // a real DI edge that instantiates the initializer first and orders the
   // bootstrap hooks sequentially, so the pool listeners register only after
-  // the initial connection is established (ADR-034).
-  providers: [DatabaseConnectionInitializer, DatabaseLifecycleLogger, DatabaseHealthIndicator],
+  // the initial connection is established (ADR-034). The health probe is
+  // listed before the indicator it serves (same DI convention).
+  providers: [
+    DatabaseConnectionInitializer,
+    DatabaseLifecycleLogger,
+    DatabaseHealthProbe,
+    DatabaseHealthIndicator,
+  ],
   exports: [DatabaseHealthIndicator],
 })
 export class DatabaseModule {}

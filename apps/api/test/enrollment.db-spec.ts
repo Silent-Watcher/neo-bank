@@ -6,7 +6,10 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { Enrollment } from '#modules/enrollments/entities/enrollment.entity.js';
 import { BaseEntity } from '#database/base.entity.js';
-import { buildRuntimeMikroOrmOptions } from '#database/mikro-orm.options.js';
+import {
+  buildRuntimeMikroOrmOptions,
+  DATABASE_POOL_MAX_DEFAULT,
+} from '#database/mikro-orm.options.js';
 import { DatabaseLifecycleLogger } from '#database/database.lifecycle.js';
 
 import { createTestApp } from './create-test-app.js';
@@ -47,7 +50,7 @@ function createProbeApp() {
       // depend on that path.
       builder.overrideProvider(MIKRO_ORM_MODULE_OPTIONS).useValue({
         driver: PostgreSqlDriver,
-        ...buildRuntimeMikroOrmOptions(databaseUrl),
+        ...buildRuntimeMikroOrmOptions(databaseUrl, DATABASE_POOL_MAX_DEFAULT),
         entities: [BaseEntity, Enrollment],
         autoLoadEntities: false,
       });

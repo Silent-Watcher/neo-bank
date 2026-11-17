@@ -2082,3 +2082,407 @@ change for approval.
   the E.164 documentation shape with the HTTP-facing `09XXXXXXXXX`
   normalization before persisting unvalidated input. No unique constraint on
   `phone_number`, ever.
+
+## Wave 22 — test orchestration & coverage review (_052, code-reviewer, 2026-11-17)
+
+Scope: `_052` files only (turbo.json, root + api package.json, vitest.config.ts,
+docs, ADR-035, prompt record). Verdict: **CHANGES_REQUIRED** — the
+implementation (scripts, turbo tasks, cache flags, coverage config) was
+verified correct against the installed toolchain; all findings are
+documentation defects.
+
+- **CR-01 (Medium, Documentation accuracy)** — `docs/current-state.md:235`:
+  the orchestration insertion split the e2e-globalSetup sentence, leaving an
+  orphaned parenthetical fragment. **Resolved** — sentence flow restored, the
+  stale verification note merged in with the corrected count.
+- **CR-02 (Medium, Stale statement)** — same file: "database 20/20 verified"
+  contradicted the corrected 21-test count. **Resolved** — 21/21, plus an
+  explicit pending note for the integration-tier orchestration runs.
+- **CR-03 (Medium, Documentation accuracy)** — `apps/api/ONBOARDING.md:346`:
+  Docker Compose section still said `pnpm test` runs "unit + e2e". **Resolved**
+  — reworded to all four tiers.
+- **CR-04 (Medium, Doc trigger miss)** — ONBOARDING section 8 "Useful
+  Commands" lacked `test:coverage` (root AGENTS.md trigger table requires
+  workspace scripts there). **Resolved** — added.
+- **CR-05 (Medium, Doc trigger miss)** — ONBOARDING technology-stack table had
+  no row for the new `@vitest/coverage-v8` devDependency. **Resolved** — row
+  added with the exact-pin note; Vitest row purpose corrected to the four
+  tiers.
+- **CR-06 (Low, Verification honesty)** — ADR-035 text read as if integration
+  and pre-push verifications were already executed. **Resolved** — both
+  sections now carry the pending-at-acceptance qualification referencing
+  `prompts/_052-*.md`.
+- **CR-07 (Low, Consistency, optional)** — `apps/api/AGENTS.md` quick command
+  list lacked `test:coverage`. **Resolved** — added (not blocking).
+
+Re-review dispatched to the same reviewer (iteration 2).
+
+## Wave 22 final (iteration 2, 2026-11-17) — APPROVED
+
+All seven findings verified FIXED against the actual files; no new or
+residual findings. The implementation verification from iteration 1 (Vitest
+5.0.5 coverage API, turbo cache flags, task-name consistency, tier
+isolation, web/admin skip behavior, coverage ignore rules) stands unchanged
+— iteration 2 was documentation-only.
+
+## Wave 22 security review (2026-11-17) — SECURITY_APPROVED_WITH_INFORMATIONAL_FINDINGS
+
+Independent code-security-analyzer pass over the same change set; no
+confirmed vulnerabilities. Four informational findings, none requires a
+code change for approval.
+
+### SEC-01 — Residual npm supply-chain exposure of `@vitest/coverage-v8`
+
+- **Status:** Won't Fix (accepted residual, informational) — CWE-829
+- **Technical explanation:** exact-pinned 5.0.5, peer-locked to the exact
+  installed Vitest, integrity-hashed in the lockfile, age-policy-passed,
+  eight pure-JS transitives from known maintainers, no lifecycle build
+  scripts, dev-only and absent from the prod image (`--prod` install). The
+  residual is the inherent npm devDependency risk (future compromised
+  release + future bump).
+- **Agreed resolution:** none now; keep the exact pin and re-run the
+  supply-chain policy on any future bump (existing process).
+
+### SEC-02 — Coverage artifacts embed full source; contained today
+
+- **Status:** Won't Fix (hardening note, informational) — CWE-538
+- **Technical explanation:** HTML/LCOV under `apps/api/coverage/` contain
+  complete source text; git- and docker-ignored, no CI, no static-serving
+  path in `apps/api/src`. Flagged: `test:coverage` declares
+  `outputs: ["coverage/**"]` — if a remote Turborepo cache is ever enabled,
+  source-bearing artifacts would upload to it.
+- **Agreed resolution:** none now; when remote caching or CI is introduced,
+  revisit the `outputs` declaration (or exclude coverage from cache
+  uploads). ADR-035's "stays local, never published" contract must stay
+  true as infrastructure evolves.
+
+### SEC-03 — Pre-push now pulls mutable-tag images more often
+
+- **Status:** Won't Fix (pre-existing pattern, informational) — CWE-494
+- **Technical explanation:** `redis:8.2-alpine` / `postgres:17.6-alpine`
+  tags are mutable upstream; the widened hook increases pull frequency, not
+  kind (e2e already pulled at push time). Containers bind dynamic local
+  ports only, no host mounts.
+- **Agreed resolution:** optional future hardening, out of _052 scope:
+  digest-pin the Testcontainers images (and Compose files alike).
+
+### SEC-04 — `DOCKER_HOST`/`DOCKER_CONTEXT` passthrough: no exposure change
+
+- **Status:** Won't Fix (analyzed, informational) — CWE-15, no boundary
+  crossed
+- **Technical explanation:** pass-through only (never cache-hashed);
+  functionally required for Testcontexts to honor a developer's Docker
+  context; cache poisoning impossible (Docker tiers are `cache: false`);
+  exploitation presupposes full shell-environment control.
+- **Agreed resolution:** none; keep the passthrough list minimal.
+
+---
+
+## Wave 23 — database health probe hardening (_053, code-reviewer, 2026-11-17) — CHANGES_REQUIRED
+
+Context-blind code review of the ADR-036 implementation (probe engine, indicator
+delegation, pool configuration, health controller, tests, env schema). The
+reviewer verified the same-tick ordering guarantees, Terminus contract, i18n
+catalogs, and the no-leakage security posture as sound; the findings below are
+the exceptions. Findings documented here before remediation per the mandatory
+improvement loop.
+
+### CR-01 — Health probe leaks a pool slot when the deadline fires during acquisition
+
+- **Title:** Client acquired after the deadline has fired is never released.
+- **Severity:** High
+- **Category:** Correctness / Edge Case
+- **Location:** `apps/api/src/shared/database/database.probe.ts`, `runProbeQuery`
+  (timer callback + `work()`).
+- **Status:** Resolved (2026-11-17)
+- **Technical explanation:** The deadline callback runs `releaseOnce(timeoutError)`
+  while `client` is still `null`; `releaseOnce` sets `released = true`
+  unconditionally. `work()` is not cancellable: when the queued
+  `pool.connect()` later resolves (bounded by the pool's 5 s
+  `connectionTimeoutMillis`), `client = borrowed` executes and the probe
+  statement is issued with no release path left (`released` is already true).
+  The exactly-once invariant holds for the client that existed at deadline
+  time; the late-arriving client gets zero releases.
+- **Failure scenario:** Pool saturated by long application loans (runtime
+  `statement_timeout` is 30 s). A health probe queues; the 3 s deadline fires
+  and the probe correctly fails; within the next 2 s a slot frees, the queued
+  acquisition resolves, and the probe silently borrows a client it never
+  returns — under a black-holed query it additionally sits idle-in-transaction
+  server-side. Continuous health probing under sustained saturation then
+  drains one pool slot per slow probe — the protection mechanism itself
+  exhausts the pool.
+- **Judge recommendation:** In `work()`, immediately after `client = borrowed`,
+  check `released`; if the deadline already fired, release the fresh client
+  right away (clean release — no query has run) and return without executing
+  the probe statement. Add a regression test where `pool.connect()` resolves
+  after the deadline.
+- **Investigation result:** Valid. The microtask/macrotask ordering only
+  protects the client that resolved before the timer ran; the
+  resolve-after-timeout case is real and untested.
+- **Agreed resolution:** Apply the recommended post-acquisition `released`
+  check with a clean release, plus the regression test. No design change —
+  this completes the exactly-once release invariant the ADR already specifies.
+
+### CR-02 — Empty `DATABASE_POOL_MAX=` fails startup instead of applying the default
+
+- **Title:** Blank env value violates the documented blank-means-unset convention.
+- **Severity:** Medium
+- **Category:** Correctness / Edge Case
+- **Location:** `apps/api/src/shared/config/env/schema/db.env.ts` (schema) and
+  `apps/api/env/.env.example` (the "Leave empty to use the default" comment).
+- **Status:** Resolved (2026-11-17)
+- **Technical explanation:** `validateEnv` passes raw strings, so
+  `DATABASE_POOL_MAX=` reaches the schema as `''`; `z.coerce.number('')` → `0`
+  fails `.positive()`. The `.default(10)` applies only to `undefined`. The
+  repo convention (stated in `validation-helpers.ts` for `optionalHttpUrlEnv`)
+  treats blank values as unset.
+- **Failure scenario:** An operator copies `.env.example`, leaves the variable
+  empty as documented, and the API refuses to boot with
+  `DATABASE_POOL_MAX must be positive.` instead of using the default.
+- **Judge recommendation:** Normalize blank to unset before the numeric schema
+  (trim → empty-to-undefined transform, then pipe to
+  `positiveSafeInteger(...).default(10)`), mirroring `optionalHttpUrlEnv`.
+- **Investigation result:** Valid; the shipped `.env.example` explicitly
+  documents the empty form.
+- **Agreed resolution:** Apply the recommended transform; add schema-spec
+  cases for the empty and whitespace-only forms.
+
+### CR-03 — Partial-startup teardown in the db-spec is unguarded
+
+- **Title:** A failed `beforeAll` masks the real error with a teardown TypeError.
+- **Severity:** Low
+- **Category:** Edge Case (test infrastructure)
+- **Location:** `apps/api/test/database-health.db-spec.ts` (file-level
+  `afterAll`; per-describe `orm.close(true)` hooks).
+- **Status:** Resolved (2026-11-17)
+- **Technical explanation:** If a container start throws, `postgres` /
+  `toxiproxy` / `network` stay `undefined` and the first teardown statement
+  throws a TypeError, skipping the remaining teardown steps and masking the
+  root cause.
+- **Failure scenario:** One slow/failed image pull produces a teardown crash
+  report instead of the actual cause; resources are left for the reaper
+  instead of deterministic teardown.
+- **Judge recommendation:** Guard each teardown step.
+- **Investigation result:** Valid (observed in practice during this task's
+  first container-start debugging rounds).
+- **Agreed resolution:** Guard the file-level teardown steps; the per-describe
+  ORM hooks already fail fast on their own init errors.
+
+## Wave 23 final (iteration 2, 2026-11-17) — APPROVED_WITH_SUGGESTIONS
+
+All three findings verified FIXED by direct inspection (CR-01 re-verified across
+the full exactly-once release case matrix; CR-02 semantics for absent/blank/
+whitespace/malformed confirmed; CR-03 primary scenario resolved). Two residuals:
+
+### CR-04 — describe-level orm.close hooks in the db-spec still unguarded
+
+- **Status:** Resolved (2026-11-17, same iteration)
+- **Severity:** Low | **Category:** Edge Case (test infrastructure)
+- **Location:** `apps/api/test/database-health.db-spec.ts` (both describe-level
+  `afterAll` hooks).
+- **Technical explanation:** if that describe's `MikroORM.init` fails, `orm` is
+  undefined and the hook throws a masking TypeError. Downgraded residual of
+  CR-03: the guarded file-level teardown already prevents leaks; only noise
+  remains.
+- **Agreed resolution:** applied the recommended `if (orm)` guard to both hooks,
+  matching the file-level pattern.
+
+### CR-05 — positiveSafeInteger blank-value trap in sibling schemas (pre-existing)
+
+- **Status:** Won't Fix in _053 (pre-existing, out of scope) — deferred as a
+  follow-up task
+- **Severity:** Low | **Category:** Correctness / Edge Case
+- **Location:** `apps/api/src/shared/config/env/schema/server.env.ts` (`BODY_LIMIT`),
+  `apps/api/src/shared/config/env/schema/redis.env.ts` (`REDIS_CONNECT_TIMEOUT_MS`,
+  `REDIS_COMMAND_TIMEOUT_MS`, `REDIS_MAX_RETRIES_PER_REQUEST`,
+  `REDIS_SHUTDOWN_TIMEOUT_MS`) with shipped-empty `.env.example` entries that
+  document defaults.
+- **Technical explanation:** the same defect class CR-02 fixed for
+  `DATABASE_POOL_MAX` exists for the five siblings using the bare
+  `positiveSafeInteger(...).default(...)` form: a blank shipped-empty entry
+  coerces to `0` and fails `.positive()` instead of applying the documented
+  default. Touches no file in this change's diff.
+- **Agreed resolution:** out of scope for _053 (scope discipline — no unrelated
+  refactoring); tracked here as a follow-up: apply the same blank-to-unset
+  preprocess (or a shared wrapper) to the five variables with matching spec
+  cases, with developer approval as a separate task.
+
+## Wave 23 security review (2026-11-17) — SECURITY_APPROVED_WITH_INFORMATIONAL_FINDINGS
+
+Independent code-security-analyzer pass (no access to the code-reviewer's
+report). No CRITICAL/HIGH/MEDIUM/LOW findings; four informational notes. The
+single-flight/cache race surface, the composed probe statement, the env input
+chain, and the degraded-200/503 information flow were verified against the
+installed library sources.
+
+### SEC-INFO-01 — Redis health probe lacks the DB probe's coalescing (asymmetry)
+
+- **Status:** Won't Fix in _053 (pre-existing surface; deferred follow-up candidate)
+- **CWE:** CWE-400 | **Location:** `apps/api/src/shared/redis/redis.health.ts`
+- **Explanation:** `/health` floods amplify into Redis PINGs at request rate
+  (near-1x load addition, each bounded by `commandTimeout`); the DB side is
+  now capped by the probe cache. Pre-existing; changing Redis probe semantics
+  is a separate decision.
+- **Agreed resolution:** none in _053; revisit with the developer if Redis
+  health hardening is wanted (same single-flight/TTL pattern applies).
+
+### SEC-INFO-02 — Coarse failure-class fingerprinting via response latency
+
+- **Status:** Won't Fix (accepted inherent property)
+- **CWE:** CWE-208/CWE-204 | **Location:** probe deadline mapping
+- **Explanation:** failure classes are indistinguishable in the body but
+  distinguishable by latency (~RTT vs ~2s vs ~3s); the 3s failure cache caps
+  measurement. Masking would require artificial latency padding that degrades
+  legitimate monitoring.
+- **Agreed resolution:** accepted; recorded as a documented residual.
+
+### SEC-INFO-03 — Subsystem-level health status is exposed by design
+
+- **Status:** Won't Fix (operational control, not an application change)
+- **CWE:** CWE-200 | **Location:** health controller payload
+- **Explanation:** orchestrator-facing Terminus behavior; network placement
+  (restricting `/health` to the orchestration network) is the intended control.
+- **Agreed resolution:** deployment responsibility; nothing to change in code.
+
+### SEC-INFO-04 — DATABASE_POOL_MAX has no upper sanity bound
+
+- **Status:** Won't Fix in _053 (operator-trusted config; deferred)
+- **CWE:** CWE-20 | **Location:** `db.env.ts` schema
+- **Explanation:** an absurd well-formed value would exhaust PostgreSQL
+  `max_connections` — a self-inflicted misconfiguration requiring env write
+  access (outside the attacker threat model). A `max()` cap would reject
+  legitimate large deployments and is a schema-behavior decision.
+- **Agreed resolution:** deferred; sizing guidance is documented in the env
+  files and ADR-036.
+
+---
+
+## Wave 24 — Redis reliability & black-hole resilience (_054, code-reviewer, 2026-11-17) — APPROVED_WITH_SUGGESTIONS
+
+Context-blind code review of the ADR-037 implementation (RedisHealthProbe, indicator
+delegation, socketTimeout/readyCheck/keepAlive options, env chain, black-hole
+fault-injection spec). The reviewer re-verified every load-bearing ioredis claim
+against the installed sources (commandTimeout rejection-only path, socketTimeout
+arm/destroy semantics, close-handler prevCommandQueue parking, offline-queue
+fast-fail message, silentEmit fallback) and found the probe state machine and the
+integration test's timing chain sound. Two low findings, both applied:
+
+### CR-01 — "Repo-wide blank convention" claim not true for the schema's siblings
+
+- **Status:** Resolved (2026-11-17, iteration 1)
+- **Severity:** Low | **Category:** Edge Case (config ergonomics)
+- **Location:** `apps/api/src/shared/config/env/schema/redis.env.ts` + `.env.example`.
+- **Explanation:** the new comment claimed blank-values-are-unset as a repo-wide
+  convention, but only `REDIS_SOCKET_TIMEOUT_MS` implemented it; the four sibling
+  numeric fields used bare `positiveSafeInteger(...).default(...)` and would fail
+  startup on a blank shipped-empty `.env.example` entry (the pre-existing CR-05
+  defect class).
+- **Agreed resolution:** extracted `positiveIntegerEnv(field, defaultValue)` into
+  `validation-helpers.ts` (blank→undefined preprocess + `positiveSafeInteger` +
+  `.default`) and applied it to all five Redis numeric fields; generalized the
+  blank-value spec to cover every field. Closes the Redis portion of the deferred
+  CR-05 (`BODY_LIMIT` in `server.env.ts` remains deferred — separate schema,
+  untouched file).
+
+### CR-02 — No cross-field validation of the socket/command timeout ordering
+
+- **Status:** Resolved (2026-11-17, iteration 1)
+- **Severity:** Low | **Category:** Edge Case (missing validation)
+- **Location:** `apps/api/src/shared/config/env/schema/redis.env.ts` /
+  `env.config.ts` superRefine.
+- **Explanation:** three places instruct operators to keep
+  `REDIS_SOCKET_TIMEOUT_MS` above `REDIS_COMMAND_TIMEOUT_MS`, but nothing
+  validated the ordering; an inverted pair would destroy healthy connections
+  mid-flight against a merely slow Redis (constant reconnect churn) with no
+  startup signal.
+- **Agreed resolution:** added `isRedisSocketTimeoutInvalid` next to the schema
+  (following the `isRecoveryThresholdInvalid` pattern) and wired it into the
+  existing `envSchema.superRefine` block; spec cases added (valid / equal /
+  inverted).
+
+### CR-03 — Informational (pre-existing docs gap, noted by documentation-writer)
+
+- **Status:** Resolved (2026-11-17)
+- **Severity:** Low | **Category:** Documentation
+- **Location:** `docs/current-state.md` validated-variables list.
+- **Explanation:** the list omitted `TRUST_PROXY_PROXIES` (documented in the
+  ONBOARDING env table and validated by `server.env.ts`) — pre-existing gap
+  noticed during the documentation sweep.
+- **Agreed resolution:** added the missing row entry text; other pre-existing
+  ADR-range drift in `apps/api/AGENTS.md`/`ONBOARDING.md`/`PROJECT_CONTEXT.md`
+  was corrected by the documentation-writer in the same sweep.
+
+## Wave 24 final (iteration 2, 2026-11-17) — APPROVED_WITH_SUGGESTIONS
+
+CR-01 and CR-02 verified FIXED by direct source inspection (helper semantics
+re-derived for absent/blank/garbage inputs; cross-field rule confirmed across
+`.env.development`, `.env.production`, and the `.env.example` template). One
+new low residual:
+
+### CR-04 — Unused `positiveSafeInteger` import in redis.env.ts
+
+- **Status:** Resolved (2026-11-17, iteration 2)
+- **Severity:** Low | **Category:** Syntax/Code Quality
+- **Location:** `apps/api/src/shared/config/env/schema/redis.env.ts:3`.
+- **Explanation:** after absorbing all five numeric fields into
+  `positiveIntegerEnv`, the raw-helper import became dead noise.
+- **Agreed resolution:** import narrowed to `positiveIntegerEnv` only.
+
+## Wave 24 security review (2026-11-17) — SECURITY_APPROVED_WITH_INFORMATIONAL_FINDINGS
+
+Independent code-security-analyzer pass (no access to the code-reviewer's
+report). No CRITICAL/HIGH/MEDIUM/LOW findings; four informational notes. The
+single-flight/cache race surface, the composed PING-only probe path, the env
+parsing chain (including the new cross-field rule), and the degraded-200/503
+information flow were verified against the installed library sources.
+
+### SEC-01 — Cached probe outcome objects were mutable by convention only
+
+- **Status:** Resolved (2026-11-17, same gate)
+- **CWE:** CWE-471 | **Location:** `apps/api/src/shared/redis/redis.probe.ts`
+  (and the identical pattern in `apps/api/src/shared/database/database.probe.ts`).
+- **Explanation:** the single-flight cache hands the same outcome object to
+  every concurrent caller on both health endpoints; immutability was a
+  doc-comment convention, not a property of the data — one future mutating
+  consumer would poison the shared cache across both endpoints for the TTL
+  window. No attacker-reachable path today (consumers read `.ok` only).
+- **Agreed resolution:** applied the recommended `Object.freeze` at creation in
+  BOTH probes — the flagged Redis probe and its PostgreSQL counterpart, which
+  carries the identical latent class from ADR-036. Identity-based cache
+  assertions in the specs are unaffected.
+
+### SEC-02 — Latency/status fingerprinting of internal failure classes
+
+- **Status:** Won't Fix (accepted documented residual)
+- **CWE:** CWE-204 | **Location:** probe deadline mapping, health controller.
+- **Explanation:** failure classes remain coarsely distinguishable by latency
+  (fast-fail vs 3 s deadline) and per-indicator status on the unauthenticated
+  endpoints; error text is properly suppressed (SEC-01/Wave-14 parity verified
+  in both i18n catalogs). Inherent to timeout-based health checks; masking
+  would require artificial latency padding that degrades legitimate monitoring.
+- **Agreed resolution:** accepted; documented in ADR-036/ADR-037 security
+  assessments.
+
+### SEC-03 — Probe cache shared between liveness and readiness (bounded staleness)
+
+- **Status:** Won't Fix (accepted ADR-037 design tradeoff)
+- **CWE:** N/A | **Location:** `redis.probe.ts` cache TTLs.
+- **Explanation:** after a failure, readiness can admit traffic for up to ~5 s
+  (success TTL); after recovery, 503 persists up to ~3 s. Not attacker-
+  poisonable (no request input reaches the outcome); windows are fixed
+  constants matching the orchestrator cadence.
+- **Agreed resolution:** accepted; splitting the probes would double Redis
+  commands under flood for marginal fidelity.
+
+### SEC-04 — No upper bound on the Redis timeout environment variables
+
+- **Status:** Won't Fix in _054 (operator-trusted config) — recorded in `DEFERRED.md`
+- **CWE:** CWE-20 | **Location:** `validation-helpers.ts`, `redis.env.ts`.
+- **Explanation:** an absurd well-formed `REDIS_SOCKET_TIMEOUT_MS` passes
+  validation and the cross-field rule while effectively disabling the
+  black-hole recovery bound (per-command failures still bounded by
+  `commandTimeout`). Requires env write access — outside the attacker threat
+  model.
+- **Agreed resolution:** deferred alongside the `DATABASE_POOL_MAX` cap
+  (`DEFERRED.md` item 3, extended to cover the Redis timeout variables); a
+  generous named upper bound would be the fix if approved.

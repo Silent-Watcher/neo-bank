@@ -36,23 +36,24 @@ feature coverage is minimal.
 
 ## 2. Technology Stack
 
-| Technology                                   | Purpose                                                                                                 |
-| -------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
-| NestJS 12                                    | Application framework (modules, DI, pipes, filters, interceptors)                                       |
-| Node HTTP platform (`@nestjs/platform-node`) | Official adapter on `node:http` ([ADR-032](../../DECISIONS.md), superseding ADR-002)                    |
-| SWC                                          | TypeScript transpilation (fast builds; type checking stays with `tsc`)                                  |
-| Zod 4                                        | Validation for HTTP input and environment variables                                                     |
-| @nestjs/config                               | Configuration namespaces via `registerAs` + `ConfigService`                                             |
-| @nestjs/i18n                                 | Bilingual en/fa translations: locale resolution, JSON catalogs ([ADR-021](../../DECISIONS.md))          |
-| nestjs-cls 7                                 | Per-request AsyncLocalStorage context (actor store) via `ClsModule` ([ADR-031](../../DECISIONS.md))     |
-| Pino / nestjs-pino                           | Structured logging; request-scoped context, header redaction                                            |
-| @nestjs/terminus                             | `/health` (liveness) and `/health/ready` (readiness) endpoints                                          |
-| ioredis 6                                    | Redis client behind the shared `RedisService` ([ADR-012](../../DECISIONS.md)/[013](../../DECISIONS.md)) |
-| MikroORM v7 (`@mikro-orm/*`)                 | PostgreSQL persistence: ORM integration, migrations, health indicator ([ADR-027](../../DECISIONS.md))   |
-| @nestjs/swagger                              | OpenAPI docs; Swagger UI at `/docs`, **development only** ([ADR-014](../../DECISIONS.md))               |
-| Vitest + supertest                           | Unit and e2e testing                                                                                    |
-| Testcontainers                               | Real Redis and PostgreSQL in integration & e2e tests (ADR-016/025); see `test/testcontainers.ts`        |
-| Oxlint / Oxfmt                               | Linting and formatting (no ESLint/Prettier)                                                             |
+| Technology                                   | Purpose                                                                                                                                                                               |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| NestJS 12                                    | Application framework (modules, DI, pipes, filters, interceptors)                                                                                                                     |
+| Node HTTP platform (`@nestjs/platform-node`) | Official adapter on `node:http` ([ADR-032](../../DECISIONS.md), superseding ADR-002)                                                                                                  |
+| SWC                                          | TypeScript transpilation (fast builds; type checking stays with `tsc`)                                                                                                                |
+| Zod 4                                        | Validation for HTTP input and environment variables                                                                                                                                   |
+| @nestjs/config                               | Configuration namespaces via `registerAs` + `ConfigService`                                                                                                                           |
+| @nestjs/i18n                                 | Bilingual en/fa translations: locale resolution, JSON catalogs ([ADR-021](../../DECISIONS.md))                                                                                        |
+| nestjs-cls 7                                 | Per-request AsyncLocalStorage context (actor store) via `ClsModule` ([ADR-031](../../DECISIONS.md))                                                                                   |
+| Pino / nestjs-pino                           | Structured logging; request-scoped context, header redaction                                                                                                                          |
+| @nestjs/terminus                             | `/health` (liveness) and `/health/ready` (readiness) endpoints                                                                                                                        |
+| ioredis 6                                    | Redis client behind the shared `RedisService` ([ADR-012](../../DECISIONS.md)/[013](../../DECISIONS.md))                                                                               |
+| MikroORM v7 (`@mikro-orm/*`)                 | PostgreSQL persistence: ORM integration, migrations, health indicator ([ADR-027](../../DECISIONS.md))                                                                                 |
+| @nestjs/swagger                              | OpenAPI docs; Swagger UI at `/docs`, **development only** ([ADR-014](../../DECISIONS.md))                                                                                             |
+| Vitest + supertest                           | Unit, e2e, and integration testing (four tiers)                                                                                                                                       |
+| @vitest/coverage-v8                          | Unit-tier coverage (text/HTML/LCOV); pinned to the exact Vitest version ([ADR-035](../../DECISIONS.md))                                                                               |
+| Testcontainers                               | Real Redis and PostgreSQL in integration & e2e tests (ADR-016/025); Toxiproxy for the database and Redis black-hole fault-injection specs (ADR-036/037); see `test/testcontainers.ts` |
+| Oxlint / Oxfmt                               | Linting and formatting (no ESLint/Prettier)                                                                                                                                           |
 
 Dependency notes: `@mikro-orm/postgresql` pulls `pg` (8.23.1) and,
 transitively, `kysely` (0.29.8) — neither is a direct dependency.
@@ -98,6 +99,7 @@ cp env/.env.example env/.env.development
 | `TRUST_PROXY_PROXIES`                  | Optional comma-separated proxy addresses/CIDR ranges trusted instead of every hop; only meaningful with `TRUST_PROXY=true` (set it for XFF-appending proxies)                                                                                                                                                                      | unset (trust-all when `TRUST_PROXY=true`)         |
 | `BODY_LIMIT`                           | Max request body bytes                                                                                                                                                                                                                                                                                                             | `1048576` (1 MiB)                                 |
 | `DATABASE_URL`                         | PostgreSQL connection URL (`postgres://` or `postgresql://`, ADR-027); the connection is established during bootstrap with bounded retries and startup fails if the server cannot be reached (auth/config errors fail immediately) — after a successful boot, an outage degrades `/health` (HTTP 200), `/health/ready` returns 503 | required                                          |
+| `DATABASE_POOL_MAX`                    | PostgreSQL connection pool capacity per instance (ADR-036); keep replicas × this value plus administrative clients below PostgreSQL `max_connections`                                                                                                                                                                              | `10`                                              |
 | `REDIS_INSIGHT_URL`                    | Host-accessible Redis Insight URL; startup log prints it only when set (ADR-020)                                                                                                                                                                                                                                                   | unset (injected by the dev Compose stack)         |
 | `MOCKSERVER_HOST_URL`                  | Host-machine MockServer address; the startup log prints it in development only when set (ADR-024)                                                                                                                                                                                                                                  | unset (injected by the dev Compose stack)         |
 | `MOCKSERVER_DOCKER_URL`                | Compose-network MockServer address; the startup log prints it in development only when set (ADR-024)                                                                                                                                                                                                                               | unset (injected by the dev Compose stack)         |
@@ -109,6 +111,7 @@ cp env/.env.example env/.env.development
 | `REDIS_TLS`                            | Force TLS for `redis://` (`true`/`false`)                                                                                                                                                                                                                                                                                          | `false` (`rediss://` always uses TLS)             |
 | `REDIS_CONNECT_TIMEOUT_MS`             | Connection timeout (ms)                                                                                                                                                                                                                                                                                                            | `10000`                                           |
 | `REDIS_COMMAND_TIMEOUT_MS`             | Per-command timeout (ms)                                                                                                                                                                                                                                                                                                           | `5000`                                            |
+| `REDIS_SOCKET_TIMEOUT_MS`              | Socket inactivity deadline while commands are in flight (ms) — destroys a black-holed socket and triggers the bounded reconnect cycle (ADR-037); keep above `REDIS_COMMAND_TIMEOUT_MS`                                                                                                                                             | `6000`                                            |
 | `REDIS_MAX_RETRIES_PER_REQUEST`        | Command retry budget                                                                                                                                                                                                                                                                                                               | `3`                                               |
 | `REDIS_SHUTDOWN_TIMEOUT_MS`            | Graceful-QUIT window (ms)                                                                                                                                                                                                                                                                                                          | `2000`                                            |
 | `RATE_LIMIT_SHORT_LIMIT`               | Short-window max requests                                                                                                                                                                                                                                                                                                          | `10`                                              |
@@ -144,10 +147,13 @@ Verify with `curl http://localhost:3001/health`.
 
 ```sh
 pnpm test         # unit tests (Vitest) — mocks infrastructure, no Docker
+pnpm test:coverage # unit tests + coverage (Vitest v8 provider; text/HTML/LCOV in coverage/)
 pnpm test:e2e     # e2e tests (one shared Testcontainers Redis + PostgreSQL per run; needs Docker)
 pnpm test:redis   # Redis integration tests (Testcontainers starts real Redis per test file)
 pnpm test:db      # database integration tests (Testcontainers starts real PostgreSQL per test file)
 ```
+
+Coverage runs on the unit tier only (ADR-035): deterministic, Docker-free, and the reports stay local (`coverage/` is gitignored). Setting `coverage.include` in `vitest.config.ts` is what makes files no test imports appear in the report; generated migrations and spec files are excluded. There are no thresholds yet — the measured baseline (≈ 75% statements) is recorded in `prompts/_052-*.md` before any ratchet lands. From the repo root, `pnpm test` runs all four tiers concurrently through Turborepo and is what the pre-push hook executes.
 
 **Build:**
 
@@ -172,9 +178,9 @@ src/
                            # ClsModule + typed actor-store bridge for audit attribution
     config/                # config.ts wiring, env/ Zod schemas, registerAs factories
     database/              # global DatabaseModule (ADR-027): MikroORM v7 PostgreSQL
-                           # connection, health indicator, pool lifecycle logging
-                           # (ADR-034), shared ORM options, CLI config, migrations/,
-                           # shared BaseEntity (base.entity.ts)
+                           # connection, health probe + indicator (ADR-036), pool
+                           # lifecycle logging (ADR-034), shared ORM options, CLI
+                           # config, migrations/, shared BaseEntity (base.entity.ts)
     datetime/              # UTC boundary helper: calendarDayUtcRange (ADR-030)
     enums/                 # AppEnv enum
     errors/                # AppHttpException, ErrorCode, Problem Details helpers
@@ -189,7 +195,8 @@ src/
                            # @SkipMemoryProtection(), memory health indicator
     pipes/                 # ZodValidationPipe (translates Zod issues per request locale)
     redis/                 # global RedisModule: ioredis provider, RedisService,
-                           # @InjectRedis(), degraded-mode health indicator
+                           # @InjectRedis(), degraded-mode health indicator +
+                           # coalesced RedisHealthProbe (ADR-037)
     swagger/               # dev-only OpenAPI setup + shared response schemas
 test/                      # e2e specs + create-test-app.ts + e2e.global-setup.ts
                            # (shared e2e Redis and PostgreSQL) + Vitest alias map
@@ -245,7 +252,9 @@ will not resolve them.
 PostgreSQL use Testcontainers (`test/testcontainers.ts`, which provides
 `TestRedis` and `TestPostgres`). The Redis integration tier
 (`pnpm test:redis`) starts its own `redis:8.2-alpine` container per test
-file with a dynamic port in `beforeAll` and stops it in `afterAll`; the
+file with a dynamic port in `beforeAll` and stops it in `afterAll` (the
+black-hole spec `test/redis-black-hole.redis-spec.ts` additionally routes
+the client through a Toxiproxy container for fault injection, ADR-037); the
 database integration tier (`pnpm test:db`, loads `env/.env.db-test`) starts
 its own `postgres:17.6-alpine` container per test file the same way; the
 e2e tier (`pnpm test:e2e`) shares one Redis and one PostgreSQL container
@@ -308,7 +317,7 @@ tooling (lint, format, Turbo tasks) comes from the root; see
   (`calendarDayUtcRange` for calendar-day ranges) — see
   [../../docs/utc-datetime.md](../../docs/utc-datetime.md).
 - All ADRs ([../../DECISIONS.md](../../DECISIONS.md)) ADR-001 through
-  ADR-034 are **Accepted** and implemented — follow them; don't
+  ADR-037 are **Accepted** and implemented — follow them; don't
   reintroduce alternatives.
 
 ## 8. Useful Commands
@@ -318,6 +327,7 @@ pnpm dev                       # dev server with watch + env/.env.development
 pnpm build                     # production build (SWC → dist/)
 pnpm start                     # run the built app
 pnpm test                      # unit tests (mocks infrastructure, no Docker)
+pnpm test:coverage             # unit tests + Vitest coverage (text/HTML/LCOV in coverage/)
 pnpm test:e2e                  # e2e tests (one shared Testcontainers Redis + PostgreSQL per run; needs Docker)
 pnpm test:redis                # Redis integration tests (Testcontainers starts real Redis per test file)
 pnpm test:db                   # database integration tests (Testcontainers starts real PostgreSQL per test file)
@@ -340,5 +350,6 @@ Docker Compose is orchestrated from the repository root, not from this workspace
 - Copy `docker/env/.env.docker.example` to `docker/env/.env.docker.dev` (development) or `docker/env/.env.docker.prod` (production) and set `POSTGRES_PASSWORD` and `REDIS_PASSWORD`
 - For production, create `apps/api/env/.env.production` from `apps/api/env/.env.example`
 
-From the repo root, `pnpm test` runs unit + e2e for all workspaces through
-Turborepo, and `pnpm cm` creates a Conventional Commit.
+From the repo root, `pnpm test` runs all four test tiers for all workspaces
+through Turborepo (unit, e2e, Redis, database — the integration tiers need
+Docker), and `pnpm cm` creates a Conventional Commit.

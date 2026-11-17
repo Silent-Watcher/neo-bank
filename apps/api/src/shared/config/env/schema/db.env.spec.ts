@@ -38,4 +38,61 @@ describe('dbEnvSchema', () => {
     expect(notAUrl.success).toBe(false);
     expect(wrongProtocol.success).toBe(false);
   });
+
+  it('defaults DATABASE_POOL_MAX to 10 when absent', () => {
+    // Arrange & Act
+    const result = dbEnvSchema.parse({ DATABASE_URL: 'postgres://localhost:5432/neo_bank' });
+
+    // Assert
+    expect(result.DATABASE_POOL_MAX).toBe(10);
+  });
+
+  it('coerces DATABASE_POOL_MAX from its environment string', () => {
+    // Arrange & Act
+    const result = dbEnvSchema.parse({
+      DATABASE_URL: 'postgres://localhost:5432/neo_bank',
+      DATABASE_POOL_MAX: '20',
+    });
+
+    // Assert
+    expect(result.DATABASE_POOL_MAX).toBe(20);
+  });
+
+  it('rejects a non-positive or non-integer DATABASE_POOL_MAX', () => {
+    // Arrange & Act
+    const zero = dbEnvSchema.safeParse({
+      DATABASE_URL: 'postgres://localhost:5432/neo_bank',
+      DATABASE_POOL_MAX: '0',
+    });
+    const negative = dbEnvSchema.safeParse({
+      DATABASE_URL: 'postgres://localhost:5432/neo_bank',
+      DATABASE_POOL_MAX: '-1',
+    });
+    const fractional = dbEnvSchema.safeParse({
+      DATABASE_URL: 'postgres://localhost:5432/neo_bank',
+      DATABASE_POOL_MAX: '2.5',
+    });
+
+    // Assert
+    expect(zero.success).toBe(false);
+    expect(negative.success).toBe(false);
+    expect(fractional.success).toBe(false);
+  });
+
+  it('treats a blank DATABASE_POOL_MAX as unset and applies the default', () => {
+    // Arrange & Act — the repo-wide convention: an empty entry in an env file
+    // behaves exactly like a missing variable.
+    const blank = dbEnvSchema.parse({
+      DATABASE_URL: 'postgres://localhost:5432/neo_bank',
+      DATABASE_POOL_MAX: '',
+    });
+    const whitespace = dbEnvSchema.parse({
+      DATABASE_URL: 'postgres://localhost:5432/neo_bank',
+      DATABASE_POOL_MAX: '   ',
+    });
+
+    // Assert
+    expect(blank.DATABASE_POOL_MAX).toBe(10);
+    expect(whitespace.DATABASE_POOL_MAX).toBe(10);
+  });
 });

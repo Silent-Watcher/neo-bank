@@ -10,6 +10,10 @@ const databaseConfig = registerAs(DATABASE_CONFIG, () => ({
   // condition reported through degraded health, not a configuration error
   // (ADR-027: the ORM initializes without a mandatory startup connection).
   url: _env.DATABASE_URL,
+  // Pool capacity (ADR-036): deployment-dependent sizing — keep
+  // replicas × DATABASE_POOL_MAX plus administrative clients below
+  // PostgreSQL max_connections, with headroom reserved for administration.
+  poolMax: _env.DATABASE_POOL_MAX,
 }));
 
 export default databaseConfig;

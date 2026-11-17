@@ -9,7 +9,7 @@ import {
   memoryProtectionEnvSchema,
 } from './schema/memory-protection.env.js';
 import { rateLimitEnvSchema } from './schema/rate-limit.env.js';
-import { redisEnvSchema } from './schema/redis.env.js';
+import { isRedisSocketTimeoutInvalid, redisEnvSchema } from './schema/redis.env.js';
 import { isCorsOriginRequiredInProduction, serverEnvSchema } from './schema/server.env.js';
 
 export const envSchema = z
@@ -36,6 +36,14 @@ export const envSchema = z
         path: ['MEMORY_PROTECTION_RECOVERY_RSS_MB'],
         message:
           'MEMORY_PROTECTION_RECOVERY_RSS_MB must be lower than MEMORY_PROTECTION_MAX_RSS_MB (hysteresis).',
+      });
+    }
+    if (isRedisSocketTimeoutInvalid(env)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['REDIS_SOCKET_TIMEOUT_MS'],
+        message:
+          'REDIS_SOCKET_TIMEOUT_MS must be greater than REDIS_COMMAND_TIMEOUT_MS (per-command failures must surface before the socket is destroyed).',
       });
     }
   });

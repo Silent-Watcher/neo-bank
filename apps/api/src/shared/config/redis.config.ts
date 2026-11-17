@@ -15,6 +15,7 @@ const redisConfig = registerAs(REDIS_CONFIG, () => ({
   tls: _env.REDIS_TLS,
   connectTimeoutMs: _env.REDIS_CONNECT_TIMEOUT_MS,
   commandTimeoutMs: _env.REDIS_COMMAND_TIMEOUT_MS,
+  socketTimeoutMs: _env.REDIS_SOCKET_TIMEOUT_MS,
   maxRetriesPerRequest: _env.REDIS_MAX_RETRIES_PER_REQUEST,
   shutdownTimeoutMs: _env.REDIS_SHUTDOWN_TIMEOUT_MS,
 }));

@@ -6,6 +6,7 @@ import { buildProblemDetails } from '#errors/problem-details.js';
 import { resolveApiVersion } from './api-version.js';
 import type { HttpRequestLike, HttpResponseLike } from './http-boundary.js';
 import { weakEtag } from './etag.js';
+
 import {
   X_REQUEST_ID_HEADER,
   isValidUuidV4,

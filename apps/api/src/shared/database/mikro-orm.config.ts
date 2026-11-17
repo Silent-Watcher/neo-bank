@@ -19,9 +19,17 @@ import { buildMikroOrmOptions, CLI_ENTITY_PATHS } from './mikro-orm.options.js';
  * Shares all ORM settings with the runtime through buildMikroOrmOptions();
  * entity discovery paths come from CLI_ENTITY_PATHS in the same shared
  * module; `defineConfig` from the driver package injects the PostgreSQL
- * driver.
+ * driver. The runtime's server-side statement_timeout safety net (ADR-036)
+ * is explicitly disabled here: migrations may legitimately run long DDL, and
+ * the deadline must never kill one mid-flight.
  */
 export default defineConfig({
-  ...buildMikroOrmOptions<PostgreSqlDriver>({ clientUrl: _env.DATABASE_URL }),
+  ...buildMikroOrmOptions<PostgreSqlDriver>({
+    clientUrl: _env.DATABASE_URL,
+    poolMax: _env.DATABASE_POOL_MAX,
+    // 0 → pg omits statement_timeout from the startup packet (server
+    // default, off). See mikro-orm.options.ts.
+    statementTimeoutMs: 0,
+  }),
   ...CLI_ENTITY_PATHS,
 });

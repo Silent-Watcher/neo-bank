@@ -3,7 +3,7 @@
 Primary architectural and technical context for development sessions. Read
 after the root `AGENTS.md`; use it to decide which further documentation or
 source files a task needs. Detailed documents stay independent — see the
-Documentation Index. Last verified: 2026-11-16.
+Documentation Index. Last verified: 2026-11-17.
 
 ## Repository Overview
 
@@ -62,7 +62,10 @@ Core contracts:
   bilingual.
 - **Redis:** global `RedisModule` in `src/shared/redis/` (ADR-012/013) — one
   ioredis 6 client, `RedisService` abstraction, non-blocking startup,
-  `degraded` health (HTTP 200) when unreachable. All keys via `buildRedisKey`
+  `degraded` health (HTTP 200) when unreachable; every command is bounded by
+  `commandTimeout`, a black-holed socket is destroyed at `socketTimeout`
+  (bounded reconnect, ADR-037), and health probes are coalesced through
+  `RedisHealthProbe` (ADR-037). All keys via `buildRedisKey`
   from a co-located keys file; root namespace `neo-bank`, pattern
   `<app>:<module>:<feature>:<resource>:<identifier>`. Multi-step Redis flows
   use atomic Lua scripts. Consumers: enrollments OTP storage, global rate
@@ -76,11 +79,12 @@ Core contracts:
   register per feature with `MikroOrmModule.forFeature`, schema changes go
   only through migrations (`db:migration:*`). An unreachable PostgreSQL
   after a successful boot degrades `/health` (HTTP 200) and fails
-  `/health/ready` (503). After boot, a pool-level lifecycle logger (ADR-034)
-  logs new physical connections and pool errors. The shared `BaseEntity`
-  (ADR-029) and the UTC-first timestamp policy (ADR-030) are in place, the
-  first feature entity `Enrollment` (table `enrollments`) exists, and
-  migrations are immutable and migration-reviewer-gated (ADR-033); no
+  `/health/ready` (503) through a bounded, coalesced health probe with an
+  explicitly configured pool (ADR-036). After boot, a pool-level lifecycle
+  logger (ADR-034) logs new physical connections and pool errors. The shared
+  `BaseEntity` (ADR-029) and the UTC-first timestamp policy (ADR-030) are in
+  place, the first feature entity `Enrollment` (table `enrollments`) exists,
+  and migrations are immutable and migration-reviewer-gated (ADR-033); no
   feature flow persists rows yet.
 - **Logging:** Pino only (ADR-008/009); JSON in production, pretty in dev,
   `LOG_PRETTY` override; never `console.log`, never log OTPs/secrets.
@@ -98,8 +102,10 @@ Core contracts:
   database integration (`pnpm test:db`) — apps/api workspace only.
 - Real-Redis and real-PostgreSQL tests use Testcontainers
   (`apps/api/test/testcontainers.ts`) — the Redis and database integration
-  tiers run an isolated container (`redis:8.2-alpine` / `postgres:17.6-alpine`)
-  per test file; the e2e tier shares one Redis and one PostgreSQL container
+  tiers run an isolated container (`redis:8.2-alpine` / `postgres:17.6-alpine`,
+  plus Toxiproxy for the database and Redis black-hole fault-injection
+  specs) per test file; the
+  e2e tier shares one Redis and one PostgreSQL container
   per test run via the Vitest globalSetup
   (`apps/api/test/e2e.global-setup.ts`, ADR-025). Dynamic ports,
   no manual Compose for any tier.
@@ -155,7 +161,7 @@ Core contracts:
 | `docs/api.md`                               | Human-readable API reference (nestbruno route inventory + source-verified contracts) |
 | `docs/current-state.md`                     | Feature/state snapshot (verified per feature)                                        |
 | `docs/utc-datetime.md`                      | UTC-first date/time storage policy and usage guide (ADR-030)                         |
-| `DECISIONS.md`                              | ADR-001…ADR-034, all Accepted                                                        |
+| `DECISIONS.md`                              | ADR-001…ADR-037, all Accepted                                                        |
 | `docs/docker.md`                            | Docker stacks: setup, env files, commands                                            |
 | `docs/observability/README.md`              | Monitoring stack operations                                                          |
 | `docs/observability/manual-testing.md`      | Reproducible monitoring verification scenarios                                       |

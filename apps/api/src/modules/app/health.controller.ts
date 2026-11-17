@@ -1,6 +1,7 @@
 import {
   Controller,
   Get,
+  Header,
   HttpStatus,
   ServiceUnavailableException,
   VERSION_NEUTRAL,
@@ -48,6 +49,10 @@ const terminusEnvelopeSchema = successEnvelopeSchema({
 // evaluate bottom-up, and Terminus's own @HealthCheck() registers a bare
 // (unwrapped) health schema — ours must apply after it so the documented
 // contract is the actual envelope-wrapped response.
+// Health state must never be cached by proxies or clients: a cached
+// ok/degraded snapshot would misroute traffic during an outage. The probe
+// result cache is process-local (ADR-036) and unrelated to HTTP caching —
+// each route below sends Cache-Control: no-store.
 @ApiTags('health')
 @SkipThrottle({ short: true, long: true })
 @SkipMemoryProtection()
@@ -75,6 +80,7 @@ export class HealthController {
     description: 'A critical indicator failed (overall status error), served as Problem Details.',
     schema: problemDetailsSchema,
   })
+  @Header('Cache-Control', 'no-store')
   @HealthCheck()
   @Get()
   check() {
@@ -104,6 +110,7 @@ export class HealthController {
       'At least one readiness indicator is down (memory protection active or Redis unreachable), served as Problem Details.',
     schema: problemDetailsSchema,
   })
+  @Header('Cache-Control', 'no-store')
   @HealthCheck()
   @Get('ready')
   async checkReady() {

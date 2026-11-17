@@ -7,7 +7,10 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { NestNodeApplication } from '@nestjs/platform-node';
 
 import { BaseEntity } from '#database/base.entity.js';
-import { buildRuntimeMikroOrmOptions } from '#database/mikro-orm.options.js';
+import {
+  buildRuntimeMikroOrmOptions,
+  DATABASE_POOL_MAX_DEFAULT,
+} from '#database/mikro-orm.options.js';
 import { Enrollment } from '#modules/enrollments/entities/enrollment.entity.js';
 import { runWithActorContext } from '#src/shared/actor-context/actor-context.js';
 
@@ -54,7 +57,7 @@ function createProbeApp(): Promise<NestNodeApplication> {
       // explicit fixture list would be silently ignored.
       builder.overrideProvider(MIKRO_ORM_MODULE_OPTIONS).useValue({
         driver: PostgreSqlDriver,
-        ...buildRuntimeMikroOrmOptions(databaseUrl),
+        ...buildRuntimeMikroOrmOptions(databaseUrl, DATABASE_POOL_MAX_DEFAULT),
         entities: [BaseEntity, TestArticle, Enrollment],
         autoLoadEntities: false,
       });

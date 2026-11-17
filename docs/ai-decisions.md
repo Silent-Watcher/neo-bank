@@ -317,3 +317,59 @@ requires developer approval before any ADR is created.
 - **Impact:** `apps/api/src/shared/database/migrations/Migration20261116181139.ts` only.
 - **Reversibility:** Trivial.
 - **ADR Recommendation:** No — interpretation of an existing policy for a whitespace-only case; recorded here and in the prompt record. If a future migration ever needs a semantic post-generation change, the immutability rule governs and a new forward migration is required.
+
+### 19. Minimal coverage exclude list under Vitest's replace-semantics (test orchestration task _052)
+
+- **Context:** Vitest 5's `coverage.exclude` **replaces** the built-in default exclude list (it does not merge), so any explicit exclude must re-cover everything that matters. The scope is bounded by `coverage.include: ['src/**']` (which is also the Vitest 5 mechanism for counting untested files, `coverage.all` no longer existing), so only `src/` content can ever reach the report.
+- **Decision:** The exclude list is exactly `['src/**/*.spec.ts', 'src/**/migrations/**']` — the unit specs and the generated migrations — with no speculative entries (e.g. `**/*.d.ts`, fixture globs), and reporter list exactly `['text', 'html', 'lcov']` per the task requirements, replacing Vitest's default `['text', 'html', 'clover', 'json']`.
+- **Reasoning:** `include` bounds the universe, so the two excludes are the only known non-source content under `src/` (verified: `src/` contains no `.d.ts` or fixture directories); generated migrations are machine output per the governance rules and measuring them would flatter nothing; speculative excludes would silently hide future real source from the report — the opposite failure mode is worse than an extra table row.
+- **Alternatives:** spreading a copy of Vitest's full default exclude list (fragile against upstream changes, unnecessary under `include` — rejected); excluding only migrations and keeping spec coverage rows (noise, standard practice excludes specs — rejected); `coverage.enabled: true` in config (would tax every plain unit run; the CLI `--coverage` flag on `test:coverage` enables it on demand — rejected).
+- **Trade-offs:** a new non-`src` source root (e.g. `packages/` shared code imported by tests) would need `include` widened — the config comment points at the mechanism; no thresholds exist yet, so the honest ≈75% baseline is the gate, not the excludes.
+- **Impact:** `apps/api/vitest.config.ts` (coverage block), `prompts/_052-*.md` (baseline numbers), ADR-035 (unit-tier coverage decision).
+- **Reversibility:** Trivial — one config object.
+- **ADR Recommendation:** No — configuration detail inside the accepted ADR-035 scope; the untested-file-counting mechanism (`include`) is recorded here and in the prompt record because it replaces the removed `coverage.all` option.
+
+### 22. The health-probe deadline timer is deliberately NOT unref'd (health hardening task _053)
+
+- **Context:** The established pattern in this codebase unref's auxiliary timers so a termination signal is not held hostage (e.g. `DatabaseConnectionInitializer`'s retry backoff, `MemoryProtectionService`'s sample interval). The health probe's 3 s deadline timer is the only thing that guarantees a hung probe's client is released; graceful shutdown closes the ORM pool (`pool.end()` waits for every checked-out client to be released).
+- **Decision:** Keep the probe deadline timer ref'd (default `setTimeout` behavior) even though an unref'd timer would let the process exit sooner during an in-flight probe.
+- **Reasoning:** With an unref'd deadline timer and no other pending work, a shutdown racing a black-holed probe would exit before the timer fires, the borrowed client would never be released, and `pool.end()` inside the ORM's `onApplicationShutdown` would hang indefinitely — the unref would trade a bounded 3 s shutdown drain for an unbounded one. The ref'd timer makes the worst-case shutdown drain exactly the probe deadline (verified: deadline → errored release → pg-pool eviction → pool end completes).
+- **Alternatives:** unref + a dedicated shutdown hook that force-releases in-flight probe clients (a second shutdown mechanism for a problem the ref'd timer already solves — rejected as redundant lifecycle surface); no deadline at all (the pre-fix behavior — rejected, it is the vulnerability).
+- **Trade-offs:** a pending probe adds up to 3 s to shutdown latency in the pathological case; normal probes settle in milliseconds.
+- **Impact:** `apps/api/src/shared/database/database.probe.ts` only.
+- **Reversibility:** Trivial.
+- **ADR Recommendation:** No — an implementation detail of the accepted ADR-036 reclaim mechanism; recorded because it deliberately diverges from the codebase's unref convention.
+
+### 23. Schema-local blank-value normalization for DATABASE_POOL_MAX (health hardening task _053)
+
+- **Context:** `validateEnv` passes raw strings into the Zod schemas, so `DATABASE_POOL_MAX=` reaches the schema as `''`; the documented contract (`.env.example`: "Leave empty to use the default") and the repo convention stated in `validation-helpers.ts` ("blank values are treated as unset") require it to behave like an absent variable, while `z.coerce.number('')` → `0` fails `.positive()`.
+- **Decision:** Normalize inside the `DATABASE_POOL_MAX` schema itself — `z.preprocess` mapping a trimmed-empty string to `undefined` before `positiveSafeInteger(...).default(10)` — rather than stripping empty strings centrally for all variables in `validateEnv`.
+- **Reasoning:** The central option would silently change the semantics of every existing schema (mandatory variables like `DATABASE_URL` and `REDIS_PASSWORD` would turn "explicitly empty" into "absent", flipping validation errors into default/credential mismatches) for a need one variable has; the local preprocess preserves the convention where it is actually documented. A first implementation used a `z.string().transform(...).pipe(...default)` chain and broke the whole env-validation layer at runtime — `z.string()` rejects `undefined` input before the default ever applies — which is why the preprocess form (unknown input) is the recorded shape.
+- **Alternatives:** central blank-stripping in `validateEnv` (cross-cutting semantic change — rejected); dropping the "leave empty" documentation from `.env.example` instead (would contradict the repo convention and degrade the operator experience — rejected).
+- **Trade-offs:** the blank-means-unset convention is enforced per-schema rather than globally, so future optional numeric variables must repeat the preprocess (the schema comment points at the convention).
+- **Impact:** `apps/api/src/shared/config/env/schema/db.env.ts` (+spec cases), `.env.example` documentation.
+- **Reversibility:** Trivial.
+- **ADR Recommendation:** No — configuration detail within ADR-036's accepted scope; recorded because the first attempt revealed a non-obvious Zod pitfall (string-headed chains reject `undefined` before `.default`) that the next optional numeric variable will hit.
+
+### 24. Toxiproxy black-hole assertions without status mocking or private internals (Redis reliability task _054)
+
+- **Context:** The master prompt forbids substituting a plain Redis shutdown for the black-hole scenario, forbids relying on private ioredis internals, and requires proving the full recovery chain (bounded rejection → socket destruction → fast-fail → recovery) against a real server. ioredis exposes no public API to inject faults or observe its internal command queue.
+- **Decision:** The redis-tier fault-injection spec routes a real client through the Toxiproxy proxy and asserts exclusively on public surface: command promise outcomes and `client.status` polling (a plain interval helper, not event listeners), with the fault expressed as `timeout` toxics on both stream directions. The fast-fail assertion deliberately exploits a _verified_ protocol property — with data black-holed, the AUTH/ready-check handshake can never complete, so the client can never reach `ready` while the fault is active, making the "commands fail immediately while not ready" assertion deterministic without mocking.
+- **Reasoning:** Status polling avoids listener side effects inside assertions; handshake-impossibility gives the fast-fail case a deterministic precondition instead of a timing race; private-structure inspection (`commandQueue`) was rejected because the master prompt rules it out and behavioral assertions (bounded rejection, recovery, at-most-once INCR) capture the guarantee that matters.
+- **Alternatives:** faking `client.status` via property assignment (tests a mock, not the lifecycle — rejected); asserting `waitingCount`/private fields (forbidden surface — rejected); only testing `commandTimeout` rejection without the socket-destruction chain (leaves the ADR-037 core mechanism unproven — rejected).
+- **Trade-offs:** the spec depends on Toxiproxy semantics (`timeout` toxic = silent data stop) rather than a NIC-level fault; test deadlines (command 1500 ms / socket 2500 ms) are shorter than production (5000/6000) but preserve the ordering being proven.
+- **Impact:** `apps/api/test/redis-black-hole.redis-spec.ts`, `apps/api/test/testcontainers.ts` (TestRedis network options).
+- **Reversibility:** Trivial.
+- **ADR Recommendation:** No — test strategy inside ADR-037's accepted scope; recorded for the fault-injection reasoning that future network-failure tests will reuse.
+
+### 25. REDIS_SOCKET_TIMEOUT_MS ships with the blank-tolerant preprocess pattern from day one (Redis reliability task _054)
+
+- **Context:** The new `REDIS_SOCKET_TIMEOUT_MS` env variable was added to `redis.env.ts`, whose existing numeric variables still carry the `positiveSafeInteger(...).default(...)` blank-value trap deferred as CR-05 (an empty `.env.example` entry coerces `''` → `0` → startup failure).
+- **Decision:** The new variable uses the `z.preprocess` blank-to-unset pattern from the start and ships as an empty `.env.example` entry with a documented default, even though the file's siblings remain on the broken pattern.
+- **Reasoning:** Adding a sixth instance of a known defect class (documented in `docs/ai-decisions.md` #23 and the deferred registry) would be a fresh mistake the review rules exist to prevent; but mass-fixing the five siblings remains outside this task's approved scope, so only the new variable is correct-by-construction.
+- **Alternatives:** fixing all siblings now (unapproved scope expansion — rejected; stays deferred as CR-05); shipping the new variable on the broken pattern for file consistency (deliberately introducing a startup-failure trap — rejected).
+- **Trade-offs:** `redis.env.ts` temporarily mixes two patterns until the CR-05 follow-up normalizes the siblings.
+- **Impact:** `apps/api/src/shared/config/env/schema/redis.env.ts`, `.env.example`.
+- **Reversibility:** Trivial.
+- **ADR Recommendation:** No — application of the documented Zod pitfall lesson within ADR-037's scope.
+- **Update (2026-11-17, same day):** the code reviewer flagged (Wave 24 CR-01) that the _claim_ of the repo-wide convention made the sibling inconsistency worse, so the Redis portion of this decision was revised within the task: a shared `positiveIntegerEnv(field, default)` helper now implements the blank-tolerant pattern for all five Redis numeric fields (Wave 24 CR-01 resolution), and `BODY_LIMIT` remains the only deferred sibling (see `DEFERRED.md`).

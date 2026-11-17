@@ -10,7 +10,10 @@ import { NodeAdapter } from '@nestjs/platform-node';
 import { AppModule } from '#modules/app/app.module.js';
 import { DatabaseConnectionInitializer } from '#database/database.connect.js';
 import type { DatabaseConnectOptions } from '#database/database.connect.js';
-import { buildRuntimeMikroOrmOptions } from '#database/mikro-orm.options.js';
+import {
+  buildRuntimeMikroOrmOptions,
+  DATABASE_POOL_MAX_DEFAULT,
+} from '#database/mikro-orm.options.js';
 
 import { createTestApp } from './create-test-app.js';
 import { startTestPostgres, type TestPostgres } from './testcontainers.js';
@@ -43,7 +46,7 @@ function overrideDatabaseUrl(builder: TestingModuleBuilder, url: string): void {
     // along exactly as the runtime module supplies it (without it
     // MikroORM.init cannot build the driver).
     driver: PostgreSqlDriver,
-    ...buildRuntimeMikroOrmOptions(url),
+    ...buildRuntimeMikroOrmOptions(url, DATABASE_POOL_MAX_DEFAULT),
   });
 }
 

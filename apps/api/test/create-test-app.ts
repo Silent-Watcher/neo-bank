@@ -13,7 +13,10 @@ import { AppModule } from '#modules/app/app.module.js';
 import { REDIS_CLIENT } from '#redis/redis.constants.js';
 import { createRedisClient } from '#redis/redis.provider.js';
 import { DatabaseConnectionInitializer } from '#database/database.connect.js';
-import { buildRuntimeMikroOrmOptions } from '#database/mikro-orm.options.js';
+import {
+  buildRuntimeMikroOrmOptions,
+  DATABASE_POOL_MAX_DEFAULT,
+} from '#database/mikro-orm.options.js';
 import serverConfig from '#config/server.config.js';
 import { registerRequestIdLifecycle } from '#http/request-id.lifecycle.js';
 import { registerRootNotFoundFallback } from '#http/not-found.fallback.js';
@@ -159,7 +162,7 @@ export async function createE2eTestApp(
       // exactly as the runtime module supplies it.
       builder.overrideProvider(MIKRO_ORM_MODULE_OPTIONS).useValue({
         driver: PostgreSqlDriver,
-        ...buildRuntimeMikroOrmOptions(databaseUrl),
+        ...buildRuntimeMikroOrmOptions(databaseUrl, DATABASE_POOL_MAX_DEFAULT),
       });
       // Spec-provided overrides keep precedence (applied after this one).
       options?.configureModule?.(builder);

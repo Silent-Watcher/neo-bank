@@ -89,3 +89,37 @@ original task requirements and must be addressed in future work.
 - Do not delete items — mark them **Done** with a reference to the ADR/commit.
 - If a deferred item is explicitly rejected, mark **Won't Do** with rationale.
 - Review this file at the start of each new feature to see if any deferred work is now relevant.
+
+---
+
+## Mandated by Database Health-Probe Hardening (_053, ADR-036)
+
+Per the "Subagent Findings: Persistence, Derived Rules, and Test Integrity" rules (root AGENTS.md): the following subagent findings were dispositioned in `docs/judge-findings.md` (Wave 23) but are out of scope for _053 — recorded here as follow-up work.
+
+### 1. Blank-value trap in sibling `positiveSafeInteger` env variables (CR-05)
+
+**Origin**: code-reviewer finding CR-05 (Low, 2026-11-17) — `docs/judge-findings.md` Wave 23 iteration 2.
+**Status**: **Partially Done** (2026-11-17) — the Redis siblings (`REDIS_CONNECT_TIMEOUT_MS`, `REDIS_COMMAND_TIMEOUT_MS`, `REDIS_MAX_RETRIES_PER_REQUEST`, `REDIS_SHUTDOWN_TIMEOUT_MS`) were fixed during _054 (Wave 24 CR-01) via the shared `positiveIntegerEnv(field, default)` helper in `validation-helpers.ts`, with blank/whitespace spec coverage. **Still open**: `BODY_LIMIT` (`server.env.ts`) — same defect class, separate untouched file; apply the same helper plus its spec case.
+**Requirement**: Apply the blank-to-unset helper (see `validation-helpers.ts` `positiveIntegerEnv` and `docs/ai-decisions.md` #23/#25 for the Zod pitfall) to `BODY_LIMIT` and add the matching spec cases. An operator copying `.env.example` verbatim still cannot boot the API with that entry left empty.
+**Rationale**: one documented-contract violation remains for the last sibling.
+
+### 2. Redis health-probe coalescing asymmetry (SEC-INFO-01)
+
+**Origin**: code-security-analyzer SEC-INFO-01 (CWE-400, informational, 2026-11-17) — Wave 23 security review.
+**Status**: **Done** (2026-11-17) — implemented by the Redis reliability task (_054) as `RedisHealthProbe` (`apps/api/src/shared/redis/redis.probe.ts`, ADR-037): single-flight over PING with a 5 s success / 3 s failure process-local cache and a 3 s probe deadline; verified by `redis.probe.spec.ts` and the Toxiproxy black-hole spec (`redis-black-hole.redis-spec.ts`).
+**Requirement**: ~~give the Redis health indicator the same bounded single-flight + TTL-cache treatment the database probe received~~ — done.
+**Rationale**: `/health` floods amplified into Redis PINGs at request rate while the DB side was capped.
+
+### 3. Upper sanity bound for timeout/capacity environment variables (SEC-INFO-04, extended)
+
+**Origin**: code-security-analyzer SEC-INFO-04 (CWE-20, informational, 2026-11-17) — Wave 23 security review; extended by the Wave 24 security review (SEC-04, 2026-11-17) to the Redis timeout variables.
+**Status**: Open — operator-trusted config; caps are schema-behavior decisions requiring approval.
+**Requirement**: evaluate adding generous named upper bounds (or cross-field warnings) so absurd well-formed values fail validation at startup: `DATABASE_POOL_MAX` (exhausts PostgreSQL `max_connections`), and `REDIS_SOCKET_TIMEOUT_MS` / `REDIS_COMMAND_TIMEOUT_MS` / `REDIS_CONNECT_TIMEOUT_MS` (an enormous socket timeout silently disables the ADR-037 black-hole recovery bound — per-command failures stay bounded, but socket destruction and reconnect recovery delay to keepalive scale).
+**Rationale**: fail-fast robustness; the sizing/relationship guidance in the env files and ADR-036/ADR-037 is documentation, not enforcement.
+
+### 4. Restrict `/health` reachability at the edge (SEC-INFO-03)
+
+**Origin**: code-security-analyzer SEC-INFO-03 (CWE-200, informational, 2026-11-17) — Wave 23 security review.
+**Status**: Open — deployment-level concern; nothing to change in application code.
+**Requirement**: when production ingress exists, ensure firewall/ingress rules restrict `/health` and `/health/ready` to the orchestration network — subsystem-level health status and memory-protection events are exposed unauthenticated by design.
+**Rationale**: the application layer intentionally serves orchestrator probes; network placement is the only real control.

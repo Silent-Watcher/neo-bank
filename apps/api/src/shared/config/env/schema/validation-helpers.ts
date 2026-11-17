@@ -25,6 +25,28 @@ export function positiveSafeInteger(field: string) {
 }
 
 /**
+ * Creates a Zod schema for an optional positive safe integer environment
+ * variable with a documented default, where a blank string is treated as
+ * unset (the repo-wide convention: an empty entry in an env file behaves
+ * exactly like a missing variable).
+ *
+ * The blank normalization must run before the numeric coercion — raw values
+ * arrive from `process.env`, and a `z.string()`-headed chain would reject an
+ * absent variable before `.default()` could apply, while a bare
+ * `positiveSafeInteger` would coerce `''` to `0` and fail `.positive()`.
+ *
+ * @param field - The field name used in error messages
+ * @param defaultValue - Applied when the variable is absent or blank
+ * @returns A Zod schema producing a positive safe integer
+ */
+export function positiveIntegerEnv(field: string, defaultValue: number) {
+  return z.preprocess(
+    (value) => (typeof value === 'string' && value.trim() === '' ? undefined : value),
+    positiveSafeInteger(field).default(defaultValue),
+  );
+}
+
+/**
  * Creates a Zod schema for an optional http(s) URL environment variable used
  * for startup-log visibility (e.g. Redis Insight, MockServer addresses).
  *
