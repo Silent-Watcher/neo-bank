@@ -488,6 +488,7 @@ describe('RedisService.issueOtp + resolveOtpVerification lockout behavior (real 
       tls: false,
       connectTimeoutMs: 100,
       commandTimeoutMs: 100,
+      socketTimeoutMs: 100,
       maxRetriesPerRequest: 1,
       shutdownTimeoutMs: 100,
     });

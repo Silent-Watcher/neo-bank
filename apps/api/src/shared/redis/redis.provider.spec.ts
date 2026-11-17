@@ -12,6 +12,7 @@ vi.mock('#config/env/env.config.js', () => ({
     REDIS_TLS: false,
     REDIS_CONNECT_TIMEOUT_MS: 10000,
     REDIS_COMMAND_TIMEOUT_MS: 5000,
+    REDIS_SOCKET_TIMEOUT_MS: 6000,
     REDIS_MAX_RETRIES_PER_REQUEST: 3,
     REDIS_SHUTDOWN_TIMEOUT_MS: 2000,
   },
@@ -30,6 +31,7 @@ function createConfig(overrides: Partial<RedisConfig> = {}): RedisConfig {
     tls: false,
     connectTimeoutMs: 10000,
     commandTimeoutMs: 5000,
+    socketTimeoutMs: 6000,
     maxRetriesPerRequest: 3,
     shutdownTimeoutMs: 2000,
     ...overrides,
@@ -55,6 +57,7 @@ describe('createRedisClient', () => {
       createConfig({
         commandTimeoutMs: 1234,
         connectTimeoutMs: 4321,
+        socketTimeoutMs: 2345,
         maxRetriesPerRequest: 7,
       }),
     );
@@ -62,6 +65,7 @@ describe('createRedisClient', () => {
     // Assert
     expect(client.options?.commandTimeout).toBe(1234);
     expect(client.options?.connectTimeout).toBe(4321);
+    expect(client.options?.socketTimeout).toBe(2345);
     expect(client.options?.maxRetriesPerRequest).toBe(7);
     client.disconnect();
   });

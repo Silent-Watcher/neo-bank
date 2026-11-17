@@ -24,6 +24,15 @@ export function buildRedisOptions(config: RedisConfig): RedisOptions {
     lazyConnect: true,
     connectTimeout: config.connectTimeoutMs,
     commandTimeout: config.commandTimeoutMs,
+    // Destroys the socket after this much received-data silence while
+    // commands are in flight — the only mechanism that proactively ends a
+    // black-holed established connection (commandTimeout rejects the
+    // caller's promise but leaves the socket "ready" and the in-flight
+    // command queued). Deliberately above commandTimeout so per-command
+    // failures surface first; the destruction triggers the bounded
+    // reconnect cycle below (ADR-037). Idle connections are unaffected —
+    // dead peers there are detected by TCP keepalive in minutes.
+    socketTimeout: config.socketTimeoutMs,
     maxRetriesPerRequest: config.maxRetriesPerRequest,
     // Commands issued while the client is not connected fail immediately
     // instead of queueing unboundedly, so callers get a predictable fast
@@ -32,6 +41,14 @@ export function buildRedisOptions(config: RedisConfig): RedisOptions {
     // Commands interrupted by a disconnect are not replayed automatically:
     // replaying non-idempotent commands (e.g. INCR) could double-apply them.
     autoResendUnfulfilledCommands: false,
+    // The ready check (INFO after the handshake) is the library default;
+    // explicit so nothing depends on undocumented defaults (ADR-037).
+    enableReadyCheck: true,
+    // TCP keepalive with a 30 s initial delay — ioredis' default, set
+    // explicitly to document it: it detects dead peers on idle connections
+    // only after OS-scale delays (minutes on Linux defaults) and cannot
+    // detect a black-holed in-flight command — socketTimeout covers that.
+    keepAlive: 30000,
     retryStrategy: redisRetryStrategy,
     // Empty credentials (e.g. local Redis without AUTH) are omitted so no
     // empty AUTH attempt is sent to the server.

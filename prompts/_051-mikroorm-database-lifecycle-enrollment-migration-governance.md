@@ -23,7 +23,7 @@ plan for approval before any code change. Then:
    redeclaring inherited fields; sole own property `phoneNumber` (column
    `phone_number`); table `enrollments`; no extra constraints, no relations.
 4. **Strict entity registration** — `MikroOrmModule.forFeature([Enrollment])`
-   only; no unrelated registrations.
+   only; no unrelated registrations.w
 5. **Migrations** — generate through the existing MikroORM workflow; every
    column snake_case; verify `up()`/`down()`; no BaseEntity table, no foreign
    keys, no unrelated changes; never execute against uncontrolled databases.

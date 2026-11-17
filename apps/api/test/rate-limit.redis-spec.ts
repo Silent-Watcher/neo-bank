@@ -540,6 +540,7 @@ describe('Global rate limiting (e2e, real Redis via Testcontainers)', () => {
         tls: false,
         connectTimeoutMs: 500,
         commandTimeoutMs: 500,
+        socketTimeoutMs: 500,
         maxRetriesPerRequest: 1,
         shutdownTimeoutMs: 500,
       });

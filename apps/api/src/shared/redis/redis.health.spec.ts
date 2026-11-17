@@ -1,7 +1,6 @@
 import { HealthIndicatorService } from '@nestjs/terminus';
 import { Test } from '@nestjs/testing';
 import { I18nService } from '@nestjs/i18n';
-import { Redis } from 'ioredis';
 import { describe, expect, it, vi } from 'vitest';
 
 // Unit tests must not depend on ambient environment state, so the env
@@ -15,22 +14,26 @@ vi.mock('#config/env/env.config.js', () => ({
     REDIS_TLS: false,
     REDIS_CONNECT_TIMEOUT_MS: 10000,
     REDIS_COMMAND_TIMEOUT_MS: 5000,
+    REDIS_SOCKET_TIMEOUT_MS: 6000,
     REDIS_MAX_RETRIES_PER_REQUEST: 3,
     REDIS_SHUTDOWN_TIMEOUT_MS: 2000,
   },
 }));
 
-import { REDIS_CLIENT } from './redis.constants.js';
 import { RedisHealthIndicator } from './redis.health.js';
-import { RedisService } from './redis.service.js';
+import { RedisHealthProbe } from './redis.probe.js';
+import type { RedisProbeOutcome } from './redis.probe.js';
 
-async function createIndicator(ping: () => Promise<void>) {
+function probeStub(outcome: RedisProbeOutcome) {
+  return { probe: vi.fn<() => Promise<RedisProbeOutcome>>(async () => outcome) };
+}
+
+async function createIndicator(probe: ReturnType<typeof probeStub>) {
   const module = await Test.createTestingModule({
     providers: [
       RedisHealthIndicator,
       HealthIndicatorService,
-      { provide: RedisService, useValue: { ping } },
-      { provide: REDIS_CLIENT, useValue: new Redis({ lazyConnect: true }) },
+      { provide: RedisHealthProbe, useValue: probe },
       {
         // Catalog-consistency tests guarantee the real message; the stub
         // keeps this spec independent of the loader.
@@ -48,23 +51,24 @@ async function createIndicator(ping: () => Promise<void>) {
 }
 
 describe('RedisHealthIndicator', () => {
-  it('reports up when PING succeeds', async () => {
+  it('reports up when the probe succeeds', async () => {
     // Arrange
-    const indicator = await createIndicator(vi.fn().mockResolvedValue(undefined));
+    const probe = probeStub({ ok: true });
+    const indicator = await createIndicator(probe);
 
     // Act
     const result = await indicator.check();
 
     // Assert
     expect(result).toEqual({ redis: { status: 'up' } });
+    expect(probe.probe).toHaveBeenCalledTimes(1);
   });
 
-  it('reports degraded — not down — when PING fails, keeping the check non-fatal', async () => {
+  it('reports degraded — not down — when the probe fails, keeping the check non-fatal', async () => {
     // Arrange — the raw driver error must stay server-side (SEC-01 parity):
-    // the unauthenticated health response carries only the generic message.
-    const indicator = await createIndicator(
-      vi.fn().mockRejectedValue(new Error('connect ECONNREFUSED 127.0.0.1:6379')),
-    );
+    // the unauthenticated health response carries only the generic message;
+    // the failure is logged by the probe engine, never leaked to the response.
+    const indicator = await createIndicator(probeStub({ ok: false, reason: 'Command timed out' }));
 
     // Act
     const result = await indicator.check();
@@ -77,23 +81,12 @@ describe('RedisHealthIndicator', () => {
       },
     });
   });
-
-  it('degrades with a generic message for non-error rejections', async () => {
-    // Arrange
-    const indicator = await createIndicator(vi.fn().mockRejectedValue('boom'));
-
-    // Act
-    const result = await indicator.check();
-
-    // Assert
-    expect(result).toEqual({ redis: { status: 'degraded', message: 'Redis is unavailable.' } });
-  });
 });
 
 describe('RedisHealthIndicator.checkReady (strict readiness variant)', () => {
-  it('reports up when PING succeeds', async () => {
+  it('reports up when the probe succeeds', async () => {
     // Arrange
-    const indicator = await createIndicator(vi.fn().mockResolvedValue(undefined));
+    const indicator = await createIndicator(probeStub({ ok: true }));
 
     // Act
     const result = await indicator.checkReady();
@@ -102,10 +95,10 @@ describe('RedisHealthIndicator.checkReady (strict readiness variant)', () => {
     expect(result).toEqual({ redis: { status: 'up' } });
   });
 
-  it('reports down — not degraded — when PING fails, failing readiness with 503', async () => {
+  it('reports down — not degraded — when the probe fails, failing readiness with 503', async () => {
     // Arrange
     const indicator = await createIndicator(
-      vi.fn().mockRejectedValue(new Error('connect ECONNREFUSED 127.0.0.1:6379')),
+      probeStub({ ok: false, reason: 'connect ECONNREFUSED 127.0.0.1:6379' }),
     );
 
     // Act
@@ -118,16 +111,5 @@ describe('RedisHealthIndicator.checkReady (strict readiness variant)', () => {
         message: 'Redis is unavailable.',
       },
     });
-  });
-
-  it('reports down with the localized fallback for non-error rejections', async () => {
-    // Arrange
-    const indicator = await createIndicator(vi.fn().mockRejectedValue('boom'));
-
-    // Act
-    const result = await indicator.checkReady();
-
-    // Assert
-    expect(result).toEqual({ redis: { status: 'down', message: 'Redis is unavailable.' } });
   });
 });

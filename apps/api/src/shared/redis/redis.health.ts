@@ -1,8 +1,8 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { HealthIndicatorService, type HealthIndicatorResult } from '@nestjs/terminus';
 import { I18nService } from '@nestjs/i18n';
 
-import { RedisService } from './redis.service.js';
+import { RedisHealthProbe } from './redis.probe.js';
 
 /**
  * Terminus health indicator for Redis. Redis is an optional dependency:
@@ -10,8 +10,11 @@ import { RedisService } from './redis.service.js';
  * reports `degraded` (overall health status becomes `degraded`, HTTP stays
  * 200) instead of `down` (which would fail the check with 503).
  *
- * The probe is a PING on the shared client — no extra connections — and is
- * bounded by the client's `commandTimeout`.
+ * The probe itself lives in {@link RedisHealthProbe} (ADR-037): bounded,
+ * single-flight, and briefly cached, so a request flood on the unauthenticated
+ * health endpoints cannot amplify into Redis commands. Failures — including
+ * the probe deadline — are logged by the probe engine once per probe, never
+ * per request; this indicator only maps the outcome.
  *
  * Client-facing responses carry only the generic, localized failure message:
  * `/health` is unauthenticated, and raw driver error text would let callers
@@ -21,24 +24,20 @@ import { RedisService } from './redis.service.js';
  */
 @Injectable()
 export class RedisHealthIndicator {
-  private readonly logger = new Logger(RedisHealthIndicator.name);
-
   constructor(
     private readonly healthIndicatorService: HealthIndicatorService,
-    private readonly redisService: RedisService,
+    private readonly redisProbe: RedisHealthProbe,
     private readonly i18n: I18nService,
   ) {}
 
   async check(): Promise<HealthIndicatorResult> {
     const indicator = this.healthIndicatorService.check('redis');
+    const result = await this.redisProbe.probe();
 
-    try {
-      await this.redisService.ping();
+    if (result.ok) {
       return indicator.up();
-    } catch (error) {
-      this.logger.warn({ err: error }, 'Redis health probe failed.');
-      return indicator.degraded({ message: this.i18n.t('health.redisUnavailable') });
     }
+    return indicator.degraded({ message: this.i18n.t('health.redisUnavailable') });
   }
 
   /**
@@ -50,13 +49,11 @@ export class RedisHealthIndicator {
    */
   async checkReady(): Promise<HealthIndicatorResult> {
     const indicator = this.healthIndicatorService.check('redis');
+    const result = await this.redisProbe.probe();
 
-    try {
-      await this.redisService.ping();
+    if (result.ok) {
       return indicator.up();
-    } catch (error) {
-      this.logger.warn({ err: error }, 'Redis health probe failed.');
-      return indicator.down({ message: this.i18n.t('health.redisUnavailable') });
     }
+    return indicator.down({ message: this.i18n.t('health.redisUnavailable') });
   }
 }

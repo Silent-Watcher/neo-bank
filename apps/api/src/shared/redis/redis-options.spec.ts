@@ -11,6 +11,7 @@ function createConfig(overrides: Record<string, unknown> = {}) {
     tls: false,
     connectTimeoutMs: 10000,
     commandTimeoutMs: 5000,
+    socketTimeoutMs: 6000,
     maxRetriesPerRequest: 3,
     shutdownTimeoutMs: 2000,
     ...overrides,
@@ -59,6 +60,9 @@ describe('buildRedisOptions', () => {
     expect(options.maxRetriesPerRequest).toBe(3);
     expect(options.connectTimeout).toBe(10000);
     expect(options.commandTimeout).toBe(5000);
+    expect(options.socketTimeout).toBe(6000);
+    expect(options.enableReadyCheck).toBe(true);
+    expect(options.keepAlive).toBe(30000);
   });
 
   it('omits empty credentials and applies the rest only when configured', () => {

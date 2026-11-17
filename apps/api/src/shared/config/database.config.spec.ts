@@ -33,8 +33,22 @@ describe('databaseConfig factory', () => {
     // Act
     const databaseConfig = await loadFactory();
 
+    // Assert — the pool capacity falls back to the schema default.
+    expect(databaseConfig()).toEqual({
+      url: 'postgres://localhost:5432/neo_bank',
+      poolMax: 10,
+    });
+  });
+
+  it('maps an explicit DATABASE_POOL_MAX into the typed config namespace', async () => {
+    // Arrange
+    stubDatabaseEnv({ DATABASE_POOL_MAX: '20' });
+
+    // Act
+    const databaseConfig = await loadFactory();
+
     // Assert
-    expect(databaseConfig()).toEqual({ url: 'postgres://localhost:5432/neo_bank' });
+    expect(databaseConfig().poolMax).toBe(20);
   });
 
   it('trims the URL before mapping it', async () => {

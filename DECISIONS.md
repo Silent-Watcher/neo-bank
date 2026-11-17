@@ -1288,7 +1288,7 @@ Adopt **MikroORM v7** with the `@mikro-orm/postgresql` driver as the only databa
 
 - **Data Mapper + Unit of Work + Identity Map:** entities are plain classes; change tracking happens in the unit of work and persistence is explicit (`em.flush()`, `em.transactional()`), giving reviewable transaction boundaries — the property a banking domain most needs.
 - **NestJS integration:** `forRootAsync` reads `DATABASE_URL` from the existing `ConfigService` (a new `DATABASE_CONFIG` namespace follows ADR-004; no parallel configuration mechanism). `registerRequestContext` middleware establishes a per-request forked `EntityManager` under the default singleton DI scope — the same consumption model as Redis (global module, injected services, no request-scoped cascade). Background/non-HTTP execution uses `@CreateRequestContext()` (from `@mikro-orm/decorators/legacy`) or an explicit `em.fork()`; this convention is documented for future features, and no background jobs are introduced by this decision.
-- **Startup semantics: bounded-retry initial connection at bootstrap** (amended 2026-11-14, see the Amendment below). The initial connection is established during bootstrap with a bounded retry; startup fails when the database cannot be reached. After a successful boot, an unreachable PostgreSQL degrades `/health` (HTTP 200) and fails `/health/ready` (503) via MikroORM's `checkConnection()`. The database URL itself is mandatory configuration and fails env validation at boot when missing or malformed (ADR-004).
+- **Startup semantics: bounded-retry initial connection at bootstrap** (amended 2026-11-14, see the Amendment below). The initial connection is established during bootstrap with a bounded retry; startup fails when the database cannot be reached. After a successful boot, an unreachable PostgreSQL degrades `/health` (HTTP 200) and fails `/health/ready` (503) through the bounded health probe (amended 2026-11-17, see the second Amendment below; originally MikroORM's `checkConnection()`, superseded by ADR-036). The database URL itself is mandatory configuration and fails env validation at boot when missing or malformed (ADR-004).
 - **Migrations:** `@mikro-orm/migrations` with a single shared options builder used by both the NestJS runtime factory and the standalone CLI configuration (`MIKRO_ORM_CLI_CONFIG`; the CLI cannot use Nest DI, so its config loads the URL through the existing env-validation layer and Node `--env-file`). Migration paths live inside the database module (`src/shared/database/migrations/`), with `path` (compiled) and `pathTs` (source) matching the build output. Migration creation and execution stay explicit developer commands (`db:migration:create`, `db:migration:up`, `db:migration:down`); `schema:update`, schema synchronization, and generated schema commands are never introduced, and generated migrations are reviewed before execution.
 - **Explicit v7 precedence behavior:** explicit configuration values have precedence over environment variables in MikroORM v7, so the URL is always passed explicitly by the caller (ConfigService in the runtime, the validated env in the CLI) — deployment overrides never silently alter explicitly configured values.
 - **Scope of this change:** infrastructure only — the database module, configuration, health indicator, and migration plumbing. No entities, repositories, or business logic; the first entity lands with the feature that needs it.
@@ -1335,6 +1335,10 @@ The non-blocking startup semantics from the original decision were amended durin
 - If all attempts fail, startup fails: the application never serves HTTP without its required database, and no infinite retry loop exists.
 - After a successful boot, runtime behavior is unchanged: a later PostgreSQL outage degrades `/health` (HTTP 200) and fails `/health/ready` (503); the pg pool re-establishes per-acquisition connections on its own.
 - The root "an external service must not become a mandatory startup dependency" rule remains in force for every other service — Redis keeps its non-blocking connect — with PostgreSQL as the explicit, architecture-required exception decided here.
+
+### Amendment 2026-11-17: Bounded, Coalesced Health Probe (ADR-036)
+
+The post-boot health contract (degraded `/health` HTTP 200, `/health/ready` 503) is unchanged, but the probe mechanism described above ("via MikroORM's `checkConnection()`") was superseded by [ADR-036](#adr-036-bounded-coalesced-database-health-probes-and-explicit-postgresql-pool-configuration): the `DatabaseHealthIndicator` no longer runs `orm.connect()` + `orm.checkConnection()` per request. It delegates to `DatabaseHealthProbe`, which borrows one client from the ORM's pg pool under a 3 s deadline with a 2 s server-enforced `statement_timeout`, guarantees exactly-once client release (an errored release evicts the client locally), and single-flights concurrent probes behind a short TTL cache. Pool sizing and deadlines are explicit (`DATABASE_POOL_MAX`, default 10; 5 s connect timeout; 10 s idle timeout; keepalive; 30 s runtime `statement_timeout`, off for CLI migrations). See ADR-036 for the rationale and the refuted alternatives.
 
 ### References
 
@@ -1798,3 +1802,182 @@ Unit tests cover: listener registration after connect, `'connect'`/`'error'` log
 - node-postgres Pool events documentation: https://node-postgres.com/apis/pool#events
 - DECISIONS.md ADR-027 (database integration ownership), ADR-008/009 (Pino logging)
 - `prompts/_051-mikroorm-database-lifecycle-enrollment-migration-governance.md`
+
+---
+
+## ADR-035: Centralized Monorepo Test Orchestration, Parallel Execution, and Vitest Coverage via Turborepo
+
+- **Status:** Accepted
+- **Date:** 2026-11-17
+
+### Context
+
+`apps/api` maintains four disjoint Vitest tiers (`test` unit, `test:e2e`, `test:redis`, `test:db` — isolated by file suffix, per-tier env files, and Testcontainers containers with dynamic ports), but the orchestration around them covers only part of that surface. The root `test` script runs `turbo test test:e2e`, so the Husky `pre-push` hook (`pnpm test`) gates pushes on unit + e2e only; the Redis and database integration tiers are manual-only. No coverage tooling exists anywhere in the monorepo (no provider installed, no configuration, no thresholds), and nothing records how a future application joins the test pipeline. Turborepo 2.11.10 is already the task runner for every other workflow (`dev`, `build`, `lint`, `typecheck`) and auto-discovers tasks from workspace `package.json` scripts.
+
+### Decision
+
+1. **Turborepo-native orchestration, no custom scripts.** Root commands stay thin `turbo` invocations: `test` = `turbo test test:e2e test:redis test:db` (all four tiers), plus root `test:e2e`, `test:redis`, `test:db`, and `test:coverage` pass-throughs. `turbo.json` declares `test:redis` and `test:db` tasks and marks every Docker-backed tier (`test:e2e`, `test:redis`, `test:db`) `cache: false` — their results depend on external mutable state (Docker daemon, containers), so cached passes would be meaningless. The `test` (unit) and `test:coverage` tasks stay cacheable (deterministic over turbo-hashed inputs); `test:coverage` declares `outputs: ["coverage/**"]`.
+2. **Coverage on the unit tier, via `@vitest/coverage-v8`.** The provider is pinned to the exact installed Vitest version and lives in `apps/api`'s devDependencies. `apps/api/vitest.config.ts` configures coverage (`text`, `html`, `lcov` reporters; sources under `src/`; generated migrations and spec files excluded); the reports land in `apps/api/coverage/` (already git- and docker-ignored). Integration tiers are deliberately coverage-free in v1: they assert behavior against real infrastructure and attaching coverage multiplies runtime for marginal signal. No thresholds in v1 — the measured baseline is reported and an incremental ratchet strategy is recommended instead of arbitrary gates.
+3. **Pre-push inherits the widened definition.** `.husky/pre-push` stays `pnpm test`; the widened root script makes pushes fail on any of the four tiers, concurrently, with turbo's grouped per-task output. Coverage stays out of pre-push.
+4. **Future applications join by convention.** Any workspace exposing conventional `test` / `test:coverage` scripts is picked up automatically by the root commands through turbo's discovery; workspaces without them (web, admin today) are skipped harmlessly. No central list of application names is maintained; `turbo.json` Package Configurations (`<pkg>#test`) remain the escape hatch for special cases.
+
+Cross-tier parallelism is turbo's default scheduling (all runnable tasks concurrently); tier-internal isolation is unchanged (unit: vitest worker parallelism; e2e: file-parallel against one shared container pair per run; redis/db: sequential files, each owning a container).
+
+### Options Considered
+
+- _Custom root orchestrator script (shell/Node):_ rejected — duplicates Turborepo's scheduling, discovery, and output grouping for no capability gain; violates the "prefer native tooling" constraint.
+- _Nx or a new task runner:_ rejected — new toolchain and dependency surface for a need Turborepo already covers.
+- _Single merged Vitest run across all tiers:_ rejected — the tier split (suffixes, env files, container isolation, `fileParallelism: false` where containers are per-file) is a deliberate correctness boundary, not an inconvenience.
+- _Coverage across all four tiers:_ rejected for v1 — roughly 4× runtime for marginal signal; revisit on explicit demand.
+- _Coverage thresholds on day one:_ rejected — no measured baseline yet; arbitrary thresholds either break workflows or are too loose to mean anything. Incremental ratchet recommended after the baseline is recorded.
+
+### Rationale
+
+Turborepo already owns every other monorepo workflow and auto-discovers workspace scripts, so it is the smallest complete mechanism for the same job. Marking Docker-backed tiers `cache: false` also fixes a latent pre-existing issue: `test` and `test:e2e` were implicitly cacheable before this ADR, and a cached integration pass would silently skip real Docker verification.
+
+### Security Assessment
+
+Coverage reports contain source paths and code content; they stay local in `coverage/`, which `.gitignore` and the Docker ignores already exclude, and are never published (no CI exists). No new network surface, no new runtime dependency — `@vitest/coverage-v8` is a devDependency matching the installed Vitest version. Pre-push keeps gating the full integration surface, which raises the bar against pushes that break database or Redis behavior.
+
+### Performance Implications
+
+The four API tiers run concurrently under turbo (bounded by CPU; 12 cores on the development machine); total wall clock approaches the slowest tier instead of the sum. Nested parallelism is bounded by design: only the unit tier is CPU-parallel, integration tiers are I/O-bound and (for redis/db) file-sequential. Before/after measurements are recorded in the task's prompt record (at acceptance time the unit baseline is measured; the integration-tier measurements are pending an environment fix — see the prompt record's Validation section). Coverage overhead is confined to the explicit `test:coverage` command and never runs in pre-push.
+
+### Operational Implications
+
+A full `pnpm test` requires Docker running (already true for any integration work); the hook now blocks pushes on redis/db regressions — the intended contract change. Developers can still run single tiers through the new root pass-throughs. `turbo run --force` bypasses the unit-tier cache when a cached pass is distrusted. Future apps need nothing beyond exposing the conventional scripts; the convention is documented in `README.md` and `apps/api/ONBOARDING.md`.
+
+### Testing and Migration Implications
+
+Verification covers: all four suites through the centralized command, actual (timestamp-proven) cross-tier concurrency, coverage report generation and source inclusion, HTML/LCOV artifacts, and a safe controlled-failure scenario proving pre-push fails non-zero. Of these, coverage generation and source inclusion, the unit baseline, and the task-graph cache semantics were verified during acceptance; the integration-tier runs, the concurrency proof, and the pre-push failure scenario were pending at acceptance (Docker Hub `registry-1.docker.io` unreachable from the host) and are tracked in the task's prompt record (`prompts/_052-*.md`, Validation). No schema or runtime-code impact.
+
+### References
+
+- Root `package.json`, `turbo.json`, `.husky/pre-push`, `apps/api/package.json`, `apps/api/vitest.config.ts`
+- Verified bundled Turborepo 2.11.10 docs (`node_modules/turbo/docs/`): configuring-tasks (discovery, `dependsOn`, outputs, caching)
+- Vitest 5.0.5 coverage (`@vitest/coverage-v8`) documentation: https://vitest.dev/guide/coverage.html
+- DECISIONS.md ADR-023 (multi-agent workflow), ADR-025 (Testcontainers e2e Redis), ADR-027 (database integration)
+- `prompts/_052-monorepo-test-orchestration-parallel-execution-coverage.md`
+
+---
+
+## ADR-036: Bounded, Coalesced Database Health Probes and Explicit PostgreSQL Pool Configuration
+
+- **Status:** Accepted
+- **Date:** 2026-11-17
+
+### Context
+
+A security audit of `/health` and `/health/ready` (both unauthenticated and deliberately exempt from the global throttler and memory-protection guards, per ADR-015/ADR-026) identified a denial-of-service exposure: each request executes a PostgreSQL probe (`orm.connect()` + `orm.checkConnection()` — a `select 1` through the shared pool) wrapped in a 3 s `Promise.race` deadline (`withTimeout`). The race bounds only the caller's wait; it never cancels the underlying database operation. Under a network black hole on an **established** connection (packets silently dropped after the handshake), the probe's query never settles, the borrowed pool client is never released, and repeated requests hold pool slots indefinitely — exhausting the pool (default capacity 10), leaving the endpoints degraded forever, and pinning sockets and PostgreSQL backend sessions until process restart.
+
+The behavior of the installed stack was verified against source, not documentation, and three natural assumptions were refuted:
+
+1. **pg `query_timeout` does not reclaim the connection** (pg 8.23.1 `client.js:702-737`): in the default (non-pipeline) mode it rejects the query's JavaScript promise but leaves the socket untouched; the client stays busy until the server eventually answers — which, under a black hole, is never. (It destroys the stream only in the opt-in `pipeline` mode this application does not use.)
+2. **Kysely never releases a client with an error** (kysely 0.29.8 `postgres-driver.js:185-187`): release takes a boolean `destroy` flag and only failed _rollbacks_ mark a client for discard; a query that hangs keeps its client checked out indefinitely, and a client whose socket died is returned to the idle list, not evicted.
+3. **MikroORM's query-abort API does not reclaim the client either** (`signal` + `inflightQueryAbortStrategy`, `@mikro-orm/core` `Connection.d.ts:173-181`): the default strategy (`'ignore query'`) is race-only; `'cancel query'`/`'kill session'` issue `pg_cancel_backend`/`pg_terminate_backend` through a **separate control connection** — which in the black-hole scenario is itself unreachable — and the executor defers the pool release until the original query promise settles (`query-executor-base.js:74-81`), i.e. never.
+
+The only mechanism that deterministically reclaims a hung client is a **local socket close**: pg's public `client.end()` handles the hung-query case explicitly ("a hung query could block end forever — force disconnect", `client.js:822-824`) by destroying the stream, the connection `'end'` event rejects every pending query (`client.js:203-207`), and releasing the client with an error makes pg-pool remove it (`_release` → `_remove`, `pg-pool/index.js:392-397`) and dial a replacement on demand. Separately, every incoming request started its own probe (no single-flight, no caching), so request rate translated 1:1 into pool pressure, and the pool's `max` was an implicit library default (only `connectionTimeoutMillis: 5000` was configured, ADR-027/SEC-02).
+
+### Decision
+
+1. **Health probes borrow a client from the existing ORM pool through public APIs and are bounded end-to-end.** A new `DatabaseHealthProbe` provider in `src/shared/database/` obtains the pg Pool via the public accessor used by ADR-034 (`orm.em.getConnection()` → `instanceof PostgreSqlConnection` → `getNativeClient()` — no direct `pg` import, type inferred), runs one probe, and guarantees the client is always released exactly once. The 3 s deadline covers acquisition **and** execution (worst-case liveness latency unchanged, still below the 5 s Compose healthcheck timeout). On deadline: if a client was acquired, it is released with the timeout error (pg-pool removes and locally force-disconnects it); if acquisition is still pending, the pool's own 5 s `connectionTimeoutMillis` evicts the queued item. Timeout hierarchy: probe `statement_timeout` 2000 ms < probe deadline 3000 ms < pool dial/acquisition 5000 ms ≤ Compose healthcheck timeout 5000 ms.
+2. **The probe statement carries a PostgreSQL-enforced deadline.** The probe is a single simple-protocol statement batch — `BEGIN; SET LOCAL statement_timeout = <2000>; SELECT 1; COMMIT` — so the server itself aborts a hung statement after 2 s when the server is reachable. `SET LOCAL` scope ends at `COMMIT`, so no session state leaks into the next borrower of that client. A client whose statement the server aborted is released with the error and removed; the pool replaces it on demand.
+3. **Single-flight plus a bounded in-memory result cache.** Concurrent health requests share one in-flight probe; results are cached process-locally with a 5000 ms success TTL and a 3000 ms failure cooldown. Failures are never cached beyond the TTL; expiry triggers a fresh probe. This bounds the database probe frequency per instance (≈1 per 5 s healthy / 1 per 3 s during an outage) regardless of request rate, while the orchestrator-facing liveness/readiness HTTP contracts (degraded → 200, down → 503, ADR-026/ADR-027) and the guard exemptions stay untouched. The cache is not HTTP caching: the health controller additionally sends `Cache-Control: no-store` so intermediaries never cache health responses.
+4. **Explicit PostgreSQL pool configuration.** `buildMikroOrmOptions` configures, through `driverOptions` (reaching both the pg Pool and each client): `max` from the new optional `DATABASE_POOL_MAX` environment variable (Zod-validated, default 10 — preserving today's effective capacity), `connectionTimeoutMillis: 5000` (existing), `idleTimeoutMillis: 10_000` (explicit, = former implicit default), `keepAlive: true` with `keepAliveInitialDelayMillis: 10_000`, and a runtime `statement_timeout` of 30_000 ms as a server-side safety net so lock-wait or runaway statements cannot hold pool sessions forever when the network is healthy. The CLI migration configuration explicitly sets `statement_timeout: 0` (off) — migrations may legitimately run long DDL. The connection budget rule: replicas × `DATABASE_POOL_MAX` plus administrative and operational clients must stay below PostgreSQL `max_connections` with headroom reserved for administration.
+5. **Deliberately not adopted:** `query_timeout` (refuted above), MikroORM query-abort options (refuted above), and a dedicated second health-probe pool (rejected for simplicity — see Options Considered).
+
+### Options Considered
+
+- _Dedicated, tightly bounded health-probe pool (separate pg Pool, `max: 1`):_ fully isolates probe traffic and needs no transaction-scoped `statement_timeout`, but requires importing `pg` directly (currently only a transitive dependency), a second lifecycle-managed resource, +1 connection per instance, and an exception to ADR-027's single-database-access-layer rule — rejected as unnecessary once borrowing with a hard deadline and forced eviction is proven sufficient.
+- _Keep `orm.checkConnection()` and pass MikroORM abort options:_ refuted by source — cancellation rides a control connection that the attack scenario itself black-holes, and release stays deferred until the hung query settles.
+- _`query_timeout` on the pool:_ refuted by source — promise-only rejection in default mode; the client stays checked out.
+- _Pool-wide short `statement_timeout`:_ rejected — a short server-side deadline on every application statement changes query semantics indiscriminately; the adopted runtime value (30 s) is a generous hang safety net, and migrations run through the CLI configuration with it explicitly off.
+- _Single-flight/cache at the controller or HTTP layer:_ rejected — the probe engine owns the database cost, so the bound belongs with it; the controller stays a thin Terminus aggregator.
+
+### Rationale
+
+The adopted design uses exclusively public, documented APIs (`pool.connect`, `client.query`, `client.end` semantics documented for hung queries, `client.release(err)`, `getNativeClient()`) to guarantee the property the vulnerability lacked: **no health-check database operation can keep a pool client indefinitely, regardless of network behavior**, because the reclamation path (local socket close) does not depend on any packet reaching the database. Single-flight and the TTL cache remove the request-rate amplification while preserving every existing contract. Explicit pool settings turn an invisible library default into a documented, configurable decision.
+
+### Security Assessment
+
+The unauthenticated `/health` endpoints can no longer amplify into unbounded database work: probe concurrency is 1 per instance and frequency is TTL-bounded. Client-facing failure messages remain the generic localized text (SEC-01, Wave 14); raw reasons stay server-side. `Cache-Control: no-store` prevents intermediary caching of health state. No new dependency, no new network surface, no new trust boundary; the probe observes and reclaims only clients it borrowed itself. The remaining denial-of-service surface on `/health` is ordinary request-handling cost (Terminus, i18n, envelope), which is the same surface every unauthenticated endpoint has.
+
+### Performance Implications
+
+The probe path adds one pool acquisition + one trivial statement per TTL window instead of per request. `TCP keepalive` adds negligible per-socket overhead. The 30 s runtime `statement_timeout` adds one startup-packet parameter per new connection. Single-flight collapses bursts; the cached result also removes repeated `select 1` round trips under orchestrator polling.
+
+### Operational Implications
+
+`DATABASE_POOL_MAX` is deployment configuration: operators must keep replicas × `DATABASE_POOL_MAX` (plus admin/operational clients) below PostgreSQL `max_connections`. A black-holed **application** (non-probe) client still hangs until the OS TCP retransmission timeout (~15–30 minutes) or until the 30 s server-side `statement_timeout` aborts the statement when the server is reachable; TCP keepalive shortens detection for idle connections only (OS-dependent). Pool exhaustion now surfaces through the health endpoints as "database unavailable" (degraded/503) — a deliberate conflation: an instance whose pool is exhausted must not receive traffic. Shutdown drains within the 3 s probe deadline at worst; no new shutdown hook is introduced because no new resource is created.
+
+### Testing and Migration Implications
+
+No schema change and no migration. Verification: unit tests for the probe engine (deadline eviction with a never-settling query, exactly-once release, single-flight, TTL cache/cooldown, deadline-during-acquisition), reworked indicator unit tests, db-tier integration tests against a real PostgreSQL (statement_timeout mechanism, forced-failure recovery), and a Toxiproxy-backed deterministic test that reproduces the established-connection black hole (timeout toxics on both stream directions), asserting bounded latency, client eviction, and recovery after the fault is removed. e2e health specs run unchanged as contract regression. The black-hole test is the proof that the reclaim path does not depend on network reachability of the database.
+
+### References
+
+- `apps/api/src/shared/database/database.probe.ts`, `database.health.ts`, `database.module.ts`, `mikro-orm.options.ts`, `mikro-orm.config.ts`
+- Verified installed sources: pg 8.23.1 `lib/client.js` (`query_timeout` 702-737; `'end'` handler 203-229; `end()` 799-836), pg-pool 3.14.0 `index.js` (queue eviction 206-232, dial timeout 250-262, `_release`/`_remove` 384-397), kysely 0.29.8 `dialect/postgres/postgres-driver.js` + `query-executor/query-executor-base.js`, `@mikro-orm/core` 7.2.9 `Connection.d.ts` (abort options), `@mikro-orm/sql` 7.2.9 `AbstractSqlConnection.js` (`checkConnection`, `extractAbortOptions`)
+- DECISIONS.md ADR-015 (throttling; health exempt), ADR-026 (memory protection + readiness), ADR-027 (PostgreSQL integration, degraded/503 contract), ADR-034 (native pool access precedent)
+- `prompts/_053-database-health-probe-dos-hardening.md`
+
+---
+
+## ADR-037: Bounded Redis Commands, Black-Hole Recovery, and Coalesced Redis Health Probes
+
+- **Status:** Accepted
+- **Date:** 2026-11-17
+
+### Context
+
+A reliability/DoS audit of the Redis integration (the follow-up to the PostgreSQL health-probe audit, ADR-036) verified against the installed ioredis 6.0.0 sources that the caller boundary is already bounded — `commandTimeout` (5000 ms) rejects every command's promise within its deadline, `enableOfflineQueue: false` rejects commands issued in any non-writable state immediately, `autoResendUnfulfilledCommands: false` plus the absence of any application-level retry means ambiguous failures are never re-executed, reconnection uses capped exponential backoff with jitter, and graceful shutdown is complete and idempotent. Three verified gaps remain, all concentrated on **established-connection black holes** (packets silently dropped after the handshake; no FIN/RST ever arrives):
+
+1. **`commandTimeout` is rejection-only.** On expiry it rejects the caller's promise ("Command timed out", `Command.js:203-211`) but does not remove the command from the FIFO `commandQueue`, does not touch the socket, and leaves `client.status === "ready"` (`Redis.js:368-370,449-453`; verified queue-mutation inventory: only replies, close-time pipeline aborts, and flush boundaries drain it).
+2. **Unbounded in-flight accumulation.** With responses never arriving, `shiftCommand` never runs and the queue grows by one entry per command — under a flood of the unauthenticated health routes (or any traffic), memory grows at the full request rate.
+3. **The dead epoch is long.** TCP keepalive is enabled by default in ioredis 6 (`keepAlive: 30000` — verified in `RedisOptions.js`, contrary to older-ioredis assumptions), but Linux defaults (probe interval ≈ 75 s × 9 probes) put silent-peer detection ≈ **11–12 minutes** after the last traffic. Meanwhile every new command pays the full 5 s: no fast-fail, HTTP pileup on the guard-exempt health routes, and per-request Redis amplification (the Redis health indicator ran one PING per request — the DB probe's coalescing had no Redis counterpart, deferred from _053 as SEC-INFO-01).
+
+ioredis ships exactly one built-in mechanism that proactively ends such an epoch: **`socketTimeout`** (`Redis.js:516-531`) — armed when a command is written, it destroys the stream after N ms of received-data silence (armed once, cleared/re-armed per data chunk, only while commands are in flight), which triggers the normal close → bounded-retry reconnect cycle. It was not configured.
+
+### Decision
+
+1. **Black-hole recovery via `socketTimeout`.** A new optional environment variable `REDIS_SOCKET_TIMEOUT_MS` (default **6000**) is mapped into the client options. The value deliberately sits 1 s above `commandTimeout` (5000): commands reject first as clean per-command failures, then the silent socket is destroyed, `closeHandler` runs, the bounded `retryStrategy` (200 ms→30 s cap + jitter) reconnects, and — because the offline queue is disabled — every command during `"close"`/`"reconnecting"` fails **immediately**. Net: a black-holed epoch is bounded to ~6 s of slow commands; the `commandQueue` residue (whose promises already settled) is dropped on the next ready or rejected at a `MaxRetriesPerRequest` flush boundary; recovery is automatic without restart.
+2. **No undocumented library defaults.** `enableReadyCheck: true` and `keepAlive: 30000` are set explicitly. The keepalive reality is documented: it detects dead _peers on idle connections_ only after OS-scale delays (minutes), and it cannot detect black-holed **in-flight** traffic — the socket deadline is the only fast detector for that class. The deadline hierarchy is explicit: health-probe deadline 3000 < `commandTimeout` 5000 < `socketTimeout` 6000 ≤ Compose API healthcheck timeout 5000 (the HTTP boundary; worst-case liveness latency ≈ 3 s fits).
+3. **Coalesced, cached Redis health probes.** A `RedisHealthProbe` provider (mirror of the ADR-036 `DatabaseHealthProbe`) gives the Redis indicator the same treatment: single-flight over `RedisService.ping()`, a process-local TTL cache (5 s success / 3 s failure cooldown — failures never outlive it), and a 3 s probe deadline. Concurrent liveness/readiness requests share one probe; a flood can no longer produce one PING per request; worst-case liveness latency (~3 s) fits the outer 5 s Compose window. The losing PING of a deadline race is _not_ cancelled — it settles via `commandTimeout` and its queue residue is bounded by `socketTimeout` — the ADR-036 distinction between caller rejection, command abandonment, connection destruction, and recovery applies verbatim.
+4. **No circuit breaker.** Rejected: with `socketTimeout` bounding the slow window to ~6 s and the disabled offline queue already fast-failing during reconnection, a breaker would duplicate ioredis' own lifecycle (status transitions, reconnect budget, fast-fail) as a hand-rolled state machine with abandonment edge cases (open-state storms, half-open probe bursts, permanently-open via abandoned promises) and no failure mode it fixes that the above does not. Revisit only if a concrete workload appears that the current bounds demonstrably fail.
+5. **Idempotency and retry posture (verified, documented).** No application-level retries exist; ambiguous `commandTimeout` outcomes (the command may have executed server-side) are never re-executed. Per-command audit: `SET NX EX` (OTP issuance) is overwrite-safe; the rate-limit `ZADD` member carries a random suffix (a replay would double-count — but nothing replays it); `INCR` counters — never retried. Exactly-once execution is **not** claimed: Redis/TCP semantics cannot guarantee it, and the design never performs the retry that would make it matter.
+6. **Connection budget.** Exactly one ioredis client per API instance, shared by enrollments, the throttler, and the health probe (a dedicated probe client is rejected: a PING is trivial, and sharing keeps the budget at 1×replicas). No pub/sub, no blocking commands, no BullMQ, no duplicate clients (verified). Shutdown behavior is unchanged and verified (status-based `quit()`/`disconnect()`, 2 s bounded race, idempotent, reconnect-timer cleared on `disconnect()`).
+
+### Options Considered
+
+- _Circuit breaker at the RedisService boundary:_ rejected (rationale in Decision 4) — duplicates the client's own lifecycle; the existing bounds already deliver fast-fail and controlled recovery.
+- _Dedicated health-probe client:_ rejected — an extra connection per replica for a trivial PING; sharing the primary client keeps the budget minimal and the probe exercises the exact connection real traffic uses.
+- _Rely on TCP keepalive only:_ rejected as the primary mechanism — minutes-scale detection (OS defaults), OS-tunable but not from the application, and blind to in-flight black holes.
+- _`maxRetriesPerRequest: null` or re-enabling the offline queue:_ rejected — unbounded waiting / unbounded accumulation, the exact failure modes this ADR eliminates.
+- _Aggressive reconnect loops instead of the capped backoff:_ rejected — retry storms under sustained outages.
+
+### Rationale
+
+The design uses only documented ioredis options and the module's existing shape, converts the one unbounded failure mode (queue growth over a minutes-long dead epoch) into a bounded one (~6 s of slow commands, then destroy → bounded reconnect → fast-fail → automatic recovery), and closes the health-amplification asymmetry left by ADR-036 — while preserving every existing contract (degraded-200 liveness, 503 readiness, guard exemptions, fail-closed rate limiting, no-retry semantics).
+
+### Security Assessment
+
+The unauthenticated health endpoints can no longer amplify into unbounded Redis work: at most one PING per TTL window per instance, bounded by the 3 s probe deadline. Raw driver reasons stay in server logs (SEC-01 posture unchanged). Known residual: failure _classes_ remain coarsely distinguishable by response latency (~RTT vs ~3 s) — inherent to timeout-based checks and capped by the failure cache; subsystem-level health status remains exposed by design with network placement as the control (both recorded in `DEFERRED.md`/`docs/judge-findings.md` as informational notes). `Cache-Control: no-store` on the health routes prevents intermediary caching of health state.
+
+### Performance Implications
+
+`socketTimeout` arms only while commands are in flight and re-arms per data chunk — negligible overhead on healthy connections. The probe cache removes repeated PINGs under orchestrator polling and floods. Worst-case per-command latency during a black hole is unchanged (5 s) but the _epoch_ shrinks from ~11–12 minutes to ~6 s, after which commands fail in microseconds.
+
+### Operational Implications
+
+`REDIS_SOCKET_TIMEOUT_MS` must stay above `REDIS_COMMAND_TIMEOUT_MS` so per-command failures surface before socket destruction; both are deployment-tunable with defaults encoding that relationship. During reconnection windows Redis-backed routes fail fast (enrollments 500s, throttler fail-closed 500s) while non-Redis traffic is unaffected — the existing degraded/503 health contract tells orchestrators what to do. Idle-connection dead peers are detected by keepalive in minutes, not seconds — an accepted residual.
+
+### Testing and Migration Implications
+
+No schema or migration impact. Verification: unit tests for the probe (single-flight, TTL reuse/expiry, failure cooldown, deadline paths); a real-Redis + Toxiproxy fault-injection suite reproducing the established-connection black hole (timeout toxics on both stream directions), asserting bounded command rejection, the verified `"ready"`-status persistence, socket destruction at the socket deadline, fast-fail during reconnection, and recovery after the fault clears, plus a server-side INCR ambiguity test proving no duplicate execution; the existing four redis-tier specs and the e2e health/enrollments suites pass unchanged as regression.
+
+### References
+
+- `apps/api/src/shared/redis/redis.probe.ts`, `redis.health.ts`, `redis-options.ts`, `redis.module.ts`, `redis.env.ts`
+- Verified installed sources: ioredis 6.0.0 `built/Redis.js` (`sendCommand` 354-463, `setSocketTimeout` 516-531, quit/disconnect 241-269), `built/Command.js` (`setTimeout` 203-211), `built/redis/event_handler.js` (`closeHandler` 294-343, ready-handler resend/drop 415-430), `built/redis/RedisOptions.js` (defaults incl. `keepAlive: 30000`)
+- DECISIONS.md ADR-012 (raw ioredis, no wrapper), ADR-013 (global module, single client), ADR-015/026 (health exemptions, degraded/503), ADR-016/020/025 (test containers), ADR-036 (the PostgreSQL counterpart this ADR mirrors)
+- `prompts/_054-redis-reliability-black-hole-dos-protection.md`; `DEFERRED.md` SEC-INFO-01 entry (closed by this ADR)
