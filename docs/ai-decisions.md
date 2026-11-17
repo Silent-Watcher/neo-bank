@@ -373,3 +373,35 @@ requires developer approval before any ADR is created.
 - **Reversibility:** Trivial.
 - **ADR Recommendation:** No — application of the documented Zod pitfall lesson within ADR-037's scope.
 - **Update (2026-11-17, same day):** the code reviewer flagged (Wave 24 CR-01) that the _claim_ of the repo-wide convention made the sibling inconsistency worse, so the Redis portion of this decision was revised within the task: a shared `positiveIntegerEnv(field, default)` helper now implements the blank-tolerant pattern for all five Redis numeric fields (Wave 24 CR-01 resolution), and `BODY_LIMIT` remains the only deferred sibling (see `DEFERRED.md`).
+
+### 26. `If-None-Match: *` is honored only as the entire field value (ETag/Conditional GET task _055)
+
+- **Context:** Phase 0's interim parser accepted `*` as any list candidate
+  (`"other", *` revalidated). The Phase 2 mandate required RFC 9110-compliant
+  parsing, and the grammar defines the field value as `*` OR an entity-tag
+  list — never both.
+- **Decision:** the strict parser treats a wildcard only when it is the
+  entire trimmed field value; a `*` inside a list is a malformed candidate
+  and is ignored (the pre-existing unit case asserting the lenient behavior
+  was updated to the strict contract with a comment, per the task-integrity
+  rule — a documented contract change, never a weakening).
+- **Reasoning:** honoring an in-list wildcard would answer `304` to a
+  field value the ABNF calls malformed, contradicting the master prompt's
+  "follow RFC 9110" and "do not silently transform malformed input". The
+  lenient reading is not required for safety (a 304 pairs with a valid ETag
+  echo either way); strictness keeps the parser's malformed-input posture
+  uniform. `*` as the whole value remains RFC-defined wildcard semantics.
+- **Alternatives considered:** keeping the lenient in-list wildcard
+  (rejected — normalizes malformed input); rejecting the entire field when
+  `*` appears in a list (rejected — per-candidate ignore still matches a
+  valid sibling such as `"abc123", *`, whereas whole-field rejection would
+  turn that legitimate revalidation into a full 200; the per-candidate
+  posture is the documented ADR-038 §4 behavior).
+- **Trade-offs:** clients sending malformed `*, "tag"` lists get full 200
+  responses instead of 304s — a false negative, never a false positive.
+- **Impact:** wildcard revalidation works exactly as RFC-defined; the
+  behavioral delta only affects non-conformant client input.
+- **Reversibility:** trivial (one branch in `if-none-match.ts`).
+- **ADR Recommendation:** None — the choice is an interpretation of the
+  accepted ADR-038 §4 wording ("`*` matches any current representation",
+  "malformed values ignored"), already recorded there; no separate ADR.
