@@ -7,6 +7,12 @@
 # This file uses `include` to compose both stacks into a single project.
 # Unlike development, both stacks run with production hardening and network
 # isolation (api/postgres/redis on internal network, web/admin on edge network).
+#
+# Explicit project name: without it Compose derives the project from the
+# folder name ("docker"), and containers would not carry the
+# com.docker.compose.project=neo-bank-prod label the Alloy discovery filter
+# (monitoring/alloy/config.alloy) matches on — logs would never be collected.
+name: neo-bank-prod
 
 include:
   - path: compose.app.prod.yml

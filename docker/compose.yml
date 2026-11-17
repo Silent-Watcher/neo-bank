@@ -7,6 +7,13 @@
 # This file uses `include` to compose both stacks into a single project.
 # Services are grouped by their compose file origin, visible in Docker Desktop
 # as separate service groups under the "neo-bank-dev" project.
+#
+# Explicit project name: without it Compose derives the project from the
+# folder name ("docker"), and containers would not carry the
+# com.docker.compose.project=neo-bank-dev label the Alloy discovery filter
+# (monitoring/alloy/config.alloy) matches on — logs would never be collected.
+name: neo-bank-dev
+
 include:
   - path: compose.app.dev.yml
   - path: compose.monitoring.yml

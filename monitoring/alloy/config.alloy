@@ -30,26 +30,22 @@
 //     Pushes to Loki. When Loki is down, Alloy keeps tailing and retries
 //     pushes; the application is never involved and never blocks.
 //
-// The monitoring stack's own containers are never collected: the discovery
-// filter matches only the neo-bank-dev/neo-bank-prod Compose projects, and
-// containers without a Compose project label (e.g. Testcontainers) are
-// invisible to it. High-cardinality values (request IDs, user IDs) stay in
-// the log body — they are never labels.
+// Collection scope is enforced by the relabel rules, not by the discovery
+// filter: only containers named /neo-bank-dev-… or /neo-bank-prod-… are kept
+// (the Compose project prefix — Testcontainers and unrelated containers get
+// different names and are dropped), and the monitoring stack's own containers
+// are explicitly dropped. High-cardinality values (request IDs, user IDs)
+// stay in the log body — they are never labels.
 
 discovery.docker "containers" {
   host = "unix:///var/run/docker.sock"
 
-  // Docker Engine API filter semantics: values within one block are OR'd,
-  // separate blocks are ANDed. Two blocks: (project is dev OR prod) AND
-  // (status is running).
-  filter {
-    name = "label"
-    values = [
-      "com.docker.compose.project=neo-bank-dev",
-      "com.docker.compose.project=neo-bank-prod",
-    ]
-  }
-
+  // Only the status filter happens daemon-side, on purpose: Docker's
+  // `label` filter uses AND semantics even across values in one filter
+  // (unlike most filters), so "project=neo-bank-dev" + "project=neo-bank-prod"
+  // can never match anything — the original two-value label filter kept this
+  // pipeline at zero discovered containers. Selection by project therefore
+  // happens in the relabel rules below, on the container name.
   filter {
     name = "status"
     values = ["running"]
@@ -59,6 +55,17 @@ discovery.docker "containers" {
 discovery.relabel "containers" {
   targets = discovery.docker.containers.targets
 
+  // The monitoring stack rides the same Compose project when included by an
+  // orchestrator (name: neo-bank-dev / neo-bank-prod), so its containers
+  // carry the matching project label — drop them so the stack never collects
+  // its own pipeline. Standalone monitoring runs are already excluded by the
+  // project filter above (project neo-bank-monitoring).
+  rule {
+    action        = "drop"
+    source_labels = ["__meta_docker_container_name"]
+    regex         = "/neo-bank-(dev|prod)-(loki|grafana|alloy)-[0-9]+"
+  }
+
   // Relabel regexes are fully anchored by convention; the rules below
   // derive env, service, and container from names like /neo-bank-dev-api-1.
   // The keep guard drops entries from any discovered container whose name
@@ -67,7 +74,9 @@ discovery.relabel "containers" {
   rule {
     action        = "keep"
     source_labels = ["__meta_docker_container_name"]
-    regex         = "/neo-bank-(dev|prod)-"
+    // Anchored regex: must match the FULL container name, so the trailing
+    // `.*` is load-bearing — a bare prefix silently keeps nothing.
+    regex         = "/neo-bank-(dev|prod)-.*"
   }
 
   rule {

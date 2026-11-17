@@ -15,23 +15,23 @@ development Compose stack remains for local development
 
 ## Files
 
-| File                                   | Purpose                                                                                                         |
-| -------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
-| `apps/<app>/Dockerfile.dev`            | Development image (dependencies only; source is bind-mounted)                                                   |
-| `apps/<app>/Dockerfile.prod`           | Production image (multi-stage, non-root, minimal)                                                               |
-| `apps/<app>/Dockerfile.*.dockerignore` | Per-Dockerfile build-context ignores (used _instead of_ the root file, not merged with it)                      |
-| `docker/compose.yml`                   | Development orchestrator: `include:` of the dev app stack and the monitoring stack into one `docker compose up` |
-| `docker/compose.app.dev.yml`           | Dev app stack: hot-reloading apps plus PostgreSQL, Redis, MockServer, pgAdmin (ADR-024/028) (`neo-bank-dev`)    |
-| `docker/compose.app.prod.yml`          | Production app stack: hardened images, internal networks (`neo-bank-prod` project)                              |
-| `docker/compose.prod.all.yml`          | Production orchestrator: `include:` of the production app stack and the monitoring stack                        |
-| `docker/compose.monitoring.yml`        | Monitoring stack: Grafana, Loki, Alloy (`neo-bank-monitoring` project)                                          |
-| `monitoring/`                          | Config as code for the monitoring stack (Alloy pipeline, Loki, Grafana provisioning)                            |
-| `docker/pgadmin/`                      | pgAdmin config as code (servers.json.template + render_servers.py, ADR-028)                                     |
-| `.dockerignore`                        | Root build-context ignore                                                                                       |
-| `docker/env/.env.docker.example`       | Template for the interpolation files below                                                                      |
-| `docker/env/.env.docker.dev`           | Interpolation values for the development Compose files (gitignored)                                             |
-| `docker/env/.env.docker.prod`          | Interpolation values for the production Compose files (gitignored)                                              |
-| `docker/env/.env.monitoring.example`   | Template for `docker/env/.env.monitoring`, the monitoring stack's interpolation file (gitignored)               |
+| File                                   | Purpose                                                                                                                                                                                                        |
+| -------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `apps/<app>/Dockerfile.dev`            | Development image (dependencies only; source is bind-mounted)                                                                                                                                                  |
+| `apps/<app>/Dockerfile.prod`           | Production image (multi-stage, non-root, minimal)                                                                                                                                                              |
+| `apps/<app>/Dockerfile.*.dockerignore` | Per-Dockerfile build-context ignores (used _instead of_ the root file, not merged with it)                                                                                                                     |
+| `docker/compose.yml`                   | Development orchestrator: `include:` of the dev app stack and the monitoring stack into one `docker compose up` (explicit `name: neo-bank-dev` — the Alloy discovery/relabel rules key on this project prefix) |
+| `docker/compose.app.dev.yml`           | Dev app stack: hot-reloading apps plus PostgreSQL, Redis, MockServer, pgAdmin (ADR-024/028) (`neo-bank-dev`)                                                                                                   |
+| `docker/compose.app.prod.yml`          | Production app stack: hardened images, internal networks (`neo-bank-prod` project)                                                                                                                             |
+| `docker/compose.prod.all.yml`          | Production orchestrator: `include:` of the production app stack and the monitoring stack (explicit `name: neo-bank-prod`)                                                                                      |
+| `docker/compose.monitoring.yml`        | Monitoring stack: Grafana, Loki, Alloy (`neo-bank-monitoring` project)                                                                                                                                         |
+| `monitoring/`                          | Config as code for the monitoring stack (Alloy pipeline, Loki, Grafana provisioning)                                                                                                                           |
+| `docker/pgadmin/`                      | pgAdmin config as code (servers.json.template + render_servers.py, ADR-028)                                                                                                                                    |
+| `.dockerignore`                        | Root build-context ignore                                                                                                                                                                                      |
+| `docker/env/.env.docker.example`       | Template for the interpolation files below                                                                                                                                                                     |
+| `docker/env/.env.docker.dev`           | Interpolation values for the development Compose files (gitignored)                                                                                                                                            |
+| `docker/env/.env.docker.prod`          | Interpolation values for the production Compose files (gitignored)                                                                                                                                             |
+| `docker/env/.env.monitoring.example`   | Template for `docker/env/.env.monitoring`, the monitoring stack's interpolation file (gitignored)                                                                                                              |
 
 All Compose files live in `docker/`; the interpolation env files they consume
 live in `docker/env/`.

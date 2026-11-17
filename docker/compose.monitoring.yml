@@ -58,6 +58,11 @@ services:
       # design; keep it that way.
       GF_ANALYTICS_REPORTING_ENABLED: 'false'
       GF_ANALYTICS_CHECK_FOR_UPDATES: 'false'
+      # The 13.2.x default image no longer bundles the Loki data source
+      # plugin; without this pin it is only fetched by Grafana's flaky
+      # catalog background-install, and the provisioned data source renders
+      # as "not found". Installs into the grafana_data volume at startup.
+      GF_INSTALL_PLUGINS: 'loki'
     volumes:
       # Provisioned data source + dashboard providers, managed as code.
       - ../monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
