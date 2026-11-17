@@ -28,7 +28,21 @@
     "test": {
       "dependsOn": ["^test"]
     },
-    "test:e2e": {},
+    // Docker-backed tiers (Testcontainers) depend on external mutable state:
+    // a cached pass would skip real container verification, so they never
+    // cache (ADR-035).
+    "test:e2e": {
+      "cache": false
+    },
+    "test:redis": {
+      "cache": false
+    },
+    "test:db": {
+      "cache": false
+    },
+    "test:coverage": {
+      "outputs": ["coverage/**"]
+    },
     "clean": {
       "cache": false
     }

@@ -33,8 +33,11 @@ pnpm lint
 pnpm format
 pnpm format:check
 pnpm typecheck
-pnpm test         # unit + e2e tests across workspaces via Turborepo
-pnpm test:e2e     # API e2e tests (self-managed Testcontainers Redis; requires Docker)
+pnpm test         # all test suites (unit + e2e + Redis + DB) across workspaces via Turborepo — integration tiers require Docker
+pnpm test:e2e     # API e2e tests only (one shared Testcontainers Redis + PostgreSQL; requires Docker)
+pnpm test:redis   # API Redis integration tests only (requires Docker)
+pnpm test:db      # API database integration tests only (requires Docker)
+pnpm test:coverage  # API unit tests with Vitest coverage (text + HTML + LCOV under apps/api/coverage/)
 pnpm docker:dev   # start the full Docker dev stack in the background
 pnpm docker:prod  # start the full Docker production stack in the background
 pnpm docker:monitoring   # centralized log monitoring (Grafana + Loki + Alloy)
@@ -42,9 +45,9 @@ pnpm clean
 pnpm cm
 ```
 
-`pnpm cm` opens Commitizen. Commits follow Conventional Commits with optional `api`, `web`, `admin`, or `monorepo` scopes, for example `feat(api): add accounts endpoint`. Husky formats and lints staged files before commits, validates commit messages, and runs `pnpm test` before pushes.
+`pnpm cm` opens Commitizen. Commits follow Conventional Commits with optional `api`, `web`, `admin`, or `monorepo` scopes, for example `feat(api): add accounts endpoint`. Husky formats and lints staged files before commits, and runs `pnpm test` before pushes — since the root `test` script covers all suites, pushes are gated on unit, e2e, Redis, and database integration tests alike (ADR-035).
 
-The Redis integration suite (`test:redis`) exists only in the `apps/api` workspace: run `pnpm --dir apps/api test:redis` (also requires Docker).
+Testing is Turborepo-native: each workspace owns its own test configuration, and the root commands discover workspaces that expose conventional `test` / `test:coverage` scripts — a new application joins the pipeline by adding those scripts, with no central list to maintain. Workspaces without test scripts (web, admin today) are skipped. Coverage reports land in the workspace's `coverage/` directory (currently only the API, unit tier).
 
 Type safety is audited with `typehealth` (root devDependency): `npx typehealth scan --cwd apps/<app> --config apps/<app>/tsconfig.json --format markdown`. Every workspace tsconfig enables all supported strictness compiler options; `apps/admin` must be scanned with `tsconfig.app.json` (its root `tsconfig.json` is a solution-style reference file).
 
