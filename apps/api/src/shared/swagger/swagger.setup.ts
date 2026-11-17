@@ -24,6 +24,17 @@ export function setupSwagger(app: INestApplication): void {
     .setTitle('Neo Bank API')
     .setDescription('REST API for Neo Bank. Versioned under /api/v1.')
     .setVersion(OPENAPI_API_VERSION)
+    .addGlobalParameters({
+      in: 'header',
+      name: 'Accept-Language',
+      description: 'Preferred response language',
+      required: false,
+      schema: {
+        type: 'string',
+        enum: ['fa', 'en'],
+        default: 'en',
+      },
+    })
     .build();
 
   const document = SwaggerModule.createDocument(app, config);
