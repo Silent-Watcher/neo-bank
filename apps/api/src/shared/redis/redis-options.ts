@@ -12,6 +12,10 @@ const RETRY_BASE_DELAY_MS = 200;
 const RETRY_MAX_DELAY_MS = 30000;
 const RETRY_JITTER_MS = 100;
 
+// TCP keepalive initial delay for the Redis client — ioredis' default, made
+// explicit so nothing depends on an undocumented library value.
+const REDIS_KEEP_ALIVE_INITIAL_DELAY_MS = 30_000;
+
 export function redisRetryStrategy(times: number): number {
   const exponential = Math.min(RETRY_BASE_DELAY_MS * 2 ** (times - 1), RETRY_MAX_DELAY_MS);
   return exponential + Math.floor(Math.random() * RETRY_JITTER_MS);
@@ -44,11 +48,10 @@ export function buildRedisOptions(config: RedisConfig): RedisOptions {
     // The ready check (INFO after the handshake) is the library default;
     // explicit so nothing depends on undocumented defaults (ADR-037).
     enableReadyCheck: true,
-    // TCP keepalive with a 30 s initial delay — ioredis' default, set
-    // explicitly to document it: it detects dead peers on idle connections
-    // only after OS-scale delays (minutes on Linux defaults) and cannot
-    // detect a black-holed in-flight command — socketTimeout covers that.
-    keepAlive: 30000,
+    // TCP keepalive: it detects dead peers on idle connections only after
+    // OS-scale delays (minutes on Linux defaults) and cannot detect a
+    // black-holed in-flight command — socketTimeout covers that.
+    keepAlive: REDIS_KEEP_ALIVE_INITIAL_DELAY_MS,
     retryStrategy: redisRetryStrategy,
     // Empty credentials (e.g. local Redis without AUTH) are omitted so no
     // empty AUTH attempt is sent to the server.

@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-import { positiveSafeInteger } from './validation-helpers.js';
+import { positiveIntegerEnv } from './validation-helpers.js';
 
 // Database connection settings are mandatory: the deployment must always
 // provide them. Only malformed values are rejected here; an unreachable
@@ -22,10 +22,7 @@ export const dbEnvSchema = z.object({
   // connection budget is replicas × pool size against PostgreSQL's
   // max_connections. Blank values are treated as unset (the repo-wide
   // convention), so an empty entry in an env file uses the default.
-  DATABASE_POOL_MAX: z.preprocess(
-    (value) => (typeof value === 'string' && value.trim() === '' ? undefined : value),
-    positiveSafeInteger('DATABASE_POOL_MAX').default(10),
-  ),
+  DATABASE_POOL_MAX: positiveIntegerEnv('DATABASE_POOL_MAX', 10),
 });
 
 export type DbEnv = z.infer<typeof dbEnvSchema>;

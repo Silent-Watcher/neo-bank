@@ -62,7 +62,11 @@ export class TestRedis {
       tls: false,
       connectTimeoutMs: 5000,
       commandTimeoutMs: 5000,
-      socketTimeoutMs: 5000,
+      // Above the command timeout — the ADR-037 invariant the env schema
+      // enforces in production (per-command failures surface before the
+      // socket is destroyed). Test fixtures bypass env validation, so the
+      // ordering must hold here by construction.
+      socketTimeoutMs: 6000,
       maxRetriesPerRequest: 3,
       shutdownTimeoutMs: 2000,
     };
