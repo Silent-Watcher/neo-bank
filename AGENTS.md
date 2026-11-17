@@ -958,6 +958,15 @@ Judge AI recommendations are findings to investigate, not implementation require
 
 Judge AI findings are not exempt from the ADR-first workflow: any remediation involving an architectural decision, a meaningful behavioral change, or long-term technical consequences requires an ADR. A small bug fix does not — but never skip an ADR merely because the change originated from a Judge finding.
 
+### Subagent Findings: Persistence, Derived Rules, and Test Integrity
+
+The following are permanent, user-mandated rules governing every subagent report (code-reviewer, code-security-analyzer, project-explorer, documentation-writer, migration-reviewer, and any ad-hoc reviewer):
+
+1. **Persist unimplemented recommendations.** Every recommendation from a subagent report that is not implemented must still be recorded in a durable file — the findings tracker (`docs/judge-findings.md`) with an explicit status and justification, or `DEFERRED.md` for follow-up work. A recommendation is never silently dropped, and a task is not complete while a recommendation belonging to its scope is unrecorded.
+2. **Learn from every report.** After each subagent report, extract anything that generalizes — library pitfalls, concurrency patterns, convention traps, tooling gotchas — and persist it where future work will encounter it: a workspace `AGENTS.md` convention when it binds future agents, `docs/ai-decisions.md` for task-level decisions, or the task's prompt record. The same mistake must never be made twice.
+3. **Tests are never sacrificed.** Under no circumstances may a test be skipped, deleted, or weakened (loosened assertions, removed cases, skip/todo markers, narrowed coverage) to make an implementation pass. If an implementation conflicts with a test, fix the implementation. A test may change only when it encodes a genuinely outdated contract, only with explicit user approval, and only into a stronger form, with the reason documented.
+4. **Out-of-scope warnings become tracked follow-ups.** When a subagent flags anything as potentially out of scope, record it in `docs/judge-findings.md` and `DEFERRED.md` as a follow-up to implement or fix later — with enough context (location, failure scenario, recommendation) that a future task can act on it without re-deriving the analysis.
+
 ### Delegated Validation
 
 - Delegate validation work such as formatting, linting, running tests, and type checking to a subagent instead of executing those commands yourself.
