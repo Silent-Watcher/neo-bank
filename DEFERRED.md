@@ -123,3 +123,21 @@ Per the "Subagent Findings: Persistence, Derived Rules, and Test Integrity" rule
 **Status**: Open — deployment-level concern; nothing to change in application code.
 **Requirement**: when production ingress exists, ensure firewall/ingress rules restrict `/health` and `/health/ready` to the orchestration network — subsystem-level health status and memory-protection events are exposed unauthenticated by design.
 **Rationale**: the application layer intentionally serves orchestrator probes; network placement is the only real control.
+
+---
+
+## Mandated by ETag Hardening Review (_055, Wave 25 CR-06)
+
+### 1. Unmapped built-in exception statuses publish the application-error Problem Type family
+
+**Origin**: code-reviewer CR-06 (Low, 2026-11-17) — Wave 25 code review of the ADR-038 Phase 0 unit.
+**Status**: Open — client-visible error-contract decision (ADR-010 territory) awaiting developer direction.
+**Requirement**: decide how `errorCodeForStatus` handles built-in `HttpException` statuses outside the mapped set (e.g. 401/403): either extend the per-status map with non-typed codes (yielding RFC 9457 `about:blank` Problem Types) or route unmapped statuses to a generic non-typed code instead of the current `ErrorCode.ApplicationError` fallback — which today labels an ordinary 401/403 with `type: /problems/application-error`, `code: APPLICATION_ERROR`, and the "Application Error" title.
+**Rationale**: no current thrower produces an unmapped status (guards throw only mapped codes), so no live path is affected; but any future guard or framework exception with an unmapped status would be misclassified by clients branching on `type`/`code`. The fix changes the error contract for unmapped statuses and therefore was not applied without approval.
+
+### 2. Cache-Control directives for revalidatable responses (SEC-INFO, Wave 25)
+
+**Origin**: code-security-analyzer SEC-01 (informational, CWE-525-adjacent, 2026-11-17) — Wave 25 security review of the ADR-038 Phase 0 unit.
+**Status**: Open — cache-control policy decision, taken when authenticated, user-specific routes appear.
+**Requirement**: decide which `Cache-Control` directives response classes carry now that revalidation (ETag/304) makes private-cache reuse of stored envelope bodies possible. Only the health routes set `Cache-Control: no-store` today; `Vary: Accept-Language` is already emitted by the i18n middleware. Candidate remediation when the decision matures: `Cache-Control: no-cache, private` (or `no-store`) on user-specific responses so revalidation semantics are explicit and shared intermediaries never store.
+**Rationale**: cross-session reuse requires byte-identical application payloads and can only serve the prior envelope's metadata (random UUID + timestamp) — negligible today with no authentication; the policy should be fixed deliberately before user-specific data exists, not retrofitted.

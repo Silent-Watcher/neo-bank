@@ -16,7 +16,6 @@ interface Fixture {
   writableEnded?: boolean;
   headersSent?: boolean;
   contentType?: string;
-  handlerMetadata?: Record<string, unknown>;
 }
 
 function createInterceptorContext(
@@ -39,7 +38,7 @@ function createInterceptorContext(
   };
   // A stable handler reference, so tests can attach Reflect metadata to it
   // before the interceptor reads it back through getHandler().
-  const handler = Object.assign(function handler() {}, fixture.handlerMetadata);
+  const handler = function handler() {};
   const context = {
     switchToHttp: () => ({ getRequest: () => request, getResponse: () => reply }),
     getHandler: () => handler,
@@ -179,6 +178,50 @@ describe('ResponseEnvelopeInterceptor', () => {
 
     // Assert
     expect(result).toEqual({ example: true });
+  });
+
+  it('does not wrap a payload whose handler set a non-JSON content type mid-execution', async () => {
+    // Arrange — the eager skip runs before the handler and cannot see a
+    // content type the handler sets during execution; the map-time re-check
+    // must catch it (Wave 25 CR-01). The mock returns undefined for the eager
+    // call and the non-JSON type from the map call on.
+    let getHeaderCalls = 0;
+    const reply = {
+      statusCode: 200,
+      writableEnded: false,
+      headersSent: false,
+      getHeader: vi.fn(() => {
+        getHeaderCalls += 1;
+        return getHeaderCalls === 1 ? undefined : 'text/html; charset=utf-8';
+      }),
+    };
+    const context = {
+      switchToHttp: () => ({
+        getRequest: () => ({ method: 'GET', url: '/api/v1/hello', id: REQUEST_ID }),
+        getResponse: () => reply,
+      }),
+      getHandler: () => function handler() {},
+    } as unknown as ExecutionContext;
+    const next: CallHandler = { handle: () => of({ example: true }) };
+
+    // Act
+    const result = await interceptOnce(context, next);
+
+    // Assert
+    expect(result).toEqual({ example: true });
+  });
+
+  it('does not wrap binary-view payloads (raw Buffer bodies)', async () => {
+    // Arrange — the adapter sends ArrayBuffer views as binary; wrapping would
+    // mangle them into a {"type":"Buffer"} JSON body (Wave 25 CR-05).
+    const payload = Buffer.from('binary-bytes');
+    const { context, next } = createInterceptorContext({}, payload);
+
+    // Act
+    const result = await interceptOnce(context, next);
+
+    // Assert
+    expect(result).toBe(payload);
   });
 
   it('still wraps routes that declare a JSON content type via @Header', async () => {

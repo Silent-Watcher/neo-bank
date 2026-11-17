@@ -185,7 +185,9 @@ src/
     enums/                 # AppEnv enum
     errors/                # AppHttpException, ErrorCode, Problem Details helpers
     filters/               # global Problem Details error filter
-    http/                  # request-ID generation/lifecycle, API version helpers
+    http/                  # request-ID generation/lifecycle, API version helpers,
+                           # conditional-request/ETag support + shared JSON
+                           # content-type helpers, root not-found fallback
     i18n/                  # global I18nModule registration (locales, resolver,
                            # missing-key policy, catalog loader)
     interceptors/          # global success response envelope
@@ -317,7 +319,8 @@ tooling (lint, format, Turbo tasks) comes from the root; see
   (`calendarDayUtcRange` for calendar-day ranges) — see
   [../../docs/utc-datetime.md](../../docs/utc-datetime.md).
 - All ADRs ([../../DECISIONS.md](../../DECISIONS.md)) ADR-001 through
-  ADR-037 are **Accepted** and implemented — follow them; don't
+  ADR-038 are **Accepted** (ADR-038 is implemented through Phase 0; its
+  remaining phases are pending) — follow them; don't
   reintroduce alternatives.
 
 ## 8. Useful Commands

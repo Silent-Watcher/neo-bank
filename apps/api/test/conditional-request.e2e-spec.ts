@@ -4,12 +4,15 @@ import request from 'supertest';
 import { ContractController } from './contract.controller.js';
 import { createE2eTestApp } from './create-test-app.js';
 
-// Conditional-request support (ADR-032 / DEFERRED.md): weak entity tags over
-// the application payload, If-None-Match revalidation answered with 304 for
-// GET/HEAD — the behavior Fastify provided and the migration accepted losing
-// until now. The validator is weak by design: the wire body carries
+// Conditional-request support (ADR-032 / ADR-038): weak entity tags over the
+// application payload and the request's resolved locale, If-None-Match
+// revalidation answered with 304 for GET/HEAD on successful (2xx)
+// representations — the behavior Fastify provided and the migration accepted
+// losing until now. The validator is weak by design: the wire body carries
 // per-response metadata (envelope timestamp/request ID), so the tag
-// validates payload equivalence, not byte identity.
+// validates payload equivalence, not byte identity. The locale composes into
+// the hash: the localized en/fa envelope variants are distinct
+// representations and never share a validator.
 describe('Conditional requests (e2e)', () => {
   it('serves a weak ETag on enveloped JSON responses', async () => {
     // Arrange
@@ -133,6 +136,91 @@ describe('Conditional requests (e2e)', () => {
     expect(notFound.status).toBe(404);
     expect(notFound.headers['content-type']).toContain('application/problem+json');
     expect(notFound.headers.etag).toMatch(/^W\/"[0-9a-f]{64}"$/);
+    await app.close();
+  });
+
+  it('tags primitive payloads with their own entity tag', async () => {
+    // Arrange
+    const app = await createE2eTestApp(undefined, { controllers: [ContractController] });
+
+    // Act
+    const response = await request(app.getHttpServer()).get('/api/v1/primitive');
+
+    // Assert — the envelope wraps the string payload, and the tag validates it.
+    expect(response.status).toBe(200);
+    expect(response.body.data).toBe('plain-payload');
+    expect(response.headers.etag).toMatch(/^W\/"[0-9a-f]{64}"$/);
+    await app.close();
+  });
+
+  it('emits locale-dependent entity tags and revalidates per locale', async () => {
+    // Arrange — the envelope message is localized, so the en/fa variants are
+    // distinct representations and must not share a validator (ADR-038 §1).
+    const app = await createE2eTestApp(undefined, { controllers: [ContractController] });
+
+    // Act
+    const en = await request(app.getHttpServer()).get('/api/v1/echo');
+    const fa = await request(app.getHttpServer()).get('/api/v1/echo').set('Accept-Language', 'fa');
+    const enEtag = en.headers.etag as string;
+    const faEtag = fa.headers.etag as string;
+
+    // Assert — different locales, different tags; each locale revalidates
+    // with its own tag and not with the other locale's.
+    expect(faEtag).toMatch(/^W\/"[0-9a-f]{64}"$/);
+    expect(faEtag).not.toBe(enEtag);
+
+    const faRevalidated = await request(app.getHttpServer())
+      .get('/api/v1/echo')
+      .set('Accept-Language', 'fa')
+      .set('If-None-Match', faEtag);
+    expect(faRevalidated.status).toBe(304);
+
+    const crossLocale = await request(app.getHttpServer())
+      .get('/api/v1/echo')
+      .set('Accept-Language', 'fa')
+      .set('If-None-Match', enEtag);
+    expect(crossLocale.status).toBe(200);
+    await app.close();
+  });
+
+  it('never revalidates a non-2xx response to 304', async () => {
+    // Arrange — a route answering with an error status has no selected
+    // representation to validate (ADR-038 §2).
+    const app = await createE2eTestApp(undefined, { controllers: [ContractController] });
+    const first = await request(app.getHttpServer()).get('/api/v1/custom-error-status');
+    const etag = first.headers.etag as string;
+
+    // Act
+    const response = await request(app.getHttpServer())
+      .get('/api/v1/custom-error-status')
+      .set('If-None-Match', etag);
+
+    // Assert — the full error-status response is served again.
+    expect(first.status).toBe(400);
+    expect(etag).toMatch(/^W\/"[0-9a-f]{64}"$/);
+    expect(response.status).toBe(400);
+    expect(response.body.data).toEqual({ failed: true });
+    await app.close();
+  });
+
+  it('keeps redirect semantics when conditional headers are present', async () => {
+    // Arrange — a redirect response has no tagged representation; the
+    // adapter's redirect status always wins over conditional processing
+    // (ADR-038 §2).
+    const app = await createE2eTestApp(undefined, { controllers: [ContractController] });
+
+    // Act
+    const initial = await request(app.getHttpServer()).get('/api/v1/redirect');
+    const revalidated = await request(app.getHttpServer())
+      .get('/api/v1/redirect')
+      .set('If-None-Match', '*');
+
+    // Assert
+    expect(initial.status).toBe(302);
+    expect(initial.headers.location).toBe('/echo');
+    expect(initial.headers.etag).toBeUndefined();
+    expect(revalidated.status).toBe(302);
+    expect(revalidated.headers.location).toBe('/echo');
     await app.close();
   });
 

@@ -1,0 +1,55 @@
+# _055 — ETag Hardening, Swagger Conditional-GET Documentation & Opt-In Conditional GET
+
+- **Date:** 2026-11-17
+- **Status:** Phase 0 implemented (see per-phase validation below). ADR-038 accepted (user-approved proposal; HEAD excluded from the new Conditional GET feature; locale folded into the tag hash — both developer decisions at the approval gate).
+
+## Original Request (condensed)
+
+Master prompt (user paste, 2026-11-17): "Production-Grade ETag and Conditional GET Support in NestJS" — three mandated phases with a dedicated commit each: **Phase 0** audit/fix/harden the existing ETag generation (tag correctness, serialization and representation identity, unsupported response types, performance); **Phase 1** centralize Swagger documentation (optional `If-None-Match` header parameter on GET operations only — never HEAD/other methods — and `304` response documentation, idempotent transform) and make the response interceptor safely bypass 304; **Phase 2** implement opt-in Conditional GET via a single route decorator with strict RFC 9110 `If-None-Match` parsing (no naive `split(',')`), weak comparison, wildcard, safe failure on malformed input, genuine bodyless 304, and comprehensive unit/e2e verification. HEAD conditional support excluded. Mandatory investigation report + explicit approval before code changes. Full original text preserved in the session history.
+
+## Pre-Implementation Investigation (approval gate, 2026-11-17)
+
+Framework facts verified against installed sources (not assumed):
+
+- `@nestjs/core` 12.5.0 `router/router-execution-context.js`: the route's status (`@HttpCode` or method default) is applied **before** the interceptor pipeline (`setStatus` at line 78) and the terminal `reply()` call passes `undefined` status (3-arg `createHandleResponseFn` call), so `reply.statusCode` read inside an interceptor `map` is authoritative and interceptor-set statuses survive.
+- `@nestjs/platform-node` 12.5.0 `adapters/node-adapter.js`: `writeBody` → `endWithoutBody` ends 304s body-less natively (Content-Type stripped); the envelope body built for a 304 is serialized then discarded.
+- `@Redirect` statuses apply after the pipeline (`RouterResponseController.redirect`), overriding any interceptor-set status — redirects are never broken by conditional processing.
+- `@nestjs/i18n` (fork): `I18nContext` is an exported injectable provider whose `locale` getter reads the per-request AsyncLocalStorage store — the sanctioned locale accessor (`I18nService.currentLocale` exists at runtime but is typed private).
+- The installed `HttpStatus` enum names 300 `AMBIGUOUS` and has **no** `MULTIPLE_CHOICES` member.
+
+Audit findings: F1 discarded 304 envelope serialization (wire-safe, wasteful); F2 missing 2xx revalidation gate (error-status routes could be revalidated); F3 naive `If-None-Match` parser (`split(',')` — fails safe but breaks on commas inside quoted tags, no input bound); F4 primitive payloads enveloped but untagged; F5 redirect tagging (self-correcting via the adapter override); F6 locale-blind validator (the i18n middleware already sends `Vary: Accept-Language`, so caching was per-locale correct, but two representations shared one validator).
+
+Developer decisions at the approval gate: plan + ADR approved; **HEAD fully excluded** from the new Conditional GET (removes the existing global HEAD revalidation with the Phase 2 narrowing — consciously deviates from RFC 9110 §13.1.2 and supersedes Wave 20 CR-05's pinning); **locale folded into the hash** (strict one-tag-per-representation).
+
+## Implementation
+
+| File                                                                | Change                                                                                                                                                                                                                                                                                                                                                                                                       |
+| ------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `DECISIONS.md`                                                      | **ADR-038** accepted (first repo write; user-approved proposal)                                                                                                                                                                                                                                                                                                                                              |
+| `apps/api/src/shared/http/etag.ts`                                  | New `weakEtagFor(serialized, locale)` — injective locale composition (`\n` separator; JSON never ends with one; locales come from the fixed newline-free allowlist); `weakEtag` unchanged (`W/"<sha256-hex>"`)                                                                                                                                                                                               |
+| `apps/api/src/shared/http/conditional-request.interceptor.ts`       | Injects `I18nContext`; tags every JSON-serializable payload (primitives included; non-serializable skipped via `JSON.stringify === undefined`); locale-composed tags; 2xx revalidation gate (`SUCCESS_STATUSES_MAX_EXCLUSIVE` = 300 named constant); non-JSON-representation exclusion                                                                                                                       |
+| `apps/api/src/shared/http/json-content-type.ts`                     | **New** shared helpers `isJsonContentType` / `declaredContentType` / `isNonJsonRepresentation` — extracted from the envelope interceptor (DRY; both interceptors share one source of truth)                                                                                                                                                                                                                  |
+| `apps/api/src/shared/interceptors/response-envelope.interceptor.ts` | Uses the shared helpers; local copies removed; behavior unchanged                                                                                                                                                                                                                                                                                                                                            |
+| `apps/api/src/shared/filters/problem-details.filter.ts`             | Injects `I18nContext`; Problem Details ETags locale-composed (titles are localized → distinct representations)                                                                                                                                                                                                                                                                                               |
+| `apps/api/src/shared/http/not-found.fallback.ts`                    | Signature gains `I18nContext`; ETag locale-composed                                                                                                                                                                                                                                                                                                                                                          |
+| `apps/api/src/shared/http/request-id.lifecycle.ts`                  | The invalid-request-ID rejection **no longer carries an ETag**: its body embeds the client-supplied (validated, normalized) inbound request ID, and hashing client-influenced input into a response header — for a tag that can never revalidate — was flagged high by the Mimosa pre-commit security gate and recommended for omission by the security review (Wave 25 SEC-04). No test pinned this header. |
+| `apps/api/src/main.ts`, `apps/api/test/create-test-app.ts`          | Pass `app.get(I18nContext)` to the fallback registration                                                                                                                                                                                                                                                                                                                                                     |
+
+Tests: `conditional-request.interceptor.spec.ts` **new** (15 cases: locale-composed tagging, distinct per-locale validators, 304 on match, no match → full response, error-status gate, method gate, HEAD revalidation, primitive tagging, non-serializable skip, SSE/StreamableFile/ended/headersSent skips, declared + reply-set non-JSON content-type skips); `etag.spec.ts` +4 (weakEtagFor format, per-locale distinction, stability, separator injectivity); `contract.controller.ts` +3 fixtures (`primitive`, `custom-error-status` 400 with record body, `redirect`); `conditional-request.e2e-spec.ts` +4 (primitive tags; locale-dependent tags with per-locale revalidation and cross-locale 200; no 304 on error status; redirect semantics preserved with `If-None-Match: *`).
+
+## Phase 0 — Hardening (validation)
+
+- Typecheck: clean. Oxlint: 0 errors. Oxfmt: clean.
+- Unit tier: 49 files / 438 tests green. E2E tier: 16 files / 100 tests green.
+- One real defect caught during implementation: primitive tagging initially tagged text/plain routes (the e2e `/text` case failed) — fixed by extracting the envelope's non-JSON content-type exclusions into the shared `json-content-type.ts` and applying them to the conditional interceptor (the same gap existed before Phase 0 for object-returning text routes).
+- `HttpStatus.MULTIPLE_CHOICES` does not exist in the installed enum (runtime `undefined`) — replaced with the named `SUCCESS_STATUSES_MAX_EXCLUSIVE = 300` constant.
+- Code-review gate: iteration 1 **CHANGES_REQUIRED** (2 Medium + 4 Low) → all remediated → iteration 2 **APPROVED_WITH_SUGGESTIONS** (all fixes verified; CR-07 cosmetic cleanup applied in-iteration; CR-06 deferred pending developer direction — see `DEFERRED.md` / Wave 25 of `docs/judge-findings.md`).
+- Security gate: **SECURITY_APPROVED_WITH_INFORMATIONAL_FINDINGS** — SEC-02 (precise JSON media-type classification: `application/json` or `+json` suffix, replacing the loose substring match) and SEC-03 (not-found fallback guard aligned with the filter's committed-response guard) applied; SEC-01 (Cache-Control policy) deferred; SEC-04 (never-revalidating error tags) accepted documented residual.
+
+## Phase 1 — Swagger Documentation & 304-Safe Envelope (validation)
+
+_Pending._
+
+## Phase 2 — Opt-In Conditional GET (validation)
+
+_Pending._

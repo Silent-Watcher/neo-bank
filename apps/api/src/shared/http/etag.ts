@@ -17,6 +17,20 @@ export function weakEtag(serializedPayload: string): string {
 }
 
 /**
+ * The quoted entity tag for a serialized representation and the request's
+ * resolved locale. Bodies whose content varies per locale (the response
+ * envelope's localized message, localized Problem Details titles) must not
+ * share a validator: composing the locale into the hashed input keeps one
+ * tag per selected representation. The `\n` separator is injective — JSON
+ * serialization never ends with a newline and the locale comes from the
+ * fixed, newline-free supported-locale allowlist — so distinct
+ * (representation, locale) pairs never collide.
+ */
+export function weakEtagFor(serializedRepresentation: string, locale: string): string {
+  return weakEtag(`${serializedRepresentation}\n${locale}`);
+}
+
+/**
  * Whether the request's `If-None-Match` header matches the entity tag: any
  * listed candidate matches after ignoring a weak validator prefix (`W/`),
  * and `*` matches any existing resource. `false` when the header is absent

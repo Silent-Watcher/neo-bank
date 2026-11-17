@@ -161,7 +161,7 @@ Core contracts:
 | `docs/api.md`                               | Human-readable API reference (nestbruno route inventory + source-verified contracts) |
 | `docs/current-state.md`                     | Feature/state snapshot (verified per feature)                                        |
 | `docs/utc-datetime.md`                      | UTC-first date/time storage policy and usage guide (ADR-030)                         |
-| `DECISIONS.md`                              | ADR-001…ADR-037, all Accepted                                                        |
+| `DECISIONS.md`                              | ADR-001…ADR-038, all Accepted                                                        |
 | `docs/docker.md`                            | Docker stacks: setup, env files, commands                                            |
 | `docs/observability/README.md`              | Monitoring stack operations                                                          |
 | `docs/observability/manual-testing.md`      | Reproducible monitoring verification scenarios                                       |

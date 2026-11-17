@@ -1,6 +1,6 @@
 import { Catch, HttpException, HttpStatus } from '@nestjs/common';
 import type { ArgumentsHost, ExceptionFilter } from '@nestjs/common';
-import { I18nService } from '@nestjs/i18n';
+import { I18nContext, I18nService } from '@nestjs/i18n';
 import { PinoLogger } from 'nestjs-pino';
 import { ThrottlerException } from '@nestjs/throttler';
 
@@ -10,7 +10,7 @@ import { buildProblemDetails, titleKeyForStatus } from '#errors/problem-details.
 import type { HttpRequestLike, HttpResponseLike } from '#http/http-boundary.js';
 import { isRecord } from '#http/http-boundary.js';
 import { resolveApiVersion } from '#http/api-version.js';
-import { weakEtag } from '#http/etag.js';
+import { weakEtagFor } from '#http/etag.js';
 import { X_REQUEST_ID_HEADER } from '#http/request-id.js';
 
 function detailFromHttpException(exception: HttpException): string {
@@ -24,10 +24,12 @@ function detailFromHttpException(exception: HttpException): string {
     if (typeof response.message === 'string') return response.message;
     if (Array.isArray(response.message)) {
       // Validation message arrays are joined so the list stays readable
-      // without leaking the raw exception structure.
-      return response.message
-        .filter((item: unknown): item is string => typeof item === 'string')
-        .join('; ');
+      // without leaking the raw exception structure; an array with no string
+      // members falls through to the built-in message like any other shape.
+      const details = response.message.filter(
+        (item: unknown): item is string => typeof item === 'string',
+      );
+      if (details.length > 0) return details.join('; ');
     }
   }
 
@@ -108,6 +110,7 @@ export class ProblemDetailsFilter implements ExceptionFilter {
   constructor(
     private readonly logger: PinoLogger,
     private readonly i18n: I18nService,
+    private readonly i18nContext: I18nContext,
   ) {}
 
   catch(exception: unknown, host: ArgumentsHost): void {
@@ -116,6 +119,21 @@ export class ProblemDetailsFilter implements ExceptionFilter {
     const reply = http.getResponse<HttpResponseLike>();
 
     const normalized = normalizeHttpException(exception, this.i18n);
+
+    // A response that is already committed (an @Sse() stream erroring after
+    // its headers went out, or a raw reply that sent and then threw) cannot
+    // carry Problem Details: a second send would throw ERR_HTTP_HEADERS_SENT
+    // out of the filter and destroy the connection. The diagnostic logging
+    // below still runs — the failure is never silently lost.
+    if (reply.headersSent || reply.writableEnded) {
+      if (normalized.status >= HttpStatus.INTERNAL_SERVER_ERROR && normalized.error !== undefined) {
+        this.logger.error({ err: normalized.error }, 'Unhandled exception (response already sent)');
+      } else {
+        this.logger.warn(`HTTP ${normalized.status} ${normalized.code} (response already sent)`);
+      }
+      return;
+    }
+
     const problem = buildProblemDetails({
       status: normalized.status,
       code: normalized.code,
@@ -129,11 +147,13 @@ export class ProblemDetailsFilter implements ExceptionFilter {
     // locale. `code`, `status`, `type` stay machine-readable (ADR-021).
     problem.title = localizedProblemTitle(this.i18n, normalized.code, normalized.status);
 
-    // Conditional-request support (ADR-032): Problem Details bodies carry an
-    // entity tag like every other JSON response. The tag never revalidates —
-    // the body embeds a fresh timestamp and request ID per response — so the
-    // header is set without any If-None-Match processing.
-    reply.header('ETag', weakEtag(JSON.stringify(problem)));
+    // Conditional-request support (ADR-032, ADR-038): Problem Details bodies
+    // carry an entity tag like every other JSON response. The tag never
+    // revalidates — the body embeds a fresh timestamp and request ID per
+    // response — so the header is set without any If-None-Match processing.
+    // The title is localized per request, so the locale composes into the
+    // hash: the en/fa problem bodies are distinct representations.
+    reply.header('ETag', weakEtagFor(JSON.stringify(problem), this.i18nContext.locale));
 
     reply
       .status(normalized.status)

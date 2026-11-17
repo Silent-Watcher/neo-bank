@@ -1981,3 +1981,63 @@ No schema or migration impact. Verification: unit tests for the probe (single-fl
 - Verified installed sources: ioredis 6.0.0 `built/Redis.js` (`sendCommand` 354-463, `setSocketTimeout` 516-531, quit/disconnect 241-269), `built/Command.js` (`setTimeout` 203-211), `built/redis/event_handler.js` (`closeHandler` 294-343, ready-handler resend/drop 415-430), `built/redis/RedisOptions.js` (defaults incl. `keepAlive: 30000`)
 - DECISIONS.md ADR-012 (raw ioredis, no wrapper), ADR-013 (global module, single client), ADR-015/026 (health exemptions, degraded/503), ADR-016/020/025 (test containers), ADR-036 (the PostgreSQL counterpart this ADR mirrors)
 - `prompts/_054-redis-reliability-black-hole-dos-protection.md`; `DEFERRED.md` SEC-INFO-01 entry (closed by this ADR)
+
+## ADR-038: Opt-In Conditional GET with RFC 9110 If-None-Match, Hardened ETag Generation, and a 304-Aware Response Envelope
+
+- **Status:** Accepted
+- **Date:** 2026-11-17
+
+### Context
+
+ADR-032 restored conditional-request support after the Fastify→NodeAdapter migration as a global mechanism: `ConditionalRequestInterceptor` tags every JSON-serializable response with a weak entity tag over the application payload (`W/"<sha256>"`) and answers a matching `If-None-Match` on GET/HEAD with `304` (Wave 20 verified the interceptor ordering, the weak-validator rationale, and the adapter's native bodyless-304 ending against the installed `@nestjs/platform-node` 12.5.0 sources). The developer then commissioned a production-grade hardening pass with three mandated phases: audit and harden the existing generation, centralize Swagger documentation for `If-None-Match`/`304`, and make conditional processing opt-in through a single route decorator with RFC 9110-compliant comparison.
+
+The pre-implementation audit (installed NestJS 12.5.0 sources read directly) verified the pipeline facts the design rests on: the route status (`@HttpCode` or method default) is applied to the response before the interceptor pipeline runs (`router-execution-context.js:78`) and the terminal `reply()` call does not re-set it, so `reply.statusCode` read inside an interceptor `map` is authoritative; the adapter ends `304` responses body-less natively (`node-adapter.js` `writeBody` → `endWithoutBody`); a route-level redirect status is applied after the interceptor pipeline, overriding any interceptor-set status. Audit findings: the response envelope still serializes a discarded 304 body; no 2xx eligibility gate exists (an error-status route with a record body could be revalidated); the `If-None-Match` parser is a naive `split(',')` (fails safe, but breaks on commas inside quoted tags and has no input bound); primitive payloads are enveloped without a tag; the tag is locale-independent while the envelope message and Problem Details titles are localized per request (the i18n middleware already sends `Vary: Accept-Language`, keeping caches per-locale correct, but two representations share one validator).
+
+### Decision
+
+1. **Tag generation stays global; the validator becomes representation-exact.** Weak SHA-256 entity tags over the serialized application payload remain (ADR-032 rationale: the envelope adds per-response metadata, so the tag validates payload equivalence, and `If-None-Match` compares weakly). The resolved request locale now participates in the hash for every locale-variant body — the enveloped payload tag (`I18nContext.locale`, the per-request AsyncLocalStorage locale) and the localized Problem Details bodies (Problem Details filter, root not-found fallback). The pre-i18n request-ID rejection carries **no entity tag**: its body embeds the client-supplied (validated, normalized) inbound request ID, and a validator whose input a client can influence — for a tag that can never revalidate anyway (fresh timestamp per response) — is exposure without caching value (Wave 25 SEC-04; the project security gate enforces this). Composition uses a shared helper with an injective separator; the tag format is unchanged (`W/"<64-hex>"`).
+2. **Revalidation eligibility is explicit and narrow.** Revalidation applies only to successful (2xx) selected representations — an explicit status gate protects error responses. Redirects are test-pinned: the adapter's redirect status wins over any interceptor-set 304, so a redirect is never broken. From Phase 2, revalidation additionally requires the opt-in decorator and applies to GET only.
+3. **Conditional GET becomes opt-in via a single route decorator (`@ConditionalGet()`).** The decorator carries runtime metadata and the OpenAPI extension `x-conditional-get` in one developer-facing annotation. Undecorated routes keep emitting entity tags but no longer revalidate — this partially supersedes ADR-032's global revalidation. No `@Res()`, no manual `If-None-Match` extraction, no envelope handling in controllers.
+4. **Strict RFC 9110 `If-None-Match` parsing with safe failure.** The naive split is replaced by a grammar-aware list parser: `*`, weak (`W/"…"`) and strong (`"…"`) entity tags, optional whitespace, commas inside quoted opaque tags, multiple header values, case-sensitive opaque-tag comparison, weak comparison for GET (weak-prefix-insensitive), malformed members ignored — a malformed header can never produce a false 304 — and a bounded input size (named constant). No dependency is introduced.
+5. **A matched condition produces a genuinely bodyless 304.** The envelope interceptor bypasses wrapping whenever the outgoing status is 304/204 at map time; the conditional interceptor emits nothing for serialization after deciding 304; the adapter ends the response natively (Content-Type stripped, no payload). The current `ETag` is preserved; no other headers are copied into the 304.
+6. **Swagger documentation is centralized and per-phase accurate.** A document transform on the generated OpenAPI document adds an optional `If-None-Match` header parameter and a `304` response (description, `ETag` header schema, no content) to eligible GET operations only — never HEAD/POST/PUT/PATCH/DELETE — with case-insensitive duplicate detection (operation-level, path-level inherited, and one-level `$ref` resolution) and preservation of manually documented 304s. During Phase 1 (global runtime) it documents every GET; from Phase 2 it keys off the decorator's `x-conditional-get` extension. The transform is idempotent. `DocumentBuilder.addGlobalParameters` is rejected for this header — it stamps the parameter onto every method.
+7. **HEAD is excluded from the new Conditional GET feature (developer decision).** HEAD responses keep their entity tag (RFC 9110 §9.3.2 metadata mirroring) but never revalidate; the existing global HEAD revalidation path is removed with the Phase 2 narrowing. This consciously deviates from §13.1.2's application of `If-None-Match` to HEAD and supersedes Wave 20 CR-05's HEAD-revalidation pinning.
+8. **Primitive payloads are tagged.** Any payload that serializes to JSON (records, arrays, strings, numbers, booleans) carries a tag; payloads with no JSON representation (functions, symbols) remain untagged. Tag coverage now matches envelope coverage.
+9. **No new dependencies, no caching layer, no platform coupling.** The double payload serialization (tag hash + envelope serialization) is an accepted constant-factor cost; all HTTP manipulation stays on the `HttpRequestLike`/`HttpResponseLike` boundary.
+
+### Options Considered
+
+- _Strong tags over the wire envelope:_ rejected — the fresh timestamp/request ID per response means revalidation never succeeds (the exact Fastify-era defect ADR-032 fixed).
+- _Keeping revalidation global:_ rejected — the developer mandate requires opt-in with a single decorator.
+- _Payload-only tags (locale-independent):_ rejected by developer decision — two representations sharing one validator is representation-inexact; the locale-composed hash costs one string concat.
+- _Keeping HEAD revalidation on decorated routes:_ rejected by developer decision — RFC §13.1.2 permits it, but exclusion matches the commissioned acceptance criteria verbatim.
+- _`addGlobalParameters` for `If-None-Match`:_ rejected — it appears on every HTTP method.
+- _Per-controller `If-None-Match` handling with `@Res()`:_ rejected — boilerplate, platform coupling, envelope-breaking.
+- _A separate conditional-request interceptor or guard pipeline:_ rejected — an unnecessary second response-processing pipeline; the existing innermost interceptor position is load-bearing (Wave 20 CR-01).
+
+### Rationale
+
+The design preserves every contract ADR-032 established (global tag emission, weak validators over the payload, envelope shape, error-path tagging) while fixing the audit findings and converting the revalidation scope to an explicit, documented, per-route decision. Every load-bearing framework fact is verified against installed sources, not assumed; each phase's Swagger output describes the runtime that phase ships.
+
+### Security Assessment
+
+The parser's bounded input and ignore-malformed posture remove a client-controlled parsing surface (no false 304s, no amplification — one pass over a bounded string). Entity tags hash payload content only — no secrets, no internal state, and no timing channel beyond the standard SHA-256 over the response. A 304 discloses nothing beyond validator equality, which is inherent to conditional HTTP. Error responses keep their advisory (never-revalidating) tags; no conditional processing is added to error paths.
+
+### Performance Implications
+
+One extra payload serialization for the tag hash and the locale-composed hash input (constant factor, unchanged from ADR-032). The 304 path stops serializing the discarded envelope body. The parser is a single bounded pass. No caching layer, no new connections, no timers.
+
+### Operational Implications
+
+Swagger remains development-only (ADR-014). Client-visible tag values change once (locale composition); no persisted state depends on tag values. Undecorated GET routes stop answering `If-None-Match` with 304 after Phase 2 — a behavior change clients observe as full 200 responses, documented in `docs/current-state.md` and `docs/api.md`.
+
+### Testing and Migration Implications
+
+No schema or migration impact. Unit: locale-composed tags, the parser matrix (valid/invalid lists, wildcards, weak/strong pairs, commas inside quotes, multi-value headers, oversized input), the envelope 304/204 map-time bypass, decorator metadata. E2E: scenarios A–E (initial 200 + tag; match → bodyless 304; non-match → 200; weak comparison; wildcard), decorated versus undecorated routes, HEAD exclusion, other methods, error statuses, 204, redirects, locale-dependent tags, envelope intactness; existing envelope/conditional suites are updated to the Phase 2 contract (a documented contract change, never a weakening).
+
+### References
+
+- `apps/api/src/shared/http/etag.ts`, `if-none-match.ts`, `conditional-get.decorator.ts`, `conditional-request.interceptor.ts`; `apps/api/src/shared/interceptors/response-envelope.interceptor.ts`; `apps/api/src/shared/swagger/swagger.setup.ts` and the conditional-GET OpenAPI transform
+- Verified installed sources: `@nestjs/core` 12.5.0 `router/router-execution-context.js` (status timing), `@nestjs/platform-node` 12.5.0 `adapters/node-adapter.js` (`reply`, `writeBody`/`endWithoutBody`), `@nestjs/i18n` `i18n.service.js` (`currentLocale`)
+- DECISIONS.md ADR-032 (the partially superseded global revalidation scope), ADR-021 (locale resolution), ADR-011 (envelope exclusions), ADR-014 (dev-only Swagger)
+- `docs/judge-findings.md` Wave 20 (the prior conditional-request review); `prompts/_055-etag-conditional-get.md`

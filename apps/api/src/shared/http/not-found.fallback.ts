@@ -1,11 +1,11 @@
 import { NotFoundException } from '@nestjs/common';
-import { I18nService } from '@nestjs/i18n';
+import { I18nContext, I18nService } from '@nestjs/i18n';
 
 import { buildProblemDetails } from '#errors/problem-details.js';
 import { localizedProblemTitle, normalizeHttpException } from '#filters/problem-details.filter.js';
 import { resolveApiVersion } from './api-version.js';
 import type { HttpRequestLike, HttpResponseLike } from './http-boundary.js';
-import { weakEtag } from './etag.js';
+import { weakEtagFor } from './etag.js';
 import { isValidUuidV4, resolveRequestId, X_REQUEST_ID_HEADER } from './request-id.js';
 
 // The minimal HTTP-adapter surface this fallback registers on, expressed
@@ -31,11 +31,13 @@ export interface RootNotFoundAdapter {
 export function registerRootNotFoundFallback(
   adapter: RootNotFoundAdapter,
   i18n: I18nService,
+  i18nContext: I18nContext,
 ): void {
   adapter.setNotFoundHandler((req, res, _next) => {
     // A future raw handler that already started the response must win; a
-    // second send would throw.
-    if (res.headersSent) {
+    // second send would throw. Aligned with the Problem Details filter's
+    // committed-response guard (Wave 25 CR-02 / SEC-03).
+    if (res.headersSent || res.writableEnded) {
       return;
     }
     const notFound = new NotFoundException(`Cannot ${req.method ?? 'GET'} ${req.url ?? '/'}`);
@@ -54,12 +56,14 @@ export function registerRootNotFoundFallback(
     });
     problem.title = localizedProblemTitle(i18n, normalized.code, normalized.status);
 
-    // ETag like every other Problem Details response (ADR-032). This handler
-    // bypasses the interceptor pipeline and the filter, so the tag is set
-    // here; the fresh per-request timestamp means it never revalidates.
+    // ETag like every other Problem Details response (ADR-032, ADR-038). This
+    // handler bypasses the interceptor pipeline and the filter, so the tag is
+    // set here; the fresh per-request timestamp means it never revalidates.
+    // The title is localized per request, so the locale composes into the
+    // hash: the en/fa problem bodies are distinct representations.
     res
       .status(problem.status)
-      .header('ETag', weakEtag(JSON.stringify(problem)))
+      .header('ETag', weakEtagFor(JSON.stringify(problem), i18nContext.locale))
       .header('content-type', 'application/problem+json')
       .header(X_REQUEST_ID_HEADER, problem.requestId)
       .send(problem);

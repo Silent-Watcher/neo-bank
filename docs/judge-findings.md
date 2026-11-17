@@ -2486,3 +2486,191 @@ information flow were verified against the installed library sources.
 - **Agreed resolution:** deferred alongside the `DATABASE_POOL_MAX` cap
   (`DEFERRED.md` item 3, extended to cover the Redis timeout variables); a
   generous named upper bound would be the fix if approved.
+
+## Wave 25 — Phase 0 ETag hardening (_055, code-reviewer, 2026-11-17) — CHANGES_REQUIRED
+
+Context-blind code review of the ADR-038 Phase 0 unit (locale-composed validators,
+2xx gate, primitive tagging, shared JSON content-type helpers, envelope, Problem
+Details paths, and the new specs). The reviewer re-verified the load-bearing
+runtime claims against the installed sources (interceptor composition order,
+`NodeResponse.header`/`getHeader` casing, the adapter's binary-view reply path,
+`HttpStatus` enum membership, i18n locale resolution) and ruled out eight candidate
+issues before reporting. Two Medium and four Low findings:
+
+### CR-01 — Envelope's non-JSON-content-type bypass is evaluated before the handler runs
+
+- **Status:** Resolved (2026-11-17, iteration 1)
+- **Severity:** Medium | **Category:** Edge Case
+- **Location:** `apps/api/src/shared/interceptors/response-envelope.interceptor.ts`
+  (`shouldSkip` eager check vs. lazy map guards).
+- **Explanation:** the "reply already set a non-JSON content type (raw reply
+  usage)" bypass ran only pre-handler, when nothing had set a content type yet —
+  a handler setting one mid-execution got its data enveloped and serialized as
+  JSON under the mislabeled content type, while the conditional interceptor's
+  lazy check skipped tagging (the two interceptors visibly disagreed).
+- **Agreed resolution:** the envelope `map` now re-checks
+  `isNonJsonRepresentation(handler, reply)` alongside the `writableEnded`/
+  `headersSent` guards and passes the payload through untouched; the eager check
+  stays as a cheap early-out. Unit case added.
+
+### CR-02 — ProblemDetailsFilter responds without a committed-response guard
+
+- **Status:** Resolved (2026-11-17, iteration 1)
+- **Severity:** Medium | **Category:** Edge Case
+- **Location:** `apps/api/src/shared/filters/problem-details.filter.ts` (`catch`).
+- **Explanation:** an exception arriving after the response was committed (an
+  `@Sse()` stream erroring after headers, or a raw reply that sent and then
+  threw) hit the unconditional `reply.status(...).send(problem)` chain —
+  `ERR_HTTP_HEADERS_SENT` thrown out of the filter, connection destroyed, and
+  because logging sat after the send, the original error was never logged.
+- **Agreed resolution:** the responding chain is guarded — a committed response
+  never receives a second send; the diagnostic logging tail runs unconditionally
+  so the failure is never silently lost. Unit cases added (committed reply → no
+  send, logs still written; uncommitted reply → send as before).
+
+### CR-03 — Class doc described a `@ConditionalGet()` decorator and HEAD exclusion that do not exist
+
+- **Status:** Resolved (2026-11-17, iteration 1)
+- **Severity:** Low | **Category:** Syntax/Code Quality
+- **Location:** `apps/api/src/shared/http/conditional-request.interceptor.ts` (class JSDoc).
+- **Explanation:** the doc's forward-looking sentence described Phase 2 behavior
+  (opt-in decorator, HEAD exclusion) as if present; documentation must match the
+  implementation that exists.
+- **Agreed resolution:** stale sentence removed; the implemented gating is fully
+  described by the remaining paragraphs. Phase 2 will document its own behavior
+  when it exists.
+
+### CR-04 — Validation-message array with no string members normalized to an empty `detail`
+
+- **Status:** Resolved (2026-11-17, iteration 1)
+- **Severity:** Low | **Category:** Edge Case
+- **Location:** `apps/api/src/shared/filters/problem-details.filter.ts`
+  (`detailFromHttpException` array branch).
+- **Explanation:** `new BadRequestException([42, {}])` produced
+  `"detail": ""` instead of falling back to the exception message every other
+  non-representable shape gets.
+- **Agreed resolution:** the array branch falls through to the `exception.message`
+  fallback when no string members survive the filter. Unit case added.
+
+### CR-05 — Binary-view payloads were enveloped and tagged, silently destroying the representation
+
+- **Status:** Resolved (2026-11-17, iteration 1)
+- **Severity:** Low | **Category:** Edge Case
+- **Location:** both global interceptors' skip conditions (only `StreamableFile`
+  was excluded although the adapter sends ArrayBuffer views as binary).
+- **Explanation:** a handler returning a raw `Buffer` would get an envelope-wrapped
+  `{"type":"Buffer","data":[…]}` JSON body (plus a validating ETag over the mangled
+  bytes) instead of the adapter's `application/octet-stream` binary path.
+- **Agreed resolution:** both interceptors skip `ArrayBuffer.isView(data)` payloads
+  alongside `StreamableFile` — the adapter's binary path receives them untouched.
+  Unit cases added in both specs.
+
+### CR-06 — Built-in exceptions with statuses outside the mapped set publish the application-error Problem Type family
+
+- **Status:** Awaiting Approval (2026-11-17)
+- **Severity:** Low | **Category:** Correctness
+- **Location:** `apps/api/src/shared/filters/problem-details.filter.ts:74`
+  (`errorCodeForStatus`) / `apps/api/src/shared/errors/error.code.ts` (fallback
+  `ErrorCode.ApplicationError`, whose Problem Type maps to
+  `/problems/application-error`).
+- **Explanation:** an ordinary built-in exception with an unmapped status (e.g.
+  `UnauthorizedException`, 401) would carry `type: '/problems/application-error'`,
+  `code: APPLICATION_ERROR`, and the "Application Error" title — the documented
+  intent is that ordinary HTTP errors use RFC 9457's `about:blank`. No current
+  thrower produces an unmapped status (guards throw only mapped codes), so no
+  live path is affected today.
+- **Agreed resolution:** not remediated in this task — the fix changes the
+  client-visible error contract (ADR-010 territory) and requires a developer
+  decision between extending the per-status code map and routing unmapped
+  statuses to a non-typed code. Recorded as a follow-up (`DEFERRED.md`); awaiting
+  direction before any contract change.
+
+### CR-07 — Dead test-code remnants (iteration 2, SUGGESTION)
+
+- **Status:** Resolved (2026-11-17, iteration 2)
+- **Severity:** Low | **Category:** Syntax/Code Quality
+- **Location:** `apps/api/src/shared/filters/problem-details.filter.spec.ts`
+  (commented-out pre-fix assertion/handler lines) and
+  `apps/api/src/shared/interceptors/response-envelope.interceptor.spec.ts`
+  (unused `handlerMetadata` fixture capability).
+- **Agreed resolution:** removed in iteration 2 rather than deferred — the
+  affected specs were already touched by this task and the remnants carried
+  zero information (live assertions supersede them).
+
+## Wave 25 security review (_055, code-security-analyzer, 2026-11-17) — SECURITY_APPROVED_WITH_INFORMATIONAL_FINDINGS
+
+Security review of the Phase 0 unit. The conditional-request surface verified sound
+against every focus area: header injection (tags are `W/"<64-hex>"`; the locale is
+hashed, never emitted, allowlist-pinned), timing side channels (no CWE-208 — the
+compared value is public and the 304 oracle requires a prior authorized 200), 304
+disclosure (2xx + GET/HEAD gated), error leakage (generic details, originals in
+Pino only), request-ID trust boundaries, and DoS (one bounded sha256 pass; guards
+ahead of the pipeline). Four informational findings:
+
+### SEC-01 — Validators on responses without explicit Cache-Control directives
+
+- **Status:** Deferred (2026-11-17) — `DEFERRED.md` follow-up (cache-control policy)
+- **Severity:** Informational | **CWE-525** (adjacent; heuristic-cache behavior)
+- **Location:** `conditional-request.interceptor.ts` (global tagging/304 surface).
+- **Explanation:** ETag/304 makes private-cache reuse of stored envelope bodies
+  possible where none was usable before; cross-session reuse requires
+  byte-identical application payloads, leaking only the prior envelope's random
+  UUID and timestamp (payload mismatch always yields a full 200 — no data
+  mismatch is possible). `Vary: Accept-Language` already covers the locale
+  dimension for Vary-honoring caches.
+- **Agreed resolution:** deferred — no authentication/user-specific responses
+  exist yet, and which directives each response class should carry is a
+  cache-control policy decision to take when authenticated, user-specific routes
+  appear.
+
+### SEC-02 — Loose JSON content-type substring match
+
+- **Status:** Resolved (2026-11-17)
+- **Severity:** Informational | **CWE-436** (Interpretation Conflict)
+- **Location:** `apps/api/src/shared/http/json-content-type.ts` (`isJsonContentType`).
+- **Explanation:** `includes('json')` would classify hypothetical types like
+  `application/x-ndjson` as JSON (wrap + tag them). No current route or attacker
+  input can reach it (types are route-declared), but the matcher sits on the
+  shared classification path of both interceptors.
+- **Agreed resolution:** the matcher now accepts exactly the JSON
+  structured-syntax forms — `application/json` or the `+json` suffix media type,
+  parameters stripped — with a dedicated unit spec (`json-content-type.spec.ts`)
+  covering forms, substring non-matches, and non-strings.
+
+### SEC-03 — Committed-response guard asymmetry (not-found fallback)
+
+- **Status:** Resolved (2026-11-17)
+- **Severity:** Informational | **CWE-754** (consistency, not reachable on this adapter)
+- **Location:** `apps/api/src/shared/http/not-found.fallback.ts` (guard).
+- **Explanation:** the fallback guarded only `headersSent` while the filter (post
+  CR-02) guards `headersSent || writableEnded`; the unguarded state is not
+  reachable for a Node `ServerResponse` today.
+- **Agreed resolution:** the fallback's guard is aligned with the filter's.
+
+### SEC-04 — Dead validators on never-revalidating error responses
+
+- **Status:** Accepted documented residual (2026-11-17)
+- **Severity:** Informational | **N/A** (design observation, RFC 9110 §8.8)
+- **Location:** Problem Details tagging paths (filter, not-found fallback, request-ID lifecycle).
+- **Explanation:** error bodies embed a fresh timestamp/request ID per response, so
+  their tags never revalidate — header noise at worst; no disclosure (the tag
+  hashes a body the client already received).
+- **Agreed resolution:** accepted — this is the documented ADR-032/ADR-038 parity
+  decision (Phase 0 audit finding F8); removing the header would be an observable
+  contract change with no security or correctness gain.
+
+### SEC-04 status update (2026-11-17, after the Mimosa pre-commit block)
+
+- **Status update:** partially applied. The Mimosa pre-commit security gate
+  blocked the Phase 0 commit flagging the request-ID lifecycle's
+  `weakEtag(JSON.stringify(problem))` as a high-severity taint flow (the body
+  embeds the client-supplied, validated, normalized inbound `x-request-id`,
+  which reaches the `ETag` response header through the hash — one hop within
+  one function). Substantively the echo is the deliberate ADR-010 contract and
+  the tag revealed nothing the body did not already carry, but the flagged line
+  was also exactly the dead-validator exposure SEC-04 recommended omitting.
+  Resolution: the invalid-request-ID rejection no longer carries an entity tag
+  (the only tagging site whose input a client can influence); the filter and
+  root not-found fallback keep their never-revalidating tags (server-assigned
+  IDs only). No test pinned the removed header; ADR-038 Decision 1,
+  `docs/current-state.md`, and the prompt record updated to match.

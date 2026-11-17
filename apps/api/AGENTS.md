@@ -49,7 +49,9 @@ development/test.
   shared response schemas), `errors/` +
   `filters/problem-details.filter.ts` (RFC 9457 error contract),
   `interceptors/response-envelope.interceptor.ts` (success envelope),
-  `pipes/zod-validation.pipe.ts`, `http/` (request IDs, API version),
+  `pipes/zod-validation.pipe.ts`, `http/` (request IDs, API version,
+  conditional-request/ETag support and the shared JSON content-type helpers,
+  root not-found fallback),
   `throttler/` (global HTTP rate limiting: `@nestjs/throttler` + Redis
   storage, named policies, `RedisThrottlerGuard`), `i18n/` (global i18n
   registration: locale resolution, catalogs, missing-key policy — see
@@ -68,6 +70,16 @@ development/test.
   by the envelope interceptor; every error becomes Problem Details
   (ADR-010/011). Do not hand-roll response or error shapes; ADR-011 lists the
   response types that must bypass the envelope.
+- **Conditional requests:** the global `ConditionalRequestInterceptor` sets a
+  weak `ETag` over the serialized payload and the request's resolved locale
+  (`weakEtagFor` in `src/shared/http/etag.ts`; ADR-032, ADR-038 Phase 0) on
+  every JSON-serializable response and answers a matching `If-None-Match`
+  with `304` for GET/HEAD on 2xx responses only — error statuses and
+  redirects never revalidate. Routes bypassing the envelope (SSE, streams,
+  non-JSON representations via the shared `json-content-type.ts` helpers)
+  are not tagged either; Problem Details bodies (filter + root not-found
+  fallback) carry locale-composed tags that never revalidate. Never set
+  `ETag` or handle `If-None-Match` in feature code.
 - **Redis:** global `RedisModule` in `src/shared/redis/` (ADR-012/013) owns
   the single ioredis client and its lifecycle; `RedisService` is the
   application interface. Redis connection settings are mandatory, but the
@@ -419,8 +431,9 @@ pnpm db:migration:down   # revert the most recent migration
 ## Constraints
 
 - Follow the decision records in [../../DECISIONS.md](../../DECISIONS.md) —
-  all ADRs ADR-001 through ADR-037 are **Accepted** and implemented; do not
-  build against their rejected alternatives.
+  all ADRs ADR-001 through ADR-038 are **Accepted** (ADR-038 is implemented
+  through Phase 0; its remaining phases are pending); do not build against
+  their rejected alternatives.
 - New architectural decisions follow the ADR-first workflow in the root
   [AGENTS.md](../../AGENTS.md): propose the ADR, get explicit user approval,
   write the accepted ADR as the first repository change, then implement.

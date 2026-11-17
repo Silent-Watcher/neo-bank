@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { ifNoneMatchSatisfied, weakEtag } from './etag.js';
+import { ifNoneMatchSatisfied, weakEtag, weakEtagFor } from './etag.js';
 
 describe('weakEtag', () => {
   it('produces a quoted weak entity tag', () => {
@@ -13,6 +13,29 @@ describe('weakEtag', () => {
 
   it('is stable for the same body', () => {
     expect(weakEtag('stable')).toBe(weakEtag('stable'));
+  });
+});
+
+describe('weakEtagFor', () => {
+  it('produces a quoted weak entity tag', () => {
+    expect(weakEtagFor('{"example":true}', 'en')).toMatch(/^W\/"[0-9a-f]{64}"$/);
+  });
+
+  it('distinguishes representations served for different locales', () => {
+    const serialized = '{"example":true}';
+    expect(weakEtagFor(serialized, 'en')).not.toBe(weakEtagFor(serialized, 'fa'));
+  });
+
+  it('is stable for the same representation and locale', () => {
+    expect(weakEtagFor('stable', 'en')).toBe(weakEtagFor('stable', 'en'));
+  });
+
+  it('composes the locale injectively — no representation/locale pair collides', () => {
+    // A serialized payload that itself contains the separator followed by a
+    // locale-looking suffix must never collide with a shorter payload whose
+    // separator and locale land on the same bytes.
+    expect(weakEtagFor('payload\nfa', 'en')).not.toBe(weakEtagFor('payload', 'fa'));
+    expect(weakEtagFor('payload\nen', 'en')).not.toBe(weakEtagFor('payload', 'en'));
   });
 });
 

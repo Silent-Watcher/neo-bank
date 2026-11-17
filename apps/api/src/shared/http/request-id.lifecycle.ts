@@ -5,7 +5,6 @@ import { ErrorCode } from '#errors/error.code.js';
 import { buildProblemDetails } from '#errors/problem-details.js';
 import { resolveApiVersion } from './api-version.js';
 import type { HttpRequestLike, HttpResponseLike } from './http-boundary.js';
-import { weakEtag } from './etag.js';
 
 import {
   X_REQUEST_ID_HEADER,
@@ -70,13 +69,11 @@ export function registerRequestIdLifecycle(
       `Rejected invalid ${X_REQUEST_ID_HEADER} header; assigned request ID ${problem.requestId}.`,
     );
 
-    // ETag like every other Problem Details response (ADR-032). This hook
-    // bypasses the interceptor pipeline and the filter, so the tag is set
-    // here; the fresh per-request timestamp means it never revalidates.
-    res
-      .status(problem.status)
-      .header('ETag', weakEtag(JSON.stringify(problem)))
-      .header('content-type', 'application/problem+json')
-      .send(problem);
+    // No entity tag on this response, unlike the other Problem Details paths:
+    // the body embeds the client-supplied (validated, normalized) inbound
+    // request ID, and a tag whose input a client can influence — for a
+    // validator that can never revalidate anyway (fresh timestamp per
+    // response) — is pure exposure with no caching value (Wave 25 SEC-04).
+    res.status(problem.status).header('content-type', 'application/problem+json').send(problem);
   });
 }

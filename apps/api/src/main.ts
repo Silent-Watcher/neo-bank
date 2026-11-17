@@ -1,6 +1,6 @@
 import { RequestMethod, VersioningType } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
-import { I18nService } from '@nestjs/i18n';
+import { I18nContext, I18nService } from '@nestjs/i18n';
 import type { NestNodeApplication } from '@nestjs/platform-node';
 import { NodeAdapter } from '@nestjs/platform-node';
 import { Logger } from 'nestjs-pino';
@@ -116,7 +116,7 @@ async function bootstrap() {
   // Root-level not-found fallback: keeps the Problem Details contract for
   // unmatched paths outside the global prefix (ADR-032). Must be registered
   // after init, behind the routes and the prefix-scoped not-found mount.
-  registerRootNotFoundFallback(adapter, app.get(I18nService));
+  registerRootNotFoundFallback(adapter, app.get(I18nService), app.get(I18nContext));
 
   await app.listen(port, host);
 

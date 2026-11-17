@@ -239,16 +239,26 @@ its shared entity base plus the first feature entity (`Enrollment`, table
   An additional per-phone hourly rate limit (5 sends / rolling 60 min) is
   enforced atomically via Redis sorted set. No registration or authentication
   steps yet.
-- Conditional requests (restored Fastify-era behavior, ADR-032/DEFERRED.md):
-  weak entity tags (`W/"<sha256>"`) over the application payload on every
-  JSON response (envelope path, Problem Details path, and the bootstrap error
-  paths alike), `If-None-Match` revalidation with 304 for GET/HEAD (weak
-  comparison — unlike Fastify's strong envelope tags, which never matched in
-  practice because of the per-response metadata, this revalidation works), no
-  revalidation for other methods, SSE skipped; proxy trust is
-  optionally narrowed by `TRUST_PROXY_PROXIES` (see the env table in
-  `apps/api/ONBOARDING.md`).
-- Tests: Vitest unit (47 files / 403 tests), e2e (16 files / 96 tests), Redis
+- Conditional requests (restored Fastify-era behavior, ADR-032; hardened by
+  ADR-038 Phase 0): weak entity tags (`W/"<sha256>"`) composed over the serialized
+  application payload **and the request's resolved locale** on every JSON
+  response (envelope path, Problem Details path, and the bootstrap error
+  paths alike — the locale composes into the hash because the envelope
+  message and Problem Details titles are localized; the pre-i18n request-ID
+  rejection carries no entity tag — its body embeds the client-supplied
+  (validated, normalized) inbound request ID, so no client-influenced input
+  is hashed into a response header),
+  `If-None-Match` revalidation with 304 for GET/HEAD (weak comparison —
+  unlike Fastify's strong envelope tags, which never matched in practice
+  because of the per-response metadata, this revalidation works) gated to
+  successful (2xx) responses — error-status routes and redirects are never
+  revalidated to 304; no revalidation for other methods; SSE, streams, and
+  routes controlling their own non-JSON representation (declared or
+  reply-set non-JSON content type, shared `json-content-type.ts` helpers
+  with the envelope) are skipped; primitive payloads (strings, numbers) are
+  tagged like records; proxy trust is optionally narrowed by
+  `TRUST_PROXY_PROXIES` (see the env table in `apps/api/ONBOARDING.md`).
+- Tests: Vitest unit (49 files / 438 tests), e2e (16 files / 100 tests), Redis
   integration (5 files / 65 tests via `pnpm test:redis`), database
   integration (4 files / 28 tests via `pnpm test:db`,
   ADR-027/029/030/031/036 — `base-entity.db-spec.ts`, `enrollment.db-spec.ts`
@@ -270,7 +280,7 @@ its shared entity base plus the first feature entity (`Enrollment`, table
   (`@vitest/coverage-v8`, text/html/lcov reports under `apps/api/coverage/`;
   measured baseline ≈ 75% statements). Future workspaces join the pipeline
   by exposing the conventional `test`/`test:coverage` scripts. Unit, e2e,
-  database, and Redis counts verified 2026-11-17 (unit 403/403, e2e 96/96,
+  database, and Redis counts verified 2026-11-17 (unit 424/424, e2e 100/100,
   database 28/28, Redis 65/65); integration-tier runs through the new
   orchestration and the pre-push failure proof are pending per
   `prompts/_052-*.md` (registry outage).
@@ -288,6 +298,10 @@ its shared entity base plus the first feature entity (`Enrollment`, table
   persistence layer is implemented at infrastructure level and carries the
   first feature entity), authentication/authorization, remaining banking
   features, SMS provider integration.
+- The remaining ADR-038 phases: centralized Swagger `If-None-Match`/`304`
+  documentation, strict RFC 9110 `If-None-Match` parsing, the 304-aware
+  envelope bypass, and opt-in `@ConditionalGet()` revalidation (undecorated
+  GET routes stop revalidating; HEAD revalidation is removed).
 
 ### `apps/web` — Next.js 16 customer app (scaffold)
 
@@ -417,6 +431,6 @@ Per-app commands are listed in each `apps/<app>/ONBOARDING.md`.
 
 All ADRs live in [DECISIONS.md](../DECISIONS.md). Status as of this snapshot:
 
-- **Accepted:** ADR-001 (Turborepo), ADR-002 (Fastify — superseded by ADR-032), ADR-003 (SWC), ADR-004 (@nestjs/config + Zod), ADR-005 (URI versioning), ADR-006 (1 MiB body limit), ADR-007 (`api` prefix), ADR-008/009 (Pino / nestjs-pino), ADR-010 (UUIDv4 request IDs), ADR-011 (envelope exclusions), ADR-012 (ioredis without a wrapper), ADR-013 (Redis module architecture), ADR-014 (Swagger/OpenAPI, development-only), ADR-015 (Global HTTP rate limiting with Redis-backed @nestjs/throttler), ADR-016 (Testcontainers for integration and e2e testing), ADR-017 (OTP verification attempt lockout for enrollment security), ADR-018 (HMAC-SHA-256 digest storage for enrollment OTPs), ADR-019 (OTP verification hardening — conditional attempt counting and challenge identity), ADR-020 (development Redis service migrated to Redis Stack with bundled Redis Insight), ADR-021 (bilingual internationalization en/fa via the official @nestjs/i18n), ADR-022 (centralized logging with Grafana Alloy, Loki, and Grafana), ADR-023 (project-level multi-agent development workflow for ZCode + Claude Code), ADR-024 (MockServer for development-time resilience testing), ADR-025 (managing the e2e Redis with Testcontainers — one shared container per run), ADR-026 (memory-based load shedding and health-aware readiness), ADR-027 (Use MikroORM v7 with PostgreSQL for Persistence), ADR-028 (pgAdmin 4 as the development-only PostgreSQL web UI), ADR-029 (Shared MikroORM BaseEntity with Actor Audit Context and Native Optimistic Locking), ADR-030 (UTC-First TIMESTAMPTZ Storage Policy), ADR-031 (Use nestjs-cls for the Application Actor Context), ADR-032 (Migrate the API HTTP Platform from Fastify to the NestJS NodeAdapter — supersedes ADR-002), ADR-033 (Immutable Migration Policy and Dedicated Migration Reviewer), ADR-034 (Database Connection Lifecycle Logging via the pg Pool), ADR-035 (Centralized Monorepo Test Orchestration, Parallel Execution, and Vitest Coverage via Turborepo), ADR-036 (Bounded, Coalesced Database Health Probes and Explicit PostgreSQL Pool Configuration), ADR-037 (Bounded Redis Commands, Black-Hole Recovery, and Coalesced Redis Health Probes).
+- **Accepted:** ADR-001 (Turborepo), ADR-002 (Fastify — superseded by ADR-032), ADR-003 (SWC), ADR-004 (@nestjs/config + Zod), ADR-005 (URI versioning), ADR-006 (1 MiB body limit), ADR-007 (`api` prefix), ADR-008/009 (Pino / nestjs-pino), ADR-010 (UUIDv4 request IDs), ADR-011 (envelope exclusions), ADR-012 (ioredis without a wrapper), ADR-013 (Redis module architecture), ADR-014 (Swagger/OpenAPI, development-only), ADR-015 (Global HTTP rate limiting with Redis-backed @nestjs/throttler), ADR-016 (Testcontainers for integration and e2e testing), ADR-017 (OTP verification attempt lockout for enrollment security), ADR-018 (HMAC-SHA-256 digest storage for enrollment OTPs), ADR-019 (OTP verification hardening — conditional attempt counting and challenge identity), ADR-020 (development Redis service migrated to Redis Stack with bundled Redis Insight), ADR-021 (bilingual internationalization en/fa via the official @nestjs/i18n), ADR-022 (centralized logging with Grafana Alloy, Loki, and Grafana), ADR-023 (project-level multi-agent development workflow for ZCode + Claude Code), ADR-024 (MockServer for development-time resilience testing), ADR-025 (managing the e2e Redis with Testcontainers — one shared container per run), ADR-026 (memory-based load shedding and health-aware readiness), ADR-027 (Use MikroORM v7 with PostgreSQL for Persistence), ADR-028 (pgAdmin 4 as the development-only PostgreSQL web UI), ADR-029 (Shared MikroORM BaseEntity with Actor Audit Context and Native Optimistic Locking), ADR-030 (UTC-First TIMESTAMPTZ Storage Policy), ADR-031 (Use nestjs-cls for the Application Actor Context), ADR-032 (Migrate the API HTTP Platform from Fastify to the NestJS NodeAdapter — supersedes ADR-002), ADR-033 (Immutable Migration Policy and Dedicated Migration Reviewer), ADR-034 (Database Connection Lifecycle Logging via the pg Pool), ADR-035 (Centralized Monorepo Test Orchestration, Parallel Execution, and Vitest Coverage via Turborepo), ADR-036 (Bounded, Coalesced Database Health Probes and Explicit PostgreSQL Pool Configuration), ADR-037 (Bounded Redis Commands, Black-Hole Recovery, and Coalesced Redis Health Probes), ADR-038 (Opt-In Conditional GET with RFC 9110 If-None-Match, Hardened ETag Generation, and a 304-Aware Response Envelope).
 
-All architectural decisions are accepted and implemented. Do not build on rejected alternatives (e.g. do not introduce header versioning or a second logger).
+All architectural decisions are accepted and implemented, except ADR-038's later phases (centralized Swagger conditional-request documentation, strict RFC 9110 `If-None-Match` parsing, the 304-aware envelope bypass, and the opt-in `@ConditionalGet()` decorator), which are pending. Do not build on rejected alternatives (e.g. do not introduce header versioning or a second logger).

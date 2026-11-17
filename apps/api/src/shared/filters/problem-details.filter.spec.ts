@@ -8,7 +8,7 @@ import { HttpStatus } from '@nestjs/common';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { HttpRequestLike, HttpResponseLike } from '#http/http-boundary.js';
-import { I18nService } from '@nestjs/i18n';
+import { I18nContext, I18nService } from '@nestjs/i18n';
 import { PinoLogger } from 'nestjs-pino';
 
 import { AppHttpException } from '#errors/app-http.exception.js';
@@ -28,7 +28,10 @@ const ENGLISH_MESSAGES: Record<string, string> = {
   'errors.details.rateLimited': 'Too many requests. Retry later.',
 };
 
-function createFilterFixture(requestUrl = '/api/v1/hello') {
+function createFilterFixture(
+  requestUrl = '/api/v1/hello',
+  replyOverrides: { headersSent?: boolean; writableEnded?: boolean } = {},
+) {
   const replySend = vi.fn();
 
   const reply: HttpResponseLike = {
@@ -40,8 +43,8 @@ function createFilterFixture(requestUrl = '/api/v1/hello') {
     header: vi.fn<(name: string, value: string) => HttpResponseLike>(() => reply),
     getHeader: vi.fn<(name: string) => undefined>(() => undefined),
     send: replySend,
-    writableEnded: false,
-    headersSent: false,
+    writableEnded: replyOverrides.writableEnded ?? false,
+    headersSent: replyOverrides.headersSent ?? false,
   };
 
   const request: HttpRequestLike = { id: REQUEST_ID, url: requestUrl, headers: {} };
@@ -60,15 +63,23 @@ function createFilterFixture(requestUrl = '/api/v1/hello') {
     ),
   } as unknown as I18nService;
 
-  return { filter: new ProblemDetailsFilter(logger, i18n), reply, replySend, logger, host, i18n };
+  const i18nContext = { locale: 'en' } as unknown as I18nContext;
+
+  return {
+    filter: new ProblemDetailsFilter(logger, i18n, i18nContext),
+    reply,
+    replySend,
+    logger,
+    host,
+    i18n,
+    i18nContext,
+  };
 }
 
 describe('ProblemDetailsFilter', () => {
   it('normalizes built-in HTTP exceptions into Problem Details', () => {
-    // const { filter, replySend } = createFilterFixture();
     const { filter, replySend, host } = createFilterFixture();
 
-    // filter.catch(new NotFoundException('The requested resource was not found.'), {} as never);
     filter.catch(new NotFoundException('The requested resource was not found.'), host);
 
     expect(replySend).toHaveBeenCalledWith(
@@ -88,11 +99,9 @@ describe('ProblemDetailsFilter', () => {
   });
 
   it('sets the Problem Details media type and request ID headers', () => {
-    // const { filter, reply } = createFilterFixture();
     const { filter, reply, host } = createFilterFixture();
     const headerSpy = reply.header as ReturnType<typeof vi.fn>;
 
-    // filter.catch(new NotFoundException(), {} as never);
     filter.catch(new NotFoundException(), host);
 
     expect(headerSpy).toHaveBeenCalledWith('content-type', 'application/problem+json');
@@ -101,13 +110,7 @@ describe('ProblemDetailsFilter', () => {
   });
 
   it('joins validation message arrays into a readable detail', () => {
-    // const { filter, replySend } = createFilterFixture();
     const { filter, replySend, host } = createFilterFixture();
-
-    // filter.catch(
-    //   new BadRequestException(['name must be a string', 'age must be a number']),
-    //   {} as never,
-    // );
 
     filter.catch(new BadRequestException(['name must be a string', 'age must be a number']), host);
 
@@ -121,17 +124,7 @@ describe('ProblemDetailsFilter', () => {
   });
 
   it('normalizes AppHttpException with its typed code and family Problem Type', () => {
-    // const { filter, replySend } = createFilterFixture();
     const { filter, replySend, host } = createFilterFixture();
-
-    // filter.catch(
-    //   new AppHttpException(
-    //     ErrorCode.ApplicationError,
-    //     'Something application-specific failed.',
-    //     HttpStatus.CONFLICT,
-    //   ),
-    //   {} as never,
-    // );
 
     filter.catch(
       new AppHttpException(
@@ -154,10 +147,8 @@ describe('ProblemDetailsFilter', () => {
   });
 
   it('normalizes unknown exceptions into a safe generic 500', () => {
-    // const { filter, replySend } = createFilterFixture();
     const { filter, replySend, host } = createFilterFixture();
 
-    // filter.catch(new Error('database connection string postgres://secret'), {} as never);
     filter.catch(new Error('database connection string postgres://secret'), host);
 
     expect(replySend).toHaveBeenCalledWith(
@@ -174,11 +165,9 @@ describe('ProblemDetailsFilter', () => {
   });
 
   it('logs unexpected server errors at error severity with the exception', () => {
-    // const { filter, logger } = createFilterFixture();
     const { filter, logger, host } = createFilterFixture();
     const original = new Error('boom');
 
-    // filter.catch(original, {} as never);
     filter.catch(original, host);
 
     expect(logger.error).toHaveBeenCalledWith(
@@ -215,10 +204,8 @@ describe('ProblemDetailsFilter', () => {
   });
 
   it('logs expected client errors at warn severity only', () => {
-    // const { filter, logger } = createFilterFixture();
     const { filter, logger, host } = createFilterFixture();
 
-    // filter.catch(new NotFoundException(), {} as never);
     filter.catch(new NotFoundException(), host);
 
     expect(logger.warn).toHaveBeenCalledWith('HTTP 404 NOT_FOUND');
@@ -237,11 +224,50 @@ describe('ProblemDetailsFilter', () => {
     expect(logger.error).not.toHaveBeenCalled();
   });
 
+  it('never re-sends a response that is already committed, but still logs the failure', () => {
+    // A response committed before the exception arrived (an @Sse() stream
+    // erroring after its headers went out, or a raw reply that sent and then
+    // threw) cannot carry Problem Details — a second send would throw
+    // ERR_HTTP_HEADERS_SENT out of the filter and destroy the connection
+    // (Wave 25 CR-02). The diagnostic logging must still run.
+    const committedByHeaders = createFilterFixture('/api/v1/hello', { headersSent: true });
+    committedByHeaders.filter.catch(new Error('late failure'), committedByHeaders.host);
+    expect(committedByHeaders.replySend).not.toHaveBeenCalled();
+    expect(committedByHeaders.logger.error).toHaveBeenCalledWith(
+      expect.objectContaining({ err: expect.any(Error) }),
+      'Unhandled exception (response already sent)',
+    );
+
+    const committedByEnd = createFilterFixture('/api/v1/hello', { writableEnded: true });
+    committedByEnd.filter.catch(new NotFoundException(), committedByEnd.host);
+    expect(committedByEnd.replySend).not.toHaveBeenCalled();
+    expect(committedByEnd.logger.warn).toHaveBeenCalledWith(
+      'HTTP 404 NOT_FOUND (response already sent)',
+    );
+  });
+
+  it('falls back to the built-in message when a validation array has no string members', () => {
+    // Wave 25 CR-04: an array response.message without string members must
+    // not normalize to an empty detail; the built-in exception message is the
+    // fallback every other non-representable shape gets.
+    const { filter, replySend, host } = createFilterFixture();
+
+    filter.catch(new BadRequestException({ message: [42, {}] }), host);
+
+    // The built-in message of `BadRequestException({ message })` is "Bad
+    // Request Exception" (the description default), never an empty string.
+    expect(replySend).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: 400,
+        detail: 'Bad Request Exception',
+        code: ErrorCode.BadRequest,
+      }),
+    );
+  });
+
   it('derives the API version from the request URI on the error path', () => {
-    // const { filter, replySend } = createFilterFixture('/health');
     const { filter, replySend, host } = createFilterFixture('/health');
 
-    // filter.catch(new NotFoundException(), {} as never);
     filter.catch(new NotFoundException(), host);
 
     expect(replySend).toHaveBeenCalledWith(expect.objectContaining({ apiVersion: 'neutral' }));

@@ -20,7 +20,7 @@ import {
 import serverConfig from '#config/server.config.js';
 import { registerRequestIdLifecycle } from '#http/request-id.lifecycle.js';
 import { registerRootNotFoundFallback } from '#http/not-found.fallback.js';
-import { I18nService } from '@nestjs/i18n';
+import { I18nContext, I18nService } from '@nestjs/i18n';
 import { MIKRO_ORM_MODULE_OPTIONS } from '@mikro-orm/nestjs';
 import { PostgreSqlDriver } from '@mikro-orm/postgresql';
 
@@ -109,7 +109,7 @@ export async function createTestApp(
   // Mirrors the production bootstrap: the root-level not-found fallback keeps
   // the Problem Details contract for unmatched paths outside the global
   // prefix (ADR-032).
-  registerRootNotFoundFallback(adapter, app.get(I18nService));
+  registerRootNotFoundFallback(adapter, app.get(I18nService), app.get(I18nContext));
   // The Redis connection is initiated in the background at init; guarded
   // routes fail closed (500) until it is ready. Deployments gate traffic on
   // the health probe the same way — connect the client when a spec stubbed

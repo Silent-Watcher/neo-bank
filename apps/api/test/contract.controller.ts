@@ -11,6 +11,7 @@ import {
   Param,
   Post,
   Query,
+  Redirect,
   Sse,
   StreamableFile,
 } from '@nestjs/common';
@@ -40,6 +41,23 @@ export class ContractController {
   @Get('echo')
   echo(): Record<string, unknown> {
     return { example: true };
+  }
+
+  @Get('primitive')
+  primitive(): string {
+    return 'plain-payload';
+  }
+
+  @Get('custom-error-status')
+  @HttpCode(HttpStatus.BAD_REQUEST)
+  customErrorStatus(): Record<string, unknown> {
+    return { failed: true };
+  }
+
+  @Get('redirect')
+  @Redirect('/echo', HttpStatus.FOUND)
+  redirect(): undefined {
+    return undefined;
   }
 
   @Post('things')
