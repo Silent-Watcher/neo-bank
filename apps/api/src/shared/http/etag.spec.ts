@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { ifNoneMatchSatisfied, weakEtag, weakEtagFor } from './etag.js';
+import { weakEtag, weakEtagFor } from './etag.js';
 
 describe('weakEtag', () => {
   it('produces a quoted weak entity tag', () => {
@@ -36,37 +36,5 @@ describe('weakEtagFor', () => {
     // separator and locale land on the same bytes.
     expect(weakEtagFor('payload\nfa', 'en')).not.toBe(weakEtagFor('payload', 'fa'));
     expect(weakEtagFor('payload\nen', 'en')).not.toBe(weakEtagFor('payload', 'en'));
-  });
-});
-
-describe('ifNoneMatchSatisfied', () => {
-  const etag = 'W/"abc"';
-
-  it('is unsatisfied when the header is absent or empty', () => {
-    expect(ifNoneMatchSatisfied(undefined, etag)).toBe(false);
-    expect(ifNoneMatchSatisfied('', etag)).toBe(false);
-    expect(ifNoneMatchSatisfied(42, etag)).toBe(false);
-  });
-
-  it('matches the exact entity tag', () => {
-    expect(ifNoneMatchSatisfied('W/"abc"', etag)).toBe(true);
-    // If-None-Match compares weakly: a strong-quoted candidate with the same
-    // opaque value matches the weak tag.
-    expect(ifNoneMatchSatisfied('"abc"', etag)).toBe(true);
-  });
-
-  it('matches one candidate among several', () => {
-    expect(ifNoneMatchSatisfied('"other", W/"abc"', etag)).toBe(true);
-    expect(ifNoneMatchSatisfied('"other", "def"', etag)).toBe(false);
-  });
-
-  it('matches the wildcard candidate', () => {
-    expect(ifNoneMatchSatisfied('*', etag)).toBe(true);
-    expect(ifNoneMatchSatisfied('"other", *', etag)).toBe(true);
-  });
-
-  it('ignores surrounding whitespace in candidates', () => {
-    expect(ifNoneMatchSatisfied('  W/"abc"  ', etag)).toBe(true);
-    expect(ifNoneMatchSatisfied('"other" , W/"abc"', etag)).toBe(true);
   });
 });

@@ -22,6 +22,7 @@ import { z } from 'zod';
 import { AppHttpException } from '#src/shared/errors/app-http.exception.js';
 import { ErrorCode } from '#src/shared/errors/error.code.js';
 import { ZodValidationPipe } from '#src/shared/pipes/zod-validation.pipe.js';
+import { ConditionalGet } from '#http/conditional-get.decorator.js';
 
 const CreateThingSchema = z.object({
   name: z.string().min(1),
@@ -40,6 +41,14 @@ const SearchQuerySchema = z.object({
 export class ContractController {
   @Get('echo')
   echo(): Record<string, unknown> {
+    return { example: true };
+  }
+
+  // The opt-in Conditional GET fixture (ADR-038 §3): identical payload to
+  // /echo, but revalidation applies here and not to the undecorated /echo.
+  @Get('conditional')
+  @ConditionalGet()
+  conditional(): Record<string, unknown> {
     return { example: true };
   }
 

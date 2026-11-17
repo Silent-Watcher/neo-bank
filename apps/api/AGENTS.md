@@ -72,14 +72,21 @@ development/test.
   response types that must bypass the envelope.
 - **Conditional requests:** the global `ConditionalRequestInterceptor` sets a
   weak `ETag` over the serialized payload and the request's resolved locale
-  (`weakEtagFor` in `src/shared/http/etag.ts`; ADR-032, ADR-038 Phase 0) on
-  every JSON-serializable response and answers a matching `If-None-Match`
-  with `304` for GET/HEAD on 2xx responses only — error statuses and
-  redirects never revalidate. Routes bypassing the envelope (SSE, streams,
-  non-JSON representations via the shared `json-content-type.ts` helpers)
-  are not tagged either; Problem Details bodies (filter + root not-found
-  fallback) carry locale-composed tags that never revalidate. Never set
-  `ETag` or handle `If-None-Match` in feature code.
+  (`weakEtagFor` in `src/shared/http/etag.ts`; ADR-032, ADR-038) plus
+  `Cache-Control: private, no-cache` on every JSON-serializable response.
+  Revalidation is **opt-in**: a route decorated with `@ConditionalGet()`
+  (`src/shared/http/conditional-get.decorator.ts`) answers a matching
+  `If-None-Match` (strict RFC 9110 parsing in
+  `src/shared/http/if-none-match.ts`) with a bodyless `304` for GET on 2xx
+  responses only — undecorated routes, HEAD (§7), other methods, error
+  statuses, and redirects never revalidate. Routes bypassing the envelope
+  (SSE, streams, non-JSON representations via the shared
+  `json-content-type.ts` helpers) are not tagged either; Problem Details
+  bodies (filter + root not-found fallback) carry locale-composed tags that
+  never revalidate. The development Swagger documents the `If-None-Match`
+  parameter and the `304` only for decorator-marked operations
+  (`x-conditional-get`). Never set `ETag`, handle `If-None-Match`, or set
+  cache directives in feature code.
 - **Redis:** global `RedisModule` in `src/shared/redis/` (ADR-012/013) owns
   the single ioredis client and its lifecycle; `RedisService` is the
   application interface. Redis connection settings are mandatory, but the

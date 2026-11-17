@@ -2820,3 +2820,42 @@ the first authenticated, per-user GET endpoint defines its stricter per-endpoint
 policy.
 
 `DEFERRED.md` items 2 and 3 of the _055 section are marked Done.
+
+## Wave 27 — Phase 2 opt-in Conditional GET (_055, code-reviewer, 2026-11-18) — APPROVED_WITH_SUGGESTIONS
+
+Context-blind review of the strict RFC 9110 parser, the composite decorator,
+the opt-in/GET-only/HEAD-excluded interceptor gating, and the
+extension-keyed Swagger transform. The reviewer hand-traced the quote-aware
+list splitter against the grammar (including the no-false-304 argument), the
+etagc validation, the wildcard scoping, the weak-prefix case sensitivity, the
+ReDoS posture (no regex, single capped pass), and the Symbol-keyed metadata
+safety. Three Low findings, all applied in-iteration:
+
+### CR-01 — `x-conditional-get` extension key duplicated as two constants
+
+- **Status:** Resolved (2026-11-18)
+- **Severity:** Low | **Category:** Syntax/Code Quality
+- **Agreed resolution:** the decorator now exports
+  `CONDITIONAL_GET_EXTENSION` as the single source of truth; the transform
+  imports it, so a rename can no longer silently desynchronize the
+  documentation.
+
+### CR-02 — Decorated GETs with an intrinsically bodyless documented success (204-only) were documented as revalidatable
+
+- **Status:** Resolved (2026-11-18)
+- **Severity:** Low | **Category:** Edge Case
+- **Agreed resolution:** `documentsNonJsonSuccessOnly` generalized to
+  `documentsTaglessSuccessOnly`: the operation is skipped when every
+  documented 2xx success response is tagless — intrinsically bodyless
+  statuses (204/304) or non-JSON-only content; a `200` without a documented
+  body is assumed to carry one and stays documented; absent or `$ref`
+  successes stay documented. Spec updated (204-only → skipped; 200-without-
+  schema → documented).
+
+### CR-03 — obs-text acceptance and the length-cap boundary untested
+
+- **Status:** Resolved (2026-11-18)
+- **Severity:** Low | **Category:** Edge Case (test completeness)
+- **Agreed resolution:** positive latin1 opaque-tag case added (`W/"café123"`
+  round-trips through the parser) and the cap boundary pinned (exactly 4096
+  accepted, 4097 rejected).

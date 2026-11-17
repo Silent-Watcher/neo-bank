@@ -8,18 +8,22 @@ import type {
   ResponseObject,
 } from '@nestjs/swagger';
 
+import { CONDITIONAL_GET_EXTENSION } from '#http/conditional-get.decorator.js';
 import { isJsonContentType } from '#http/json-content-type.js';
 
 // Centralized conditional-GET documentation for the generated OpenAPI
-// document (ADR-038 §6): GET operations are documented as revalidatable —
-// an optional `If-None-Match` request header parameter and a bodyless `304`
-// response carrying the `ETag` header — while HEAD and every other method
-// stay untouched. GET operations whose documented success response is
-// non-JSON-only (e.g. the text/html Problem Type page) are skipped, matching
-// the runtime, which tags and revalidates JSON representations only. The
-// transform runs once per generated document (dev-only, ADR-014) and is
-// idempotent: every addition is guarded by a presence check, so transforming
-// twice changes nothing.
+// document (ADR-038 §6): only GET operations that opted in through the
+// `@ConditionalGet()` decorator — carrying the `x-conditional-get` OpenAPI
+// extension — are documented as revalidatable: an optional `If-None-Match`
+// request header parameter and a bodyless `304` response carrying the `ETag`
+// header. HEAD and every other method stay untouched, and undecorated
+// operations are never modified — the documentation claims exactly the
+// runtime's opt-in behavior. Decorated GET operations whose documented
+// success response is non-JSON-only (e.g. a text/html body) are skipped,
+// matching the runtime, which tags and revalidates JSON representations
+// only. The transform runs once per generated document (dev-only, ADR-014)
+// and is idempotent: every addition is guarded by a presence check, so
+// transforming twice changes nothing.
 //
 // Prototype-pollution invariant (Wave 26 SEC-02): the document is generated
 // by `SwaggerModule.createDocument` from the application's own controller
@@ -46,16 +50,18 @@ const etagHeaderSchema = {
 } as const;
 
 /**
- * Documents conditional-GET support on every GET operation whose success
- * response is a JSON representation. Mutates the given document in place
- * (the generated document is a fresh object per `setupSwagger` call) and
- * returns it. Never touches non-GET operations, manually documented
- * `If-None-Match` parameters, or manually documented `304` responses.
+ * Documents conditional-GET support on GET operations that opted in through
+ * the `@ConditionalGet()` decorator (`x-conditional-get` extension) whose
+ * success response is a JSON representation. Mutates the given document in
+ * place (the generated document is a fresh object per `setupSwagger` call)
+ * and returns it. Never touches undecorated operations, non-GET operations,
+ * manually documented `If-None-Match` parameters, or manually documented
+ * `304` responses.
  */
 export function applyConditionalGetDocumentation(document: OpenAPIObject): OpenAPIObject {
   for (const pathItem of Object.values(document.paths ?? {})) {
     const operation = pathItem.get;
-    if (operation === undefined) continue;
+    if (operation === undefined || !hasConditionalGetExtension(operation)) continue;
 
     applyToOperation(operation, pathItem, document);
   }
@@ -63,12 +69,20 @@ export function applyConditionalGetDocumentation(document: OpenAPIObject): OpenA
   return document;
 }
 
+// The `@ConditionalGet()` decorator applies the extension through
+// `@nestjs/swagger`'s `ApiExtension`; the generated operation type does not
+// carry the key, so the read is typed through a property-adding intersection.
+function hasConditionalGetExtension(operation: OperationObject): boolean {
+  type OperationWithExtension = OperationObject & { [CONDITIONAL_GET_EXTENSION]?: unknown };
+  return (operation as OperationWithExtension)[CONDITIONAL_GET_EXTENSION] === true;
+}
+
 function applyToOperation(
   operation: OperationObject,
   pathItem: PathItemObject,
   document: OpenAPIObject,
 ): void {
-  if (documentsNonJsonSuccessOnly(operation)) return;
+  if (documentsTaglessSuccessOnly(operation)) return;
 
   if (
     !documentsIfNoneMatch(operation.parameters, document) &&
@@ -110,16 +124,35 @@ function applyToOperation(
   }
 }
 
-// A GET whose documented success response carries solely non-JSON media
-// types is never tagged or revalidated by the runtime — documenting
-// conditional support for it would be inaccurate (Wave 26 CR-01). Absent or
-// $ref success responses cannot be inspected and stay documented.
-function documentsNonJsonSuccessOnly(operation: OperationObject): boolean {
-  const success = operation.responses?.['200'];
-  if (success === undefined || isReference(success)) return false;
+// Exclusive upper bound of the 2xx status class (same rationale as the
+// interceptor's constant: the installed HttpStatus enum names 300
+// `AMBIGUOUS` and has no `MULTIPLE_CHOICES` member).
+const SUCCESS_STATUSES_MAX_EXCLUSIVE = 300;
 
-  const mediaTypes = Object.keys(success.content ?? {});
-  return mediaTypes.length > 0 && mediaTypes.every((mediaType) => !isJsonContentType(mediaType));
+// A decorated GET whose every documented 2xx success response can never
+// carry a tagged payload is never tagged or revalidated by the runtime —
+// documenting conditional support for it would be inaccurate (Wave 26 CR-01,
+// Wave 27 CR-02). A success response is tagless when its status is
+// intrinsically bodyless (204/304) or when it declares solely non-JSON media
+// types; a `200` without a documented body is assumed to carry one (only the
+// schema is missing). Absent or $ref success responses cannot be inspected
+// and stay documented.
+function documentsTaglessSuccessOnly(operation: OperationObject): boolean {
+  const documentedSuccesses = Object.entries(operation.responses ?? {}).filter(
+    ([status]) =>
+      Number(status) >= HttpStatus.OK && Number(status) < SUCCESS_STATUSES_MAX_EXCLUSIVE,
+  );
+  if (documentedSuccesses.length === 0) return false;
+
+  return documentedSuccesses.every(([status, response]) => {
+    if (response === undefined || isReference(response)) return false;
+    if (Number(status) === HttpStatus.NO_CONTENT || Number(status) === HttpStatus.NOT_MODIFIED) {
+      return true;
+    }
+
+    const mediaTypes = Object.keys(response.content ?? {});
+    return mediaTypes.length > 0 && mediaTypes.every((mediaType) => !isJsonContentType(mediaType));
+  });
 }
 
 function documentsIfNoneMatch(

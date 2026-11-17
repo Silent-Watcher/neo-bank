@@ -7,6 +7,7 @@ import type { Observable } from 'rxjs';
 import { describe, expect, it, vi } from 'vitest';
 
 import { weakEtagFor } from './etag.js';
+import { CONDITIONAL_GET_METADATA } from './conditional-get.decorator.js';
 import { ConditionalRequestInterceptor } from './conditional-request.interceptor.js';
 
 interface Fixture {
@@ -17,6 +18,7 @@ interface Fixture {
   headersSent?: boolean;
   locale?: string;
   sseHandler?: boolean;
+  conditionalGet?: boolean;
   contentType?: string;
   cacheControl?: string;
 }
@@ -65,6 +67,9 @@ function createInterceptorContext(
   const handler = function handler() {};
   if (fixture.sseHandler === true) {
     Reflect.defineMetadata(SSE_METADATA, true, handler);
+  }
+  if (fixture.conditionalGet === true) {
+    Reflect.defineMetadata(CONDITIONAL_GET_METADATA, true, handler);
   }
   const context = {
     switchToHttp: () => ({ getRequest: () => request, getResponse: () => reply }),
@@ -140,10 +145,10 @@ describe('ConditionalRequestInterceptor', () => {
     );
   });
 
-  it('answers a matching If-None-Match on a successful GET with a serialization-free 304', async () => {
+  it('answers a matching If-None-Match on a decorated successful GET with a serialization-free 304', async () => {
     const etag = weakEtagFor(JSON.stringify({ example: true }), 'en');
     const { context, next, reply } = createInterceptorContext(
-      { ifNoneMatch: etag },
+      { conditionalGet: true, ifNoneMatch: etag },
       { example: true },
     );
 
@@ -155,9 +160,23 @@ describe('ConditionalRequestInterceptor', () => {
     expect(result).toBeUndefined();
   });
 
+  it('never revalidates an undecorated route (opt-in, ADR-038 §3)', async () => {
+    const etag = weakEtagFor(JSON.stringify({ example: true }), 'en');
+    const { context, next, reply } = createInterceptorContext(
+      { ifNoneMatch: etag },
+      { example: true },
+    );
+
+    const result = await interceptOnce(context, next, 'en');
+
+    expect(reply.header).toHaveBeenCalledWith('ETag', etag);
+    expect(reply.status).not.toHaveBeenCalled();
+    expect(result).toEqual({ example: true });
+  });
+
   it('keeps the full response when the candidate does not match', async () => {
     const { context, next, reply } = createInterceptorContext(
-      { ifNoneMatch: 'W/"different"' },
+      { conditionalGet: true, ifNoneMatch: 'W/"different"' },
       { example: true },
     );
 
@@ -171,7 +190,7 @@ describe('ConditionalRequestInterceptor', () => {
     const payload = { failed: true };
     const etag = weakEtagFor(JSON.stringify(payload), 'en');
     const { context, next, reply } = createInterceptorContext(
-      { statusCode: 400, ifNoneMatch: etag },
+      { conditionalGet: true, statusCode: 400, ifNoneMatch: etag },
       payload,
     );
 
@@ -182,10 +201,10 @@ describe('ConditionalRequestInterceptor', () => {
     expect(result).toEqual(payload);
   });
 
-  it('never revalidates methods other than GET and HEAD', async () => {
+  it('never revalidates methods other than GET', async () => {
     const etag = weakEtagFor(JSON.stringify({ created: true }), 'en');
     const { context, next, reply } = createInterceptorContext(
-      { method: 'POST', ifNoneMatch: etag },
+      { method: 'POST', conditionalGet: true, ifNoneMatch: etag },
       { created: true },
     );
 
@@ -194,17 +213,20 @@ describe('ConditionalRequestInterceptor', () => {
     expect(reply.status).not.toHaveBeenCalled();
   });
 
-  it('revalidates HEAD with the same validator as GET', async () => {
+  it('excludes HEAD from revalidation while mirroring the GET validator', async () => {
+    // ADR-038 §7 (developer decision): HEAD responses carry the entity tag
+    // (RFC 9110 §9.3.2 metadata mirroring) but are never answered with 304.
     const etag = weakEtagFor(JSON.stringify({ example: true }), 'en');
     const { context, next, reply } = createInterceptorContext(
-      { method: 'HEAD', ifNoneMatch: etag },
+      { method: 'HEAD', conditionalGet: true, ifNoneMatch: etag },
       { example: true },
     );
 
     const result = await interceptOnce(context, next, 'en');
 
-    expect(reply.status).toHaveBeenCalledWith(304);
-    expect(result).toBeUndefined();
+    expect(reply.header).toHaveBeenCalledWith('ETag', etag);
+    expect(reply.status).not.toHaveBeenCalled();
+    expect(result).toEqual({ example: true });
   });
 
   it('tags primitive payloads too', async () => {

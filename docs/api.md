@@ -46,14 +46,17 @@ All versioned endpoints follow the application-global contracts:
   resolved response locale) and an explicit
   `Cache-Control: private, no-cache` (shared intermediaries never store;
   private caches must revalidate before reuse; explicit per-route
-  declarations, e.g. the health routes' `no-store`, win). GET and HEAD
-  requests may send `If-None-Match` (one or more entity tags, compared
-  weakly — the `W/` prefix is ignored; `*` matches any current
-  representation): a matching tag on a successful (2xx) response is answered
-  with `304 Not Modified`, bodyless, echoing the current `ETag` and cache
-  directives. Malformed values, error responses, and redirects never produce
-  a 304. The development Swagger document documents the parameter and the
-  304 response per JSON-success GET operation.
+  declarations, e.g. the health routes' `no-store`, win). **Revalidation is
+  opt-in**: a GET route decorated with `@ConditionalGet()` answers a
+  matching `If-None-Match` with `304 Not Modified`, bodyless, echoing the
+  current `ETag` and cache directives. `If-None-Match` is parsed strictly
+  per RFC 9110: one or more entity tags compared weakly (the `W/` prefix is
+  ignored; opaque tags compare case-sensitively), `*` matches any current
+  representation only as the entire field value, and malformed values are
+  ignored. Undecorated GET routes, HEAD, other methods, error responses, and
+  redirects never produce a 304. The development Swagger document documents
+  the parameter and the 304 response only for decorator-marked
+  JSON-success GET operations.
 - **Authentication** — none implemented yet.
 - **Rate limiting** (ADR-015) — per-IP: 10 requests/second (short) and
   100 requests/minute (long) on all non-exempt routes. Exceeding the limit

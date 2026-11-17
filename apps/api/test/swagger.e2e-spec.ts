@@ -2,6 +2,7 @@ import request from 'supertest';
 import { describe, expect, it } from 'vitest';
 
 import { setupSwagger, SWAGGER_DOCS_PATH } from '#swagger/swagger.setup.js';
+import { ContractController } from './contract.controller.js';
 import { createE2eTestApp } from './create-test-app.js';
 
 // e2e runs with APP_ENV=test, where bootstrap registers no Swagger routes:
@@ -96,47 +97,49 @@ describe('Swagger (e2e)', () => {
     await app.close();
   });
 
-  it('documents conditional-GET support on GET operations only', async () => {
-    // Arrange — the centralized transform documents every GET operation as
-    // revalidatable (Phase 1: revalidation is still global; Phase 2 narrows
-    // this to decorator-marked routes, ADR-038 §6).
-    const app = await createE2eTestApp((devApp) => setupSwagger(devApp));
+  it('documents conditional-GET support only on decorator-marked GET operations', async () => {
+    // Arrange — ADR-038 §6: the transform keys off the x-conditional-get
+    // extension the @ConditionalGet() decorator applies. The contract fixture
+    // provides a decorated route (/api/v1/conditional) beside the
+    // undecorated /api/v1/echo.
+    const app = await createE2eTestApp((devApp) => setupSwagger(devApp), {
+      controllers: [ContractController],
+    });
 
     // Act
     const json = await request(app.getHttpServer()).get(`/${SWAGGER_DOCS_PATH}/json`);
-    const health = json.body.paths['/health'].get;
-    const root = json.body.paths['/api/v1'].get;
+    const conditional = json.body.paths['/api/v1/conditional'].get;
+    const echo = json.body.paths['/api/v1/echo'].get;
     const challenge = json.body.paths['/api/v1/enrollments/challenge'].post;
 
-    // Assert — GETs carry the optional If-None-Match header parameter and a
-    // bodyless 304 response with the ETag header; POSTs are untouched.
-    for (const operation of [health, root]) {
-      const ifNoneMatch = operation.parameters.find(
-        (parameter: { in?: string; name?: string }) =>
-          parameter.in === 'header' && parameter.name?.toLowerCase() === 'if-none-match',
+    // Assert — the decorated GET carries the optional If-None-Match header
+    // parameter and a bodyless 304 response with the ETag header.
+    const ifNoneMatch = conditional.parameters.find(
+      (parameter: { in?: string; name?: string }) =>
+        parameter.in === 'header' && parameter.name?.toLowerCase() === 'if-none-match',
+    );
+    expect(ifNoneMatch).toMatchObject({ required: false, schema: { type: 'string' } });
+    expect(conditional.responses['304']).toBeDefined();
+    expect(conditional.responses['304'].content).toBeUndefined();
+    expect(conditional.responses['304'].headers.ETag).toBeDefined();
+
+    // Undecorated routes are never modified: no parameter, no 304, no ETag
+    // header documentation.
+    for (const operation of [echo, challenge]) {
+      expect(operation.responses['304']).toBeUndefined();
+      const headerNames = (operation.parameters ?? []).map((parameter: { name?: string }) =>
+        parameter.name?.toLowerCase(),
       );
-      expect(ifNoneMatch).toMatchObject({ required: false, schema: { type: 'string' } });
-      expect(operation.responses['304']).toBeDefined();
-      expect(operation.responses['304'].content).toBeUndefined();
-      expect(operation.responses['304'].headers.ETag).toBeDefined();
+      expect(headerNames).not.toContain('if-none-match');
     }
-    // POSTs keep their global Accept-Language parameter but gain no
-    // If-None-Match header and no 304 response.
-    const challengeHeaderNames = (challenge.parameters ?? []).map((parameter: { name?: string }) =>
-      parameter.name?.toLowerCase(),
-    );
-    expect(challengeHeaderNames).toContain('accept-language');
-    expect(challengeHeaderNames).not.toContain('if-none-match');
-    expect(challenge.responses['304']).toBeUndefined();
-    // The Problem Type page serves text/html — the runtime never tags it, so
-    // it must not be documented as revalidatable (Wave 26 CR-01); it keeps
-    // only its global Accept-Language parameter.
+    // POSTs keep their global Accept-Language parameter.
+    expect(
+      (challenge.parameters ?? []).map((parameter: { name?: string }) =>
+        parameter.name?.toLowerCase(),
+      ),
+    ).toContain('accept-language');
+    // The Problem Type page serves text/html and is undecorated anyway.
     const problemType = json.body.paths['/problems/application-error'].get;
-    const problemTypeHeaderNames = (problemType.parameters ?? []).map(
-      (parameter: { name?: string }) => parameter.name?.toLowerCase(),
-    );
-    expect(problemTypeHeaderNames).toContain('accept-language');
-    expect(problemTypeHeaderNames).not.toContain('if-none-match');
     expect(problemType.responses['304']).toBeUndefined();
     await app.close();
   });

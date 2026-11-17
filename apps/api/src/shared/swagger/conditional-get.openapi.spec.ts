@@ -4,6 +4,10 @@ import type { OpenAPIObject, OperationObject, ParameterObject } from '@nestjs/sw
 
 import { applyConditionalGetDocumentation } from './conditional-get.openapi.js';
 
+// The operation shape `@ConditionalGet()` produces through
+// @nestjs/swagger's ApiExtension.
+type DecoratedOperation = OperationObject & { 'x-conditional-get': true };
+
 function emptyDocument(paths: OpenAPIObject['paths']): OpenAPIObject {
   return {
     openapi: '3.0.1',
@@ -12,10 +16,10 @@ function emptyDocument(paths: OpenAPIObject['paths']): OpenAPIObject {
   } as OpenAPIObject;
 }
 
-function getOperation(responses: OperationObject['responses'] = { '200': { description: 'OK' } }): {
-  pathItem: { get: OperationObject };
-} {
-  return { pathItem: { get: { responses } } };
+function decoratedOperation(
+  responses: OperationObject['responses'] = { '200': { description: 'OK' } },
+): DecoratedOperation {
+  return { 'x-conditional-get': true, responses };
 }
 
 function operationOf(document: OpenAPIObject, path: string): OperationObject {
@@ -29,9 +33,9 @@ function headerParameters(operation: OperationObject): ParameterObject[] {
 }
 
 describe('applyConditionalGetDocumentation', () => {
-  it('documents the If-None-Match header parameter and a bodyless 304 on GET operations', () => {
+  it('documents the If-None-Match header parameter and a bodyless 304 on decorated GET operations', () => {
     const document = applyConditionalGetDocumentation(
-      emptyDocument({ '/resource': getOperation().pathItem }),
+      emptyDocument({ '/resource': { get: decoratedOperation() } }),
     );
     const operation = operationOf(document, '/resource');
 
@@ -57,19 +61,31 @@ describe('applyConditionalGetDocumentation', () => {
     });
   });
 
+  it('never touches undecorated GET operations (opt-in documentation)', () => {
+    const document = applyConditionalGetDocumentation(
+      emptyDocument({
+        '/resource': { get: { responses: { '200': { description: 'OK' } } } },
+      }),
+    );
+    const operation = operationOf(document, '/resource');
+
+    expect(operation.parameters).toBeUndefined();
+    expect(operation.responses?.['304']).toBeUndefined();
+    // Deep equality proves the success response gained no ETag header.
+    expect(operation.responses?.['200']).toEqual({ description: 'OK' });
+  });
+
   it('documents the ETag header on the success response, merging with existing headers', () => {
     const document = applyConditionalGetDocumentation(
       emptyDocument({
         '/resource': {
-          get: {
-            responses: {
-              '200': {
-                description: 'OK',
-                headers: { 'X-Custom': { description: 'custom', schema: { type: 'string' } } },
-                content: { 'application/json': { schema: { type: 'object' } } },
-              },
+          get: decoratedOperation({
+            '200': {
+              description: 'OK',
+              headers: { 'X-Custom': { description: 'custom', schema: { type: 'string' } } },
+              content: { 'application/json': { schema: { type: 'object' } } },
             },
-          },
+          }),
         },
       }),
     );
@@ -79,29 +95,27 @@ describe('applyConditionalGetDocumentation', () => {
     }
 
     expect(success.headers?.['ETag']).toBeDefined();
-    expect(success?.headers?.['X-Custom']).toEqual({
+    expect(success.headers?.['X-Custom']).toEqual({
       description: 'custom',
       schema: { type: 'string' },
     });
     // The body schema is untouched.
-    expect(success?.content?.['application/json']).toBeDefined();
+    expect(success.content?.['application/json']).toBeDefined();
   });
 
-  it('skips GET operations whose documented success response is non-JSON-only', () => {
+  it('skips decorated GET operations whose documented success response is non-JSON-only', () => {
     // The runtime tags and revalidates JSON representations only; a GET
     // serving e.g. text/html must not be documented as revalidatable
     // (Wave 26 CR-01) — exactly the Problem Type page's shape.
     const document = applyConditionalGetDocumentation(
       emptyDocument({
         '/problems/application-error': {
-          get: {
-            responses: {
-              '200': {
-                description: 'OK',
-                content: { 'text/html; charset=utf-8': { schema: { type: 'string' } } },
-              },
+          get: decoratedOperation({
+            '200': {
+              description: 'OK',
+              content: { 'text/html; charset=utf-8': { schema: { type: 'string' } } },
             },
-          },
+          }),
         },
       }),
     );
@@ -117,21 +131,19 @@ describe('applyConditionalGetDocumentation', () => {
     expect(success.content?.['text/html; charset=utf-8']).toBeDefined();
   });
 
-  it('documents GET operations with mixed JSON and non-JSON success content', () => {
+  it('documents decorated GET operations with mixed JSON and non-JSON success content', () => {
     const document = applyConditionalGetDocumentation(
       emptyDocument({
         '/mixed': {
-          get: {
-            responses: {
-              '200': {
-                description: 'OK',
-                content: {
-                  'application/json': { schema: { type: 'object' } },
-                  'text/html': { schema: { type: 'string' } },
-                },
+          get: decoratedOperation({
+            '200': {
+              description: 'OK',
+              content: {
+                'application/json': { schema: { type: 'object' } },
+                'text/html': { schema: { type: 'string' } },
               },
             },
-          },
+          }),
         },
       }),
     );
@@ -150,14 +162,12 @@ describe('applyConditionalGetDocumentation', () => {
     const document = applyConditionalGetDocumentation(
       emptyDocument({
         '/resource': {
-          get: {
-            responses: {
-              '200': {
-                description: 'OK',
-                headers: { ETag: manualEtag },
-              },
+          get: decoratedOperation({
+            '200': {
+              description: 'OK',
+              headers: { ETag: manualEtag },
             },
-          },
+          }),
         },
       }),
     );
@@ -169,13 +179,13 @@ describe('applyConditionalGetDocumentation', () => {
     expect(success.headers?.ETag).toEqual(manualEtag);
   });
 
-  it('never touches HEAD, POST, or other operations', () => {
+  it('never touches HEAD, POST, or other operations even when decorated', () => {
     const document = applyConditionalGetDocumentation(
       emptyDocument({
         '/resource': {
-          get: { responses: { '200': { description: 'OK' } } },
-          head: { responses: { '200': { description: 'OK' } } },
-          post: { responses: { '201': { description: 'Created' } } },
+          get: decoratedOperation(),
+          head: decoratedOperation({ '200': { description: 'OK' } }),
+          post: decoratedOperation({ '201': { description: 'Created' } }),
         },
       }),
     );
@@ -192,10 +202,10 @@ describe('applyConditionalGetDocumentation', () => {
       emptyDocument({
         '/resource': {
           get: {
+            ...decoratedOperation(),
             parameters: [
               { in: 'header', name: 'if-none-match', required: false, schema: { type: 'string' } },
             ],
-            responses: { '200': { description: 'OK' } },
           },
         },
       }),
@@ -214,7 +224,7 @@ describe('applyConditionalGetDocumentation', () => {
           parameters: [
             { in: 'header', name: 'If-None-Match', required: false, schema: { type: 'string' } },
           ],
-          get: { responses: { '200': { description: 'OK' } } },
+          get: decoratedOperation(),
         },
       }),
     );
@@ -229,8 +239,8 @@ describe('applyConditionalGetDocumentation', () => {
       emptyDocument({
         '/resource': {
           get: {
+            ...decoratedOperation(),
             parameters: [{ $ref: '#/components/parameters/IfNoneMatch' }],
-            responses: { '200': { description: 'OK' } },
           },
         },
       }),
@@ -246,8 +256,8 @@ describe('applyConditionalGetDocumentation', () => {
     const document: OpenAPIObject = emptyDocument({
       '/resource': {
         get: {
+          ...decoratedOperation(),
           parameters: [{ $ref: '#/components/parameters/IfNoneMatch' }],
-          responses: { '200': { description: 'OK' } },
         },
       },
     });
@@ -273,8 +283,8 @@ describe('applyConditionalGetDocumentation', () => {
     const document: OpenAPIObject = emptyDocument({
       '/resource': {
         get: {
+          ...decoratedOperation(),
           parameters: [{ $ref: '#/components/parameters/First' }],
-          responses: { '200': { description: 'OK' } },
         },
       },
     });
@@ -302,8 +312,8 @@ describe('applyConditionalGetDocumentation', () => {
     const document: OpenAPIObject = emptyDocument({
       '/resource': {
         get: {
+          ...decoratedOperation(),
           parameters: [{ $ref: '#/components/parameters/Self' }],
-          responses: { '200': { description: 'OK' } },
         },
       },
     });
@@ -325,7 +335,12 @@ describe('applyConditionalGetDocumentation', () => {
     };
     const document = applyConditionalGetDocumentation(
       emptyDocument({
-        '/resource': { get: { responses: { '200': { description: 'OK' }, '304': custom304 } } },
+        '/resource': {
+          get: decoratedOperation({
+            '200': { description: 'OK' },
+            '304': custom304,
+          }),
+        },
       }),
     );
 
@@ -335,12 +350,10 @@ describe('applyConditionalGetDocumentation', () => {
   it('preserves a $ref 304 response', () => {
     const document: OpenAPIObject = emptyDocument({
       '/resource': {
-        get: {
-          responses: {
-            '200': { description: 'OK' },
-            '304': { $ref: '#/components/responses/NotModified' },
-          },
-        },
+        get: decoratedOperation({
+          '200': { description: 'OK' },
+          '304': { $ref: '#/components/responses/NotModified' },
+        }),
       },
     });
 
@@ -356,10 +369,10 @@ describe('applyConditionalGetDocumentation', () => {
       emptyDocument({
         '/resource': {
           get: {
+            ...decoratedOperation(),
             parameters: [
               { in: 'header', name: 'If-None-Match', required: false, schema: { type: 'string' } },
             ],
-            responses: { '200': { description: 'OK' } },
           },
         },
       }),
@@ -371,8 +384,9 @@ describe('applyConditionalGetDocumentation', () => {
   it('is idempotent — transforming twice changes nothing', () => {
     const firstPass = applyConditionalGetDocumentation(
       emptyDocument({
-        '/resource': getOperation().pathItem,
-        '/other': getOperation({ '200': { description: 'OK' } }).pathItem,
+        '/resource': { get: decoratedOperation() },
+        '/other': { get: decoratedOperation({ '200': { description: 'OK' } }) },
+        '/undecorated': { get: { responses: { '200': { description: 'OK' } } } },
       }),
     );
     const snapshot = JSON.parse(JSON.stringify(firstPass));
@@ -382,15 +396,36 @@ describe('applyConditionalGetDocumentation', () => {
     expect(secondPass).toEqual(snapshot);
   });
 
-  it('does not mutate other paths and tolerates GET operations without a 200 response', () => {
+  it('skips decorated GETs whose only documented success is intrinsically bodyless', () => {
+    // Wave 27 CR-02: a 204-only documented success can never carry a tagged
+    // payload (the runtime tags JSON payloads only), so the operation must
+    // not advertise a 304.
     const document = applyConditionalGetDocumentation(
       emptyDocument({
-        '/no-success': getOperation({ '204': { description: 'No Content' } }).pathItem,
+        '/no-success': {
+          get: decoratedOperation({ '204': { description: 'No Content' } }),
+        },
       }),
     );
 
     const operation = operationOf(document, '/no-success');
-    expect(operation.responses?.['304']).toBeDefined();
+    expect(operation.parameters).toBeUndefined();
+    expect(operation.responses?.['304']).toBeUndefined();
     expect(operation.responses?.['204']).toEqual({ description: 'No Content' });
+  });
+
+  it('documents decorated GETs whose 200 success response omits its body schema', () => {
+    // A `200` without a documented body is assumed to carry one (only the
+    // schema is missing) — the runtime tags its payload — so the operation
+    // stays documented.
+    const document = applyConditionalGetDocumentation(
+      emptyDocument({
+        '/resource': {
+          get: decoratedOperation({ '200': { description: 'OK' } }),
+        },
+      }),
+    );
+
+    expect(operationOf(document, '/resource').responses?.['304']).toBeDefined();
   });
 });

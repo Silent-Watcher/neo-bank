@@ -6,8 +6,10 @@ import { map } from 'rxjs';
 import type { Observable } from 'rxjs';
 
 import type { HttpRequestLike, HttpResponseLike } from './http-boundary.js';
-import { ifNoneMatchSatisfied, weakEtagFor } from './etag.js';
+import { weakEtagFor } from './etag.js';
+import { CONDITIONAL_GET_METADATA } from './conditional-get.decorator.js';
 import { isNonJsonRepresentation } from './json-content-type.js';
+import { ifNoneMatchSatisfied } from './if-none-match.js';
 
 // Exclusive upper bound of the successful (2xx) status class: only a
 // successful response has a selected representation a validator can identify
@@ -28,15 +30,19 @@ const REVALIDATABLE_CACHE_CONTROL = 'private, no-cache';
  * ADR-038): every response with a JSON representation carries a weak entity
  * tag computed over the application payload and the request's resolved
  * locale (the envelope message is localized, so the en/fa variants are
- * distinct representations), and a GET/HEAD request whose `If-None-Match`
- * matches is answered with `304` — the adapter strips Content-Type and ends
- * 304s without the payload natively, so the interceptor only sets the status
- * and lets the pipeline finish (no second send).
+ * distinct representations), plus the revalidation cache directives.
  *
- * Revalidation is gated to successful (2xx) selected representations: a
- * route answering with an error status is never revalidated to 304, because
+ * Revalidation is opt-in (ADR-038 §3): a GET request whose `If-None-Match`
+ * matches is answered with `304` only when the route opted in through the
+ * `@ConditionalGet()` decorator, and only on a successful (2xx) response —
  * an error response has no representation a validator could identify
- * (ADR-038 §2).
+ * (ADR-038 §2). HEAD is excluded from revalidation (ADR-038 §7, developer
+ * decision): HEAD responses carry the entity tag (RFC 9110 §9.3.2 metadata
+ * mirroring) but are never answered with 304.
+ *
+ * A matched 304 is genuinely bodyless: nothing is serialized after the
+ * decision, and the adapter strips Content-Type and ends the response
+ * natively.
  *
  * Unlike the Fastify-era tags — strong tags over the full envelope, whose
  * fresh timestamp and per-request request ID changed the body on every
@@ -46,9 +52,10 @@ const REVALIDATABLE_CACHE_CONTROL = 'private, no-cache';
  *
  * Scope notes: SSE routes are skipped (their stream is not a single JSON
  * representation); the pre-i18n request-ID rejection sends a Problem Details
- * body outside the interceptor pipeline (tagged by the lifecycle itself); the
- * Problem Details filter tags error responses with the same locale-composed
- * `weakEtagFor` (no revalidation — fresh timestamp per response).
+ * body outside the interceptor pipeline (untagged — its body embeds the
+ * client-supplied inbound request ID, Wave 25 SEC-04); the Problem Details
+ * filter tags error responses with the same locale-composed `weakEtagFor`
+ * (no revalidation — fresh timestamp per response).
  */
 @Injectable()
 export class ConditionalRequestInterceptor implements NestInterceptor {
@@ -69,8 +76,8 @@ export class ConditionalRequestInterceptor implements NestInterceptor {
         // its own non-JSON representation (declared or reply-set non-JSON
         // content type) bypasses the JSON pipeline whose payload the tag
         // would validate. HEAD hashes the same handler payload as GET, so
-        // its validator matches the GET representation's tag and HEAD
-        // revalidation works (RFC 9110 §9.3.2).
+        // its validator matches the GET representation's tag (RFC 9110
+        // §9.3.2 metadata mirroring) — but HEAD never revalidates (§7).
         if (
           Reflect.getMetadata(SSE_METADATA, context.getHandler()) === true ||
           data instanceof StreamableFile ||
@@ -95,12 +102,13 @@ export class ConditionalRequestInterceptor implements NestInterceptor {
           response.header('Cache-Control', REVALIDATABLE_CACHE_CONTROL);
         }
 
-        // Revalidation applies to GET and HEAD only (as with Fastify), and
-        // only to successful selected representations: other methods keep
-        // their full response even with a matching candidate, and an
-        // error-status route is never answered with 304.
+        // Revalidation is opt-in and GET-only (ADR-038 §3, §7), and applies
+        // to successful selected representations only: undecorated routes,
+        // other methods, and error-status responses keep their full response
+        // even with a matching candidate.
         if (
-          (request.method === 'GET' || request.method === 'HEAD') &&
+          request.method === 'GET' &&
+          Reflect.getMetadata(CONDITIONAL_GET_METADATA, context.getHandler()) === true &&
           response.statusCode >= HttpStatus.OK &&
           response.statusCode < SUCCESS_STATUSES_MAX_EXCLUSIVE &&
           ifNoneMatchSatisfied(request.headers['if-none-match'], etag)
