@@ -10,12 +10,7 @@ import { weakEtagFor } from './etag.js';
 import { CONDITIONAL_GET_METADATA } from './conditional-get.decorator.js';
 import { isNonJsonRepresentation } from './json-content-type.js';
 import { ifNoneMatchSatisfied } from './if-none-match.js';
-
-// Exclusive upper bound of the successful (2xx) status class: only a
-// successful response has a selected representation a validator can identify
-// (ADR-038 §2). The installed HttpStatus enum names 300 `AMBIGUOUS` and has
-// no `MULTIPLE_CHOICES` member, so the 3xx boundary is written explicitly.
-const SUCCESS_STATUSES_MAX_EXCLUSIVE = HttpStatus.AMBIGUOUS;
+import { SUCCESS_STATUSES_MAX_EXCLUSIVE } from './success-status-range.js';
 
 // Cache directives for revalidatable responses (Wave 25/26 SEC-04, RFC 9110
 // §15.4.5): `private` keeps shared intermediaries from storing the response

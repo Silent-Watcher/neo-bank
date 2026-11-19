@@ -56,7 +56,12 @@ All versioned endpoints follow the application-global contracts:
   ignored. Undecorated GET routes, HEAD, other methods, error responses, and
   redirects never produce a 304. The development Swagger document documents
   the parameter and the 304 response only for decorator-marked
-  JSON-success GET operations.
+  JSON-success GET operations. Swagger UI renders the bodyless `304` as
+  `Error: Not Modified` in its response pane — a client-side artifact of how
+  swagger-client surfaces every bodyless non-2xx response (anything outside
+  200–299 is treated as a failed response, and with no body to display the
+  HTTP reason phrase is shown instead). It is cosmetic: the response itself
+  is RFC-compliant, as tools like curl and Postman show.
 - **Authentication** — none implemented yet.
 - **Rate limiting** (ADR-015) — per-IP: 10 requests/second (short) and
   100 requests/minute (long) on all non-exempt routes. Exceeding the limit

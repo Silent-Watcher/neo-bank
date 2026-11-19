@@ -405,3 +405,40 @@ requires developer approval before any ADR is created.
 - **ADR Recommendation:** None — the choice is an interpretation of the
   accepted ADR-038 §4 wording ("`*` matches any current representation",
   "malformed values ignored"), already recorded there; no separate ADR.
+
+### 27. The bodyless 304's `Error: Not Modified` Swagger UI display is accepted as a client-side artifact (ETag/Conditional GET task _056)
+
+- **Context:** the user reported that Swagger UI shows an error for the
+  bodyless `304` response while Postman/curl behave correctly, and asked
+  whether it can be removed. Live reproduction against the dev server
+  (Try it out → `If-None-Match` → 304) captured the exact display
+  (`Error: Not Modified` under the response code) and the mechanism: the
+  installed swagger-client (bundled in swagger-ui-dist 5.34.0) throws
+  `new Error(statusText)` for every response with `ok === false` — i.e.
+  everything outside 200–299, which includes 304 — and the UI surfaces that
+  thrown message as the response body when there is no body to render.
+- **Decision:** no server-side or spec-side change. The 304 stays genuinely
+  bodyless with no `Content-Type` (ADR-038 §5, RFC 9110 §15.4.5, pinned by
+  e2e), and the OpenAPI transform's `304` declaration (description + `ETag`
+  header, no content) stays as documented. The display is recorded as a
+  known Swagger UI artifact in `docs/api.md` instead.
+- **Reasoning:** the rendering is keyed off the response status class and
+  the empty body, both of which are mandated by the protocol and by the
+  accepted ADR; no compliant header or declaration combination can change
+  what swagger-client does with a 2xx-class-excluded, bodyless response.
+  Sending a body on a 304 is forbidden by RFC 9110, adding a body-describing
+  `Content-Type` would contradict both the ADR and the e2e contract, and
+  patching the served UI bundle is out of scope for a development-only tool.
+- **Alternatives considered:** smuggling a body onto the 304 (rejected —
+  protocol violation, browsers may drop it anyway); declaring JSON content
+  for the documented 304 (rejected — makes the spec lie, still renders an
+  error via failed `JSON.parse("")`); serving a patched swagger-ui bundle
+  (rejected — vendor drift for a dev-only cosmetic).
+- **Trade-offs:** Swagger UI users see a red-styled `Error: Not Modified`
+  for a successful revalidation; documented in `docs/api.md` so the display
+  is not mistaken for an API defect.
+- **Impact:** none on the API surface; developer-facing documentation only.
+- **Reversibility:** trivial — the note can be removed if swagger-ui ever
+  changes its empty-response rendering.
+- **ADR Recommendation:** None — no code or contract change; a documented
+  observation about a third-party development tool's rendering.

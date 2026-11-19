@@ -10,6 +10,7 @@ import type {
 
 import { CONDITIONAL_GET_EXTENSION } from '#http/conditional-get.decorator.js';
 import { isJsonContentType } from '#http/json-content-type.js';
+import { SUCCESS_STATUSES_MAX_EXCLUSIVE } from '#http/success-status-range.js';
 
 // Centralized conditional-GET documentation for the generated OpenAPI
 // document (ADR-038 §6): only GET operations that opted in through the
@@ -115,7 +116,7 @@ function applyToOperation(
 
   // The ETag header on the success response: merge-only, so manually
   // documented headers are never overwritten.
-  const success = operation.responses?.['200'];
+  const success = operation.responses?.[String(HttpStatus.OK)];
   if (success !== undefined && !isReference(success)) {
     success.headers = {
       [ETAG_HEADER_NAME]: { ...etagHeaderSchema },
@@ -123,11 +124,6 @@ function applyToOperation(
     };
   }
 }
-
-// Exclusive upper bound of the 2xx status class (same rationale as the
-// interceptor's constant: the installed HttpStatus enum names 300
-// `AMBIGUOUS` and has no `MULTIPLE_CHOICES` member).
-const SUCCESS_STATUSES_MAX_EXCLUSIVE = HttpStatus.AMBIGUOUS;
 
 // A decorated GET whose every documented 2xx success response can never
 // carry a tagged payload is never tagged or revalidated by the runtime —
