@@ -15,7 +15,7 @@ import { ifNoneMatchSatisfied } from './if-none-match.js';
 // successful response has a selected representation a validator can identify
 // (ADR-038 §2). The installed HttpStatus enum names 300 `AMBIGUOUS` and has
 // no `MULTIPLE_CHOICES` member, so the 3xx boundary is written explicitly.
-const SUCCESS_STATUSES_MAX_EXCLUSIVE = 300;
+const SUCCESS_STATUSES_MAX_EXCLUSIVE = HttpStatus.AMBIGUOUS;
 
 // Cache directives for revalidatable responses (Wave 25/26 SEC-04, RFC 9110
 // §15.4.5): `private` keeps shared intermediaries from storing the response
@@ -117,7 +117,7 @@ export class ConditionalRequestInterceptor implements NestInterceptor {
           // body-less natively. Nothing is serialized after the decision —
           // the payload is dropped here, so the response stays genuinely
           // bodyless end to end (ADR-038 §5).
-          response.status(304);
+          response.status(HttpStatus.NOT_MODIFIED);
           return undefined;
         }
 

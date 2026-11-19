@@ -127,7 +127,7 @@ function applyToOperation(
 // Exclusive upper bound of the 2xx status class (same rationale as the
 // interceptor's constant: the installed HttpStatus enum names 300
 // `AMBIGUOUS` and has no `MULTIPLE_CHOICES` member).
-const SUCCESS_STATUSES_MAX_EXCLUSIVE = 300;
+const SUCCESS_STATUSES_MAX_EXCLUSIVE = HttpStatus.AMBIGUOUS;
 
 // A decorated GET whose every documented 2xx success response can never
 // carry a tagged payload is never tagged or revalidated by the runtime —
