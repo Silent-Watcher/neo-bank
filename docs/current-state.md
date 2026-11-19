@@ -277,7 +277,7 @@ its shared entity base plus the first feature entity (`Enrollment`, table
   Both endpoints keep their endpoint-specific per-IP limits aligned with the
   OTP window (challenge 2 req/120 s, verify 5 req/120 s) on top of the global
   policies; the challenge quota is enforced by the route-level
-  `ChallengeRateLimitInterceptor` after the idempotency acquire gate
+  `DeferredRateLimitInterceptor` after the idempotency acquire gate
   (ADR-039) — replays and in-flight duplicates consume no quota — while
   verify takes the unchanged global guard. An additional per-phone hourly
   rate limit (5 sends / rolling 60 min) is

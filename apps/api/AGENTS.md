@@ -75,16 +75,17 @@ development/test.
 - **Deferred rate limits (ADR-039):** a route whose quota must not be
   consumed by idempotent replays is marked `@DeferredRateLimit()`
   (`src/shared/throttler/deferred-rate-limit.decorator.ts`); the global
-  guard skips it entirely, and a route-level interceptor (pattern:
-  `ChallengeRateLimitInterceptor` in
-  `src/modules/enrollments/`, delegating to the official
-  `ThrottlerGuard.canActivate` of a module-provided `RedisThrottlerGuard`)
-  re-enforces the route's `@Throttle` metadata **after** the global
-  `IdempotencyInterceptor` — so completed replays and in-flight
-  `409 IDEMPOTENCY_KEY_IN_USE` duplicates never reach enforcement. Never
-  enforce a deferred route's quota with a guard or expect `@Throttle` alone
-  to fire there; a deferred marker without a re-enforcing interceptor leaves
-  the route unthrottled.
+  guard skips it entirely, and a route-level `DeferredRateLimitInterceptor`
+  (`src/shared/throttler/`, delegating to the official
+  `ThrottlerGuard.canActivate` of the `RedisThrottlerGuard` exported by
+  `ThrottlerEnforcementModule`) re-enforces the route's `@Throttle` metadata
+  **after** the global `IdempotencyInterceptor` — so completed replays and
+  in-flight `409 IDEMPOTENCY_KEY_IN_USE` duplicates never reach enforcement.
+  Feature modules import `ThrottlerEnforcementModule`; throttler
+  infrastructure never lives in a feature module. Never enforce a deferred
+  route's quota with a guard or expect `@Throttle` alone to fire there; a
+  deferred marker without a re-enforcing interceptor leaves the route
+  unthrottled.
 - **Idempotency (ADR-039):** every `@Idempotent()` handler must define
   `scope`, `fingerprint`, and `storeIf` deliberately per endpoint — never
   accept the defaults silently (pattern: `challengeIdempotentOptions` in

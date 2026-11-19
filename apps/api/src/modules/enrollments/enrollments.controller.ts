@@ -12,6 +12,7 @@ import { Idempotent } from '@nestjs/idempotency';
 import { seconds, Throttle } from '@nestjs/throttler';
 
 import { DeferredRateLimit } from '#src/shared/throttler/deferred-rate-limit.decorator.js';
+import { DeferredRateLimitInterceptor } from '#src/shared/throttler/deferred-rate-limit.interceptor.js';
 import { ZodValidationPipe } from '#src/shared/pipes/zod-validation.pipe.js';
 import {
   problemDetailsSchema,
@@ -19,7 +20,6 @@ import {
   toJsonSchemaObject,
 } from '#swagger/openapi.schemas.js';
 
-import { ChallengeRateLimitInterceptor } from './challenge-rate-limit.interceptor.js';
 import { challengeIdempotentOptions } from './enrollments.idempotency.js';
 import type { ChallengeRequestBody, VerifyRequestBody } from './enrollments.schema.js';
 import { challengeRequestSchema, verifyRequestSchema } from './enrollments.schema.js';
@@ -45,7 +45,7 @@ export class EnrollmentsController {
   // OTP validity window); the global long policy still applies.
   @DeferredRateLimit()
   @Throttle({ short: { limit: 2, ttl: seconds(120) } })
-  @UseInterceptors(ChallengeRateLimitInterceptor)
+  @UseInterceptors(DeferredRateLimitInterceptor)
   // Idempotent challenge issuance (ADR-039): the required Idempotency-Key
   // header identifies the logical operation. A completed retry replays the
   // stored empty 202 without executing the handler again or consuming
