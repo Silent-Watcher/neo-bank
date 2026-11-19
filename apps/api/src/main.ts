@@ -31,6 +31,12 @@ const API_BASE_PATH = `/${API_GLOBAL_PREFIX}/v${API_DEFAULT_VERSION}`;
 // deferral if a connection-pooling reverse proxy is ever introduced.
 const SERVER_KEEP_ALIVE_TIMEOUT_MS = 20_000;
 
+// Response headers browser clients must be able to read on idempotent
+// endpoints (ADR-039): the replay marker of @nestjs/idempotency and the
+// Retry-After hint it sets on in-flight conflicts.
+const IDEMPOTENCY_REPLAYED_HEADER = 'Idempotent-Replayed';
+const RETRY_AFTER_HEADER = 'Retry-After';
+
 async function bootstrap() {
   const {
     env,
@@ -91,8 +97,14 @@ async function bootstrap() {
   // Only explicitly configured origins are granted access; when no origins
   // are configured, CORS stays disabled entirely instead of allowing every
   // origin, so requests never receive an Access-Control-Allow-Origin header.
+  // allowedHeaders stays unset: the CORS layer echoes the preflight's
+  // requested headers, which already admits Idempotency-Key without
+  // restricting future headers (pinned by an e2e preflight test, ADR-039).
   if (corsOrigins) {
-    app.enableCors({ origin: corsOrigins });
+    app.enableCors({
+      origin: corsOrigins,
+      exposedHeaders: [IDEMPOTENCY_REPLAYED_HEADER, RETRY_AFTER_HEADER],
+    });
   }
 
   // Adapter-level request-ID lifecycle: ID assignment on every request,

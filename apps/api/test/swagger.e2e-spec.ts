@@ -77,18 +77,30 @@ describe('Swagger (e2e)', () => {
     const challenge = json.body.paths['/api/v1/enrollments/challenge'].post;
 
     // Assert — request schema derived from the Zod schema (required field,
-    // validated phone pattern); the response documents the phone number only
-    // and the OTP value appears nowhere in the document.
+    // validated phone pattern); the idempotency header is documented as
+    // required, the success response is a bodyless 202 (ADR-039), and the
+    // OTP value appears nowhere in the document.
     const requestBody = challenge.requestBody.content['application/json'].schema;
     expect(requestBody.type).toBe('object');
     expect(requestBody.required).toContain('phoneNumber');
     expect(requestBody.properties.phoneNumber.pattern).toBe('^09\\d{9}$');
 
-    const okSchema = challenge.responses['200'].content['application/json'].schema;
-    expect(okSchema.properties.data.required).toEqual(['phoneNumber']);
+    const idempotencyKeyParameter = (challenge.parameters ?? []).find(
+      (parameter: { in?: string; name?: string }) =>
+        parameter.in === 'header' && parameter.name === 'Idempotency-Key',
+    );
+    expect(idempotencyKeyParameter).toMatchObject({ required: true });
+
+    const acceptedResponse = challenge.responses['202'];
+    expect(acceptedResponse).toBeDefined();
+    expect(acceptedResponse.content).toBeUndefined();
+
     expect(JSON.stringify(challenge)).not.toContain('"otp"');
 
     expect(challenge.responses['400'].description).toContain('Problem Details');
+    expect(challenge.responses['409']).toBeDefined();
+    expect(challenge.responses['422']).toBeDefined();
+    expect(challenge.responses['429']).toBeDefined();
     expect(challenge.responses['500'].description).toContain('Redis');
     const badRequestSchema =
       challenge.responses['400'].content[Object.keys(challenge.responses['400'].content)[0]].schema;

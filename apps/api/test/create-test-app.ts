@@ -99,7 +99,14 @@ export async function createTestApp(
   });
   app.enableVersioning({ type: VersioningType.URI, defaultVersion: '1' });
   if (corsOrigins) {
-    app.enableCors({ origin: corsOrigins });
+    // Mirrors the production bootstrap (main.ts): the idempotency replay
+    // metadata headers must be exposed to browser clients (ADR-039).
+    // allowedHeaders stays unset, exactly as in production: the CORS layer
+    // echoes the preflight's requested headers (Idempotency-Key included).
+    app.enableCors({
+      origin: corsOrigins,
+      exposedHeaders: ['Idempotent-Replayed', 'Retry-After'],
+    });
   }
 
   registerRequestIdLifecycle(adapter, app.get(Logger));

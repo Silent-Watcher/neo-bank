@@ -53,7 +53,12 @@ development/test.
   conditional-request/ETag support and the shared JSON content-type helpers,
   root not-found fallback),
   `throttler/` (global HTTP rate limiting: `@nestjs/throttler` + Redis
-  storage, named policies, `RedisThrottlerGuard`), `i18n/` (global i18n
+  storage, named policies, `RedisThrottlerGuard`, plus the
+  `@DeferredRateLimit()` marker and `DeferredRateLimitGuard` — see
+  "Deferred rate limits" below), `idempotency/` (global idempotency
+  integration: official `@nestjs/idempotency` + Redis-backed
+  `RedisIdempotencyStore`, ADR-039 — see "Idempotency" below),
+  `i18n/` (global i18n
   registration: locale resolution, catalogs, missing-key policy — see
   "Internationalization" below).
 - **Infrastructure provider tokens:** use `Symbol` tokens for infrastructure
@@ -61,11 +66,38 @@ development/test.
   module's directory, and expose them to consumers only through the owning
   module's exports or a dedicated injection decorator.
 - **Global guard order:** `MemoryProtectionGuard` is registered before
-  `RedisThrottlerGuard` (ADR-026): while memory protection is active,
-  non-exempt requests are rejected with 503 on the cheapest possible path —
-  no Redis round trip, no rate-limit bookkeeping — so the rejection path
-  never depends on Redis. Opt out only for probes and documentation pages
-  with `@SkipMemoryProtection()`.
+  `DeferredRateLimitGuard` — the registered global rate-limit guard, a
+  `RedisThrottlerGuard` subclass (ADR-015, ADR-026) — so while memory
+  protection is active, non-exempt requests are rejected with 503 on the
+  cheapest possible path — no Redis round trip, no rate-limit bookkeeping —
+  so the rejection path never depends on Redis. Opt out only for probes and
+  documentation pages with `@SkipMemoryProtection()`.
+- **Deferred rate limits (ADR-039):** a route whose quota must not be
+  consumed by idempotent replays is marked `@DeferredRateLimit()`
+  (`src/shared/throttler/deferred-rate-limit.decorator.ts`); the global
+  guard skips it entirely, and a route-level interceptor (pattern:
+  `ChallengeRateLimitInterceptor` in
+  `src/modules/enrollments/`, delegating to the official
+  `ThrottlerGuard.canActivate` of a module-provided `RedisThrottlerGuard`)
+  re-enforces the route's `@Throttle` metadata **after** the global
+  `IdempotencyInterceptor` — so completed replays and in-flight
+  `409 IDEMPOTENCY_KEY_IN_USE` duplicates never reach enforcement. Never
+  enforce a deferred route's quota with a guard or expect `@Throttle` alone
+  to fire there; a deferred marker without a re-enforcing interceptor leaves
+  the route unthrottled.
+- **Idempotency (ADR-039):** every `@Idempotent()` handler must define
+  `scope`, `fingerprint`, and `storeIf` deliberately per endpoint — never
+  accept the defaults silently (pattern: `challengeIdempotentOptions` in
+  `src/modules/enrollments/enrollments.idempotency.ts`; the scope secret is
+  resolved lazily at request time because decorator arguments evaluate
+  before a `ConfigService` exists). Idempotency record keys are built only
+  through the co-located keys file
+  (`src/shared/idempotency/idempotency.keys.ts` via `buildRedisKey`) and use
+  a SHA-256 digest as the identifier — no raw identifiers (phone numbers,
+  client keys) ever appear in a Redis key, a log, or an event payload. The
+  store (`RedisIdempotencyStore`) runs four atomic Lua scripts on the shared
+  client and owns no connection lifecycle; idempotency records are not
+  evictable (`maxmemory-policy noeviction` is a deployment prerequisite).
 - **Request/response contracts:** every successful JSON response is wrapped
   by the envelope interceptor; every error becomes Problem Details
   (ADR-010/011). Do not hand-roll response or error shapes; ADR-011 lists the
@@ -346,9 +378,12 @@ src/
                            # memory health indicator
     redis/                 # global RedisModule: provider, RedisService, InjectRedis,
                            # key builder (redis-keys.ts), health probe (ADR-037)
+    idempotency/           # global idempotency integration (ADR-039): official
+                           # IdempotencyModule + RedisIdempotencyStore (atomic
+                           # Lua scripts), co-located keys file
     swagger/               # OpenAPI setup (dev-only), shared response schemas
     throttler/             # global rate limiting: RedisThrottlerStorage, Guard,
-                           # module, keys
+                           # module, keys, @DeferredRateLimit + DeferredRateLimitGuard
     enums/ errors/ filters/ http/ interceptors/ logging/ pipes/
 test/
   create-test-app.ts       # e2e app factory mirroring main.ts bootstrap
@@ -438,8 +473,8 @@ pnpm db:migration:down   # revert the most recent migration
 ## Constraints
 
 - Follow the decision records in [../../DECISIONS.md](../../DECISIONS.md) —
-  all ADRs ADR-001 through ADR-038 are **Accepted** (ADR-038 is implemented
-  through Phase 0; its remaining phases are pending); do not build against
+  all ADRs ADR-001 through ADR-039 are **Accepted** and implemented; do not
+  build against
   their rejected alternatives.
 - New architectural decisions follow the ADR-first workflow in the root
   [AGENTS.md](../../AGENTS.md): propose the ADR, get explicit user approval,

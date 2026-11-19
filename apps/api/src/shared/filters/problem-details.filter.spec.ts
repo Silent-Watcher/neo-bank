@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  HttpException,
   NotFoundException,
   ServiceUnavailableException,
 } from '@nestjs/common';
@@ -22,10 +23,17 @@ const REQUEST_ID = '550e8400-e29b-41d4-a716-446655440000';
 const ENGLISH_MESSAGES: Record<string, string> = {
   'errors.titles.applicationError': 'Application Error',
   'errors.titles.invalidRequestId': 'Invalid Request Id',
+  'errors.titles.otpVerificationFailed': 'Verification Failed',
+  'errors.titles.idempotencyKeyInUse': 'Idempotency Key In Use',
+  'errors.titles.idempotencyRecordUnreadable': 'Idempotency Record Unreadable',
   'errors.status.notFound': 'Not Found',
   'errors.status.http': 'HTTP {status}',
   'errors.details.unexpected': 'An unexpected error occurred.',
   'errors.details.rateLimited': 'Too many requests. Retry later.',
+  'errors.details.idempotencyKeyInUse':
+    'A request with this Idempotency-Key is still being processed. Retry after the delay indicated by the Retry-After header.',
+  'errors.details.idempotencyRecordUnreadable':
+    'The stored result for this idempotency key could not be read. The key stays protected until it expires.',
 };
 
 function createFilterFixture(
@@ -119,6 +127,90 @@ describe('ProblemDetailsFilter', () => {
         status: 400,
         detail: 'name must be a string; age must be a number',
         code: ErrorCode.BadRequest,
+      }),
+    );
+  });
+
+  it('carries a replayed stored application error code through a plain HttpException (ADR-039)', () => {
+    // Arrange — the package replays a stored error by re-throwing
+    // HttpException(stored.body, status); the original AppHttpException body
+    // carries the application's own code.
+    const { filter, replySend, host } = createFilterFixture();
+    const replayed = new HttpException(
+      { code: ErrorCode.OtpVerificationFailed, detail: 'Phone number verification failed.' },
+      HttpStatus.BAD_REQUEST,
+    );
+
+    // Act
+    filter.catch(replayed, host);
+
+    // Assert — the replay keeps the original execution's code, type, and
+    // title instead of degrading to the status-based fallback.
+    expect(replySend).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: 400,
+        code: ErrorCode.OtpVerificationFailed,
+        type: '/problems/application-error',
+        title: 'Verification Failed',
+      }),
+    );
+  });
+
+  it('maps the package idempotency rejections onto the localized contract', () => {
+    // Arrange — the package throws plain HttpExceptions with its own code
+    // string and an English-only message.
+    const { filter, replySend, host } = createFilterFixture();
+    const rejection = new HttpException(
+      {
+        statusCode: HttpStatus.CONFLICT,
+        error: 'Conflict',
+        code: 'IDEMPOTENCY_KEY_IN_USE',
+        message: 'A request with this idempotency key is still being processed.',
+      },
+      HttpStatus.CONFLICT,
+    );
+
+    // Act
+    filter.catch(rejection, host);
+
+    // Assert — the code string survives untranslated; the detail comes from
+    // the catalog, never from the package's English message.
+    expect(replySend).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: 409,
+        code: ErrorCode.IdempotencyKeyInUse,
+        title: 'Idempotency Key In Use',
+        detail: ENGLISH_MESSAGES['errors.details.idempotencyKeyInUse'],
+      }),
+    );
+    expect(JSON.stringify(replySend.mock.calls[0][0])).not.toContain(
+      'this idempotency key is still being processed',
+    );
+  });
+
+  it('maps an unreadable idempotency record fail-closed with a localized detail', () => {
+    // Arrange — the package's fail-closed 500 for a corrupt record.
+    const { filter, replySend, host } = createFilterFixture();
+    const unreadable = new HttpException(
+      {
+        statusCode: HttpStatus.INTERNAL_SERVER_ERROR,
+        error: 'Internal Server Error',
+        code: 'IDEMPOTENCY_RECORD_UNREADABLE',
+        message: 'The stored result for this idempotency key could not be read.',
+      },
+      HttpStatus.INTERNAL_SERVER_ERROR,
+    );
+
+    // Act
+    filter.catch(unreadable, host);
+
+    // Assert — the localized detail replaces the package's English sentence.
+    expect(replySend).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: 500,
+        code: ErrorCode.IdempotencyRecordUnreadable,
+        title: 'Idempotency Record Unreadable',
+        detail: ENGLISH_MESSAGES['errors.details.idempotencyRecordUnreadable'],
       }),
     );
   });

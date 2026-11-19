@@ -16,23 +16,22 @@ import type { RedisClient } from '#redis/inject-redis.decorator.js';
 let inspectClient: RedisClient;
 
 async function cleanupKeys(): Promise<void> {
-  const keys = await scanThrottleKeys();
+  const keys = [
+    ...(await scanPattern('neo-bank:throttler:rate-limit:*')),
+    // The challenge requests run through the idempotency pipeline (ADR-039);
+    // their records are cleaned alongside the quota state.
+    ...(await scanPattern('neo-bank:idempotency:*')),
+  ];
   if (keys.length > 0) {
     await inspectClient.unlink(...keys);
   }
 }
 
-async function scanThrottleKeys(): Promise<string[]> {
+async function scanPattern(pattern: string): Promise<string[]> {
   const keys: string[] = [];
   let cursor = '0';
   do {
-    const [next, batch] = await inspectClient.scan(
-      cursor,
-      'MATCH',
-      'neo-bank:throttler:rate-limit:*',
-      'COUNT',
-      100,
-    );
+    const [next, batch] = await inspectClient.scan(cursor, 'MATCH', pattern, 'COUNT', 100);
     cursor = next;
     keys.push(...batch);
   } while (cursor !== '0');
@@ -101,7 +100,7 @@ describe('EnrollmentsController (e2e)', () => {
   // overridden REDIS_CLIENT (high limits) so validation errors are not
   // masked by throttling.
 
-  it('validates the phone number, stores only the challenge value (challenge ID + OTP HMAC digest) in Redis, and returns only the phone number', async () => {
+  it('validates the phone number, stores only the challenge value (challenge ID + OTP HMAC digest) in Redis, and answers an empty 202', async () => {
     // Arrange
     const issueOtp = vi
       .fn<
@@ -122,11 +121,13 @@ describe('EnrollmentsController (e2e)', () => {
     // Act
     const response = await request(app.getHttpServer())
       .post('/api/v1/enrollments/challenge')
+      .set('Idempotency-Key', randomUUID())
       .send({ phoneNumber: '09123456789' });
 
-    // Assert
-    expect(response.status).toBe(201);
-    expect(response.body.data).toEqual({ phoneNumber: '09123456789' });
+    // Assert — 202 Accepted with an empty body (ADR-039): the phone number
+    // and the OTP value are never part of the response.
+    expect(response.status).toBe(202);
+    expect(response.text).toBe('');
     expect(checkOtpRateLimit).toHaveBeenCalledTimes(1);
     expect(checkOtpRateLimit).toHaveBeenCalledWith(
       'neo-bank:enrollments:challenge:rate-limit:09123456789',
@@ -167,11 +168,12 @@ describe('EnrollmentsController (e2e)', () => {
     // Act
     const response = await request(app.getHttpServer())
       .post('/api/v1/enrollments/challenge')
+      .set('Idempotency-Key', randomUUID())
       .send({ phoneNumber: '+989123456789' });
 
-    // Assert
-    expect(response.status).toBe(201);
-    expect(response.body.data).toEqual({ phoneNumber: '09123456789' });
+    // Assert — empty 202 under the normalized phone number.
+    expect(response.status).toBe(202);
+    expect(response.text).toBe('');
     expect(checkOtpRateLimit).toHaveBeenCalledWith(
       'neo-bank:enrollments:challenge:rate-limit:09123456789',
       5,
@@ -197,6 +199,7 @@ describe('EnrollmentsController (e2e)', () => {
       const response = await request(app.getHttpServer())
         .post('/api/v1/enrollments/challenge')
         .set('X-Forwarded-For', `198.51.100.${index + 10}`)
+        .set('Idempotency-Key', randomUUID())
         .send({ phoneNumber: invalidPhoneNumbers[index] });
 
       expect(response.status).toBe(400);
@@ -218,6 +221,7 @@ describe('EnrollmentsController (e2e)', () => {
     // Act
     const response = await request(app.getHttpServer())
       .post('/api/v1/enrollments/challenge')
+      .set('Idempotency-Key', randomUUID())
       .send({ phoneNumber: '09123456789' });
 
     // Assert
@@ -239,6 +243,7 @@ describe('EnrollmentsController (e2e)', () => {
     // Act
     const response = await request(app.getHttpServer())
       .post('/api/v1/enrollments/challenge')
+      .set('Idempotency-Key', randomUUID())
       .send({ phoneNumber: '09123456789' });
 
     // Assert — generic 400 without internal rate-limit details; OTP is never stored.
@@ -263,6 +268,7 @@ describe('EnrollmentsController (e2e)', () => {
     // Act
     const response = await request(app.getHttpServer())
       .post('/api/v1/enrollments/challenge')
+      .set('Idempotency-Key', randomUUID())
       .send({ phoneNumber: '09123456789' });
 
     // Assert — same status, code, and detail shape as the hourly quota response.
@@ -285,6 +291,7 @@ describe('EnrollmentsController (e2e)', () => {
     // Act
     const response = await request(app.getHttpServer())
       .post('/api/v1/enrollments/challenge')
+      .set('Idempotency-Key', randomUUID())
       .send({ phoneNumber: '09123456789' });
 
     // Assert — infrastructure failure surfaces as generic 500, no Redis details.

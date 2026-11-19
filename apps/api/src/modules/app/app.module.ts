@@ -12,13 +12,14 @@ import { AppLoggerModule } from '#src/shared/logging/logger.module.js';
 import { i18nModule } from '#src/shared/i18n/i18n.module.js';
 import { RedisModule } from '#redis/redis.module.js';
 import { DatabaseModule } from '#database/database.module.js';
-import { RedisThrottlerGuard } from '#src/shared/throttler/redis-throttler.guard.js';
+import { DeferredRateLimitGuard } from '#src/shared/throttler/deferred-rate-limit.guard.js';
 import { throttlerModule } from '#src/shared/throttler/throttler.module.js';
 import { AppController } from './app.controller.js';
 import { AppService } from './app.service.js';
 import { HealthController } from './health.controller.js';
 import { ProblemsController } from './problems.controller.js';
 import { EnrollmentsModule } from '#modules/enrollments/enrollments.module.js';
+import { IdempotencyStoreModule } from '#src/shared/idempotency/idempotency.module.js';
 
 @Module({
   imports: [
@@ -35,6 +36,7 @@ import { EnrollmentsModule } from '#modules/enrollments/enrollments.module.js';
     MemoryProtectionModule,
     throttlerModule,
     EnrollmentsModule,
+    IdempotencyStoreModule,
   ],
   controllers: [AppController, HealthController, ProblemsController],
   providers: [
@@ -43,7 +45,7 @@ import { EnrollmentsModule } from '#modules/enrollments/enrollments.module.js';
     // process sheds load through the cheapest path — no Redis round trip
     // (ADR-026). Guard order follows provider order.
     { provide: APP_GUARD, useClass: MemoryProtectionGuard },
-    { provide: APP_GUARD, useClass: RedisThrottlerGuard },
+    { provide: APP_GUARD, useClass: DeferredRateLimitGuard },
     { provide: APP_INTERCEPTOR, useClass: ResponseEnvelopeInterceptor },
     // Registered after the envelope interceptor, so it wraps INSIDE it and
     // sees the handler payload before the envelope adds its per-response

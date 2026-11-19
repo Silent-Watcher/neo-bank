@@ -2859,3 +2859,168 @@ safety. Three Low findings, all applied in-iteration:
 - **Agreed resolution:** positive latin1 opaque-tag case added (`W/"café123"`
   round-trips through the parser) and the cap boundary pinned (exactly 4096
   accepted, 4097 rejected).
+
+## Wave 28 — Redis-backed idempotency for the enrollment challenge (_057, code-reviewer, 2026-11-20) — CHANGES_REQUIRED → remediated → re-review APPROVED_WITH_SUGGESTIONS (iteration 2)
+
+Context-blind review of the RedisIdempotencyStore Lua scripts (verified
+against the installed @nestjs/idempotency 0.0.4 contract), the deferred
+rate-limit guard and route interceptor composition, the scope/fingerprint
+functions, the Problem Details mapping, the env wiring, and the test suites.
+Five findings; all applied in-iteration. The reviewer also verified the
+global-enhancer registration order against @nestjs/core's scanner, which
+corrected the ADR's interceptor-nesting description (CR-03) — empirically
+confirmed by the package's startup warning listing the envelope and
+conditional-request interceptors as running outside the idempotency
+interceptor.
+
+### CR-01 — Replayed stored business errors served a different error code than the original execution
+
+- **Status:** Resolved (2026-11-20)
+- **Severity:** Medium | **Category:** Correctness
+- **Problem:** `storeIf` stores deterministic business 4xx bodies
+  (`{ code, detail }` from `AppHttpException`). The package replays a stored
+  error by re-throwing a plain `HttpException(stored.body, status)`; the
+  filter's generic branch only recognized the four `IDEMPOTENCY_*` strings,
+  so a replayed `OTP_VERIFICATION_FAILED` body degraded to status-based
+  `BAD_REQUEST` with `about:blank` — a different code/type/title for the
+  identical logical operation.
+- **Agreed resolution:** the generic `HttpException` branch now carries
+  through any body `code` that matches an `ErrorCode` member value (narrowed
+  predicate, no assertion), keeping the status-based fallback for bodies
+  without a recognizable code. The stored `detail` remains the string
+  localized at original-throw time (re-localizing every business detail is a
+  larger mapping decision) — accepted and documented in `docs/ai-decisions.md`
+  and `docs/api.md`; the title still localizes per request.
+
+### CR-02 — `IDEMPOTENCY_RECORD_UNREADABLE` was unmapped; the package's English message reached clients
+
+- **Status:** Resolved (2026-11-20)
+- **Severity:** Medium | **Category:** Edge Case / Correctness (bilingual rule)
+- **Problem:** The package fails closed on unreadable records with
+  `500 IDEMPOTENCY_RECORD_UNREADABLE` and an English-authored message; the
+  filter fell through to `detailFromHttpException`, leaking that message and
+  skipping localization.
+- **Agreed resolution:** `ErrorCode.IdempotencyRecordUnreadable` added with
+  the same problem-type/title/title-key treatment as the sibling idempotency
+  codes and localized en/fa detail keys; the package's English text no longer
+  reaches the response body.
+
+### CR-03 — ADR-039 described the interceptor nesting inverted
+
+- **Status:** Resolved (2026-11-20)
+- **Severity:** Medium | **Category:** Correctness (documentation accuracy)
+- **Problem:** The ADR claimed the envelope and conditional-request
+  interceptors sit _inside_ the idempotency interceptor. The reviewer pinned
+  the actual order from @nestjs/core's scanner: root-module `APP_INTERCEPTOR`s
+  register first, so the order is [envelope, conditional, idempotency] —
+  idempotency is innermost, which is precisely what makes the stored body the
+  raw handler result and lets replays pass outward through the envelope.
+  Empirically confirmed: the package's startup warning lists the envelope and
+  conditional-request interceptors as running outside it.
+- **Agreed resolution:** ADR-039 Decision 7 and the Options Considered bullet
+  corrected to the actual nesting, and the expected, benign startup warning
+  recorded — reordering to silence it would recreate the stale-envelope
+  hazard the ADR rejects.
+
+### CR-04 — Duplicate `isRecord` definition in the store
+
+- **Status:** Resolved (2026-11-20)
+- **Severity:** Low | **Category:** Syntax/Code Quality (DRY)
+- **Agreed resolution:** the store imports the shared guard from
+  `#http/http-boundary.js`; the local copy is deleted.
+
+### CR-05 — E2E scenario letters skip "G" without a pointer
+
+- **Status:** Resolved (2026-11-20)
+- **Severity:** Low | **Category:** Syntax/Code Quality (cosmetic)
+- **Agreed resolution:** the spec header now states explicitly that G was the
+  master prompt's 422 key-reuse scenario, deliberately dropped as
+  structurally unreachable on this endpoint (covered by the package's own
+  suite; documented as contract in Swagger).
+
+### CR-06 — CR-01's documentation cross-references had not landed yet (re-review finding)
+
+- **Status:** Resolved (2026-11-20)
+- **Severity:** Low | **Category:** Syntax/Code Quality (documentation tracking)
+- **Problem:** the tracker's CR-01 disposition pointed at `docs/ai-decisions.md`
+  and `docs/api.md` before those notes existed (the documentation gate ran in
+  parallel).
+- **Agreed resolution:** the stored-detail locale decision is now recorded as
+  `docs/ai-decisions.md` entry 31, and `docs/api.md`'s replay section states
+  that a replayed stored error keeps its original `code`/`type`/localized
+  `title` with the detail served in the original-throw locale.
+
+## Wave 29 — Idempotency security gate (_057, code-security-analyzer, 2026-11-20) — SECURITY_CHANGES_REQUIRED → SEC-01 remediated (developer-approved option) → re-review SECURITY_APPROVED_WITH_INFORMATIONAL_FINDINGS
+
+Attacker-perspective review of the idempotency integration: key validation,
+Redis key injection, Lua fencing, cross-tenant scope isolation, secret
+handling, PII hygiene, Problem Details mapping, the defer mechanism, error/log
+hygiene, env validation, and CORS — all found sound (detailed in the report).
+Three findings; SEC-02 and SEC-03 processed, SEC-01 presented to the
+developer with remediation options and closed after the approved fix was
+re-verified.
+
+### SEC-01 — Unbounded accumulation of persistent, attacker-mintable idempotency records can exhaust Redis memory
+
+- **Status:** Resolved (2026-11-20, re-verified by the security gate)
+- **Severity:** Medium | **Category:** Security — CWE-770 (Allocation of
+  Resources Without Limits), related CWE-400
+- **Locations:** `apps/api/src/modules/enrollments/enrollments.idempotency.ts`
+  (24 h record TTL; `storeIf` stores deterministic 4xx);
+  `docker/compose.app.prod.yml` and `docker/compose.app.dev.yml` (Redis
+  launched without `--maxmemory`; the documented `noeviction` prerequisite is
+  the server default, so records are never evicted).
+- **Technical explanation:** the feature converts transient per-request
+  state into persistent state: every non-blocked request mints a record that
+  survives 24 h. The per-IP route quota caps the minting rate (~1 record/min/IP
+  sustained), but with no memory cap the aggregate is bounded only by host
+  RAM: ~8–9 MB/day per sustained source IP; 1,000 sustained IPs ≈ 8.6 GB/day.
+  On exhaustion, `noeviction` makes every Redis write fail — the deliberate
+  fail-closed posture (ADR-039) turns the blast radius into a global outage
+  of all Redis-backed functionality (OTP issuance, throttling, idempotency),
+  never a silent bypass.
+- **Security-analyzer recommendation:** set an explicit `--maxmemory` bound
+  in the deployment (prod + dev for parity) and alert on Redis memory
+  utilization; optionally shorten the TTL for stored 4xx outcomes or exclude
+  client-error storage (a product-semantics decision against ADR-039).
+- **Investigation results:** excluding 4xx storage was analyzed and found to
+  be NOT a meaningful mitigation — 202-records are mintable at the same
+  quota-capped rate with valid (endless) phone numbers, so the quota, not the
+  stored-outcome kind, is the true rate bound; the bound that matters is a
+  memory cap. Options presented to the developer (see the task record for the
+  decision).
+- **Agreed resolution:** the developer approved enforcing an explicit
+  `--maxmemory` bound in the Compose stacks (`1gb` production,
+  `256mb` development, with sizing rationale in the files); `storeIf`
+  semantics unchanged per the analysis. ADR-039 Decision 9 and Operational
+  Implications, `docs/docker.md`, `docs/current-state.md`, and
+  `apps/api/ONBOARDING.md` state the enforced bounds; both files validate
+  with `docker compose config`. The security gate re-verified the remediation
+  and returned SECURITY_APPROVED_WITH_INFORMATIONAL_FINDINGS; alerting on
+  Redis memory utilization stays on the observability roadmap, and the
+  remaining exposure is the documented fail-closed exhaustion trade-off, not
+  an open finding.
+
+### SEC-02 — Completed replays and in-flight duplicates intentionally bypass the route rate limiter
+
+- **Status:** Won't Fix (accepted by design, documented)
+- **Severity:** Informational | **Category:** Security — CWE-799
+- **Agreed resolution:** this is the product requirement itself (ADR-039
+  decision 5): replays must not consume quota. Verified harmless: stored
+  outcomes are side-effect-free (empty 202; OTP issuance stays quota- and
+  lockout-bound on the execute path), per-request cost is ~2 hashes + one
+  Redis read, and no amplification into data exposure exists. No action.
+
+### SEC-03 — Package's production in-memory-store guard keys on NODE_ENV, not APP_ENV
+
+- **Status:** Resolved (2026-11-20)
+- **Severity:** Informational | **Category:** Security — CWE-1188
+  (deployment-hardening observation)
+- **Agreed resolution:** `docs/docker.md`'s Redis deployment notes now state
+  the prerequisite: production deployments must run with
+  `NODE_ENV=production` so the package's fail-fast guard against an
+  unregistered store is active, and deployment smoke checks should verify the
+  startup line `IdempotencyStorage: RedisIdempotencyStore`. In-repo
+  mitigation was already present: the store registers in its constructor
+  (broken registration fails startup) and an e2e test asserts the active
+  store is the Redis implementation.

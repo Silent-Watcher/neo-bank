@@ -20,6 +20,7 @@ describe('databaseConfig factory', () => {
     vi.stubEnv('REDIS_USERNAME', 'default');
     vi.stubEnv('REDIS_PASSWORD', 'secret');
     vi.stubEnv('ENROLLMENTS_OTP_HMAC_SECRET', 'ab'.repeat(32));
+    vi.stubEnv('IDEMPOTENCY_SCOPE_SECRET', 'ab'.repeat(32));
     vi.stubEnv('DATABASE_URL', 'postgres://localhost:5432/neo_bank');
     for (const [key, value] of Object.entries(overrides)) {
       vi.stubEnv(key, value);

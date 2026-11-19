@@ -973,6 +973,16 @@ The following are permanent, user-mandated rules governing every subagent report
 3. **Tests are never sacrificed.** Under no circumstances may a test be skipped, deleted, or weakened (loosened assertions, removed cases, skip/todo markers, narrowed coverage) to make an implementation pass. If an implementation conflicts with a test, fix the implementation. A test may change only when it encodes a genuinely outdated contract, only with explicit user approval, and only into a stronger form, with the reason documented.
 4. **Out-of-scope warnings become tracked follow-ups.** When a subagent flags anything as potentially out of scope, record it in `docs/judge-findings.md` and `DEFERRED.md` as a follow-up to implement or fix later — with enough context (location, failure scenario, recommendation) that a future task can act on it without re-deriving the analysis.
 
+### Technical Tips Notes (~/Downloads/tips)
+
+Permanent, user-mandated rule: whenever work produces an experience that cannot be found where a future reader would look — a framework or tool behavior that contradicts intuition or the docs, a non-obvious failure and its root cause, a testing or debugging technique that took a real debug cycle, a little security observation, a coding or review practice that proved itself — the agent must capture it as a tip document instead of letting it die with the session. This applies to lessons from the agent's own implementation and debugging work and to anything surfaced by subagent findings (code review, security review, migration review, documentation review).
+
+- **Location:** `/home/ali/Downloads/tips/` (the user's system Downloads, outside every repository; the directory already exists).
+- **Triggers:** processing subagent findings that reveal library/tool pitfalls; a blocked or failed operation whose root cause was non-obvious; empirical verification that overturns an architecture intuition (ordering, lifecycle, timing); remediation of a security finding worth generalizing; a convention or practice decision whose reasoning would otherwise live only in the session.
+- **Format:** one topic per file, lowercase kebab-case (`topic-name.md`), English. Lead with the context, then the gotcha or lesson, then the concrete fix or pattern (code-backed where possible), then prevention. Mark clearly what was verified against installed sources or live behavior versus general knowledge. Security observations get a dedicated note with the CWE, the attack scenario, the fix, and prevention.
+- **Bar for inclusion:** the "cannot be found where you'd look" test. If this repository's AGENTS.md files, ADRs, `docs/ai-decisions.md`, or `docs/judge-findings.md` already record the fact, the tip must add something they do not — the concrete mechanism, the exact command, the failure story — otherwise skip it.
+- **Relationship to repository records:** these files live outside the repository. They are never committed, never referenced as project documentation, and never replace the in-repo records above; they complement them for lessons that transcend this repository.
+
 ### Delegated Validation
 
 - Delegate validation work such as formatting, linting, running tests, and type checking to a subagent instead of executing those commands yourself.

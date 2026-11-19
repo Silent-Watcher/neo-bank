@@ -42,16 +42,26 @@ original task requirements and must be addressed in future work.
 ### 3. Idempotency (Reliability — Postponed)
 
 **Origin**: Task specification — "Idempotency (postponed)".
-**Status**: Deferred.
+**Status**: Done (2026-11-20) — Phase 1 shipped as ADR-039: the official `@nestjs/idempotency` (0.0.4) with a custom Redis-backed `IdempotencyStore` (`apps/api/src/shared/idempotency/` — four atomic Lua scripts via ioredis `defineCommand` on the shared client; records under `neo-bank:idempotency:store:record:<sha256hex>`, the SHA-256 of the package's `scope:key`), applied to `POST /enrollments/challenge` via `@Idempotent()`: required `Idempotency-Key` header, HMAC-SHA-256(`IDEMPOTENCY_SCOPE_SECRET`, normalized phone) scope, normalized-phone fingerprint (equivalent `+98`/`0098`/`98`/missing-zero spellings share one scope), completed-record TTL 24 h / in-flight lock 60 s (renewed every lockTtl/3) / retry-after 1 s, and `storeIf` excluding 429 and 5xx. The endpoint answers an empty `202` (no envelope, no phone number); replays and in-flight duplicates consume no rate-limit quota because enforcement is deferred past the idempotency acquire gate (`@DeferredRateLimit()` + `DeferredRateLimitGuard` + route-level `ChallengeRateLimitInterceptor`). Package rejections map onto `ErrorCode.IdempotencyKey*` Problem Details with localized en/fa titles and details. **Phase 2 — idempotency across the external SMS provider boundary — remains deferred** (see "Mandated by Enrollment Challenge Idempotency (ADR-039)" below).
 **Requirement**: Add an `Idempotency-Key` header to `POST /enrollments/challenge` so retries return the same response without generating a new OTP or consuming rate-limit quota.
-**Rationale**: Clients may retry on network failure; without idempotency a retry could consume a rate-limit slot or (before SET NX EX) overwrite the OTP. Now SET NX EX prevents overwrite but a retry still consumes the rate-limit quota and returns a generic error.
+**Rationale**: Clients may retry on network failure; without idempotency a retry could consume a rate-limit slot or (before SET NX EX) overwrite the OTP.
+
+---
+
+## Mandated by Enrollment Challenge Idempotency (ADR-039)
+
+### 1. Phase 2 — Idempotency Across the External SMS Provider Boundary (Reliability — Deferred)
+
+**Origin**: ADR-039 implementation, 2026-11-20 — Phase 1 makes the HTTP boundary idempotent; the ADR's scope decision explicitly excludes the external SMS provider, and this follow-up is mandated before SMS delivery goes live.
+**Status**: Deferred — blocked on the SMS provider integration itself.
+**Requirement**: Idempotent delivery across the provider boundary. The failure scenario Phase 1 cannot cover: the server sends the SMS delivery request → the provider sends the SMS → the network interrupts before the outcome is learned → the app never learns what happened → a retry (automatic or client-driven) produces a duplicate SMS and duplicate charges. Delivery must therefore be idempotent across the boundary, covering: provider-side idempotency support (client-supplied dedup key on the delivery API), a stable provider key that survives app retries, explicit timeout/ambiguous-outcome handling, delivery-state persistence, restart/multi-instance safety, retry/backoff policies, error classification, reconciliation (outcomes learned after the fact), webhooks/delivery callbacks, duplicate prevention across the combination of app retries and provider-side retries, observability with correlation IDs, and fault-injection tests (timeouts after acceptance, duplicated deliveries, callback races).
+**Rationale**: A Transactional Outbox alone does not guarantee exactly-once delivery across the boundary — the provider is an independent failure domain and may execute a request whose outcome the application never observed. Related Phase 1 consequence: once an external side effect can precede the response, a `5xx` after that side effect is no longer safely re-executable, so the challenge `storeIf` policy (which excludes all 5xx today, ADR-039) may need a deliberately different policy for such endpoints.
 **Implementation notes**:
 
-- Use a separate Redis key: `neo-bank:enrollments:challenge:idempotency:<key>` with 120s TTL.
-- Store the response body (or just the OTP + phone) on first success.
-- On subsequent requests with same key, return stored response.
-- Check idempotency key before rate limiting (or exclude idempotent retries from quota).
-- Deferred because the current flow is minimal; becomes necessary when SMS delivery adds cost and retry storms are a real risk.
+- Decide the provider contract first: whether the provider accepts a client-supplied idempotency key; if it does not, duplicate prevention must be app-side with delivery state persisted before the outbound call.
+- Persist the delivery attempt with an explicit state machine (pending → sent/unconfirmed → confirmed/failed); resolve ambiguous outcomes by provider status query or delivery callback — never by blind resend.
+- Every state transition and retry decision must survive restarts and run correctly with multiple API instances (no in-memory-only state).
+- Cover the ambiguous-outcome path with fault-injection tests (MockServer/Toxiproxy) before go-live.
 
 ---
 

@@ -1,6 +1,11 @@
 {
   "titles": {
     "applicationError": "خطای برنامه",
+    "idempotencyKeyInUse": "کلید Idempotency-Key در حال پردازش است",
+    "idempotencyKeyInvalid": "کلید Idempotency-Key نامعتبر است",
+    "idempotencyKeyRequired": "کلید Idempotency-Key الزامی است",
+    "idempotencyKeyReused": "کلید Idempotency-Key تکراری است",
+    "idempotencyRecordUnreadable": "سابقه Idempotency-Key قابل خواندن نیست",
     "invalidRequestId": "شناسه درخواست نامعتبر",
     "otpRateLimitExceeded": "تعداد درخواست‌ها بیش از حد مجاز",
     "otpVerificationFailed": "تأیید ناموفق بود",
@@ -11,7 +16,12 @@
     "unexpected": "خطای غیرمنتظره‌ای رخ داد.",
     "rateLimited": "تعداد درخواست‌ها بیش از حد مجاز است. بعداً دوباره تلاش کنید.",
     "serviceOverloaded": "سرویس موقتاً با حجم بالای درخواست‌ها مواجه است؛ لطفاً اندکی بعد دوباره تلاش کنید.",
-    "versionConflict": "این مورد پس از بارگیری تغییر کرده است. آن را دوباره بارگیری کنید و دوباره تلاش کنید."
+    "versionConflict": "این مورد پس از بارگیری تغییر کرده است. آن را دوباره بارگیری کنید و دوباره تلاش کنید.",
+    "idempotencyKeyRequired": "برای این عملیات، ارسال سربرگ Idempotency-Key الزامی است.",
+    "idempotencyKeyInvalid": "کلید Idempotency-Key باید بین 1 تا 255 نویسه قابل چاپ باشد.",
+    "idempotencyKeyInUse": "درخواست دیگری با همین کلید Idempotency-Key همچنان در حال پردازش است. پس از گذشت زمان مشخص‌شده در سربرگ Retry-After دوباره تلاش کنید.",
+    "idempotencyKeyReused": "این کلید Idempotency-Key پیش‌تر برای درخواست دیگری استفاده شده است. برای هر عملیات جدید باید کلید جدیدی تولید کنید.",
+    "idempotencyRecordUnreadable": "نتیجه ذخیره‌شده برای این کلید Idempotency-Key قابل خواندن نیست؛ این کلید تا پایان مهلت خود محافظت‌شده باقی می‌ماند."
   },
   "status": {
     "badRequest": "درخواست نامعتبر",

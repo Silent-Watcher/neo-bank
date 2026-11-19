@@ -126,8 +126,9 @@ repository (not a Turbo task), so formatting is repository-wide.
   ioredis client and exposes it through a `RedisService` abstraction;
   connection settings are validated at boot, while an unreachable server
   only degrades the `/health` endpoint (HTTP 200) and never blocks startup.
-  Consumers: the enrollments challenge (OTP storage) and global HTTP rate
-  limiting (ADR-015) — both use the shared connection and the standardized
+  Consumers: the enrollments challenge (OTP storage), global HTTP rate
+  limiting (ADR-015), and the idempotency store (ADR-039) — all use the
+  shared connection and the standardized
   key naming convention. PostgreSQL persistence follows a similar pattern
   (ADR-027, amended 2026-11-14): a global `DatabaseModule`
   (`apps/api/src/shared/database/`) owns the single MikroORM v7 instance;

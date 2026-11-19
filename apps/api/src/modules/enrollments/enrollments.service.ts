@@ -49,7 +49,7 @@ export class EnrollmentsService {
     private readonly i18n: I18nService,
   ) {}
 
-  async requestChallenge(phoneNumber: string): Promise<{ phoneNumber: string }> {
+  async requestChallenge(phoneNumber: string): Promise<void> {
     // First, check the per-phone hourly rate limit (rolling 60-minute window).
     // This is independent of the 120-second cooldown and IP-based rate limiting.
     const rateLimitKey = challengeRateLimitKey(phoneNumber);
@@ -101,7 +101,7 @@ export class EnrollmentsService {
     }
 
     // The OTP is deliberately not returned: delivery is not implemented yet.
-    return { phoneNumber };
+    // The endpoint answers 202 Accepted with an empty body (ADR-039).
   }
 
   async verifyChallenge(phone: string, otp: string): Promise<{ phoneNumber: string }> {

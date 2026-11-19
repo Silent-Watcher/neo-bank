@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import request from 'supertest';
+import { randomUUID } from 'node:crypto';
 
 import { ContractController } from './contract.controller.js';
 import { createE2eTestApp } from './create-test-app.js';
@@ -89,6 +90,9 @@ describe('Localized validation errors (e2e)', () => {
     const response = await request(app.getHttpServer())
       .post('/api/v1/enrollments/challenge')
       .set('Accept-Language', 'fa')
+      // The idempotency gate runs before the validation pipe (ADR-039): the
+      // key lets the request reach the localized validation error.
+      .set('Idempotency-Key', randomUUID())
       .send({ phoneNumber: '02112345678', extra: 'ignored' });
 
     expect(response.status).toBe(400);
@@ -128,6 +132,7 @@ describe('Localized validation errors (e2e)', () => {
 
     const response = await request(app.getHttpServer())
       .post('/api/v1/enrollments/challenge')
+      .set('Idempotency-Key', randomUUID())
       .send({ phoneNumber: '02112345678' });
 
     expect(response.status).toBe(400);

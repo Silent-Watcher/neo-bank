@@ -5,6 +5,11 @@ import type { I18nKey } from '@nestjs/i18n';
 export enum ErrorCode {
   ApplicationError = 'APPLICATION_ERROR',
   BadRequest = 'BAD_REQUEST',
+  IdempotencyKeyInUse = 'IDEMPOTENCY_KEY_IN_USE',
+  IdempotencyKeyInvalid = 'IDEMPOTENCY_KEY_INVALID',
+  IdempotencyKeyRequired = 'IDEMPOTENCY_KEY_REQUIRED',
+  IdempotencyKeyReused = 'IDEMPOTENCY_KEY_REUSED',
+  IdempotencyRecordUnreadable = 'IDEMPOTENCY_RECORD_UNREADABLE',
   InvalidRequestId = 'INVALID_REQUEST_ID',
   NotFound = 'NOT_FOUND',
   OtpRateLimitExceeded = 'OTP_RATE_LIMIT_EXCEEDED',
@@ -33,6 +38,11 @@ export const APPLICATION_ERROR_PROBLEM_TYPE = '/problems/application-error';
 
 const ERROR_CODE_PROBLEM_TYPES: ReadonlyMap<ErrorCode, string> = new Map([
   [ErrorCode.ApplicationError, APPLICATION_ERROR_PROBLEM_TYPE],
+  [ErrorCode.IdempotencyKeyInUse, APPLICATION_ERROR_PROBLEM_TYPE],
+  [ErrorCode.IdempotencyKeyInvalid, APPLICATION_ERROR_PROBLEM_TYPE],
+  [ErrorCode.IdempotencyKeyRequired, APPLICATION_ERROR_PROBLEM_TYPE],
+  [ErrorCode.IdempotencyKeyReused, APPLICATION_ERROR_PROBLEM_TYPE],
+  [ErrorCode.IdempotencyRecordUnreadable, APPLICATION_ERROR_PROBLEM_TYPE],
   [ErrorCode.InvalidRequestId, APPLICATION_ERROR_PROBLEM_TYPE],
   [ErrorCode.OtpRateLimitExceeded, APPLICATION_ERROR_PROBLEM_TYPE],
   [ErrorCode.OtpVerificationFailed, APPLICATION_ERROR_PROBLEM_TYPE],
@@ -49,6 +59,11 @@ export function problemTypeForErrorCode(code: ErrorCode): string | undefined {
 // keyed by the family's representative codes.
 const ERROR_CODE_TITLES: ReadonlyMap<ErrorCode, string> = new Map([
   [ErrorCode.ApplicationError, 'Application Error'],
+  [ErrorCode.IdempotencyKeyInUse, 'Idempotency Key In Use'],
+  [ErrorCode.IdempotencyKeyInvalid, 'Invalid Idempotency Key'],
+  [ErrorCode.IdempotencyKeyRequired, 'Idempotency Key Required'],
+  [ErrorCode.IdempotencyKeyReused, 'Idempotency Key Reused'],
+  [ErrorCode.IdempotencyRecordUnreadable, 'Idempotency Record Unreadable'],
   [ErrorCode.InvalidRequestId, 'Invalid Request Id'],
   [ErrorCode.OtpRateLimitExceeded, 'Too Many Requests'],
   [ErrorCode.OtpVerificationFailed, 'Verification Failed'],
@@ -69,6 +84,11 @@ export function titleForErrorCode(code: ErrorCode): string | undefined {
 // keys, which serve as the title source for those codes.
 const ERROR_CODE_TITLE_KEYS: ReadonlyMap<ErrorCode, I18nKey> = new Map([
   [ErrorCode.ApplicationError, 'errors.titles.applicationError'],
+  [ErrorCode.IdempotencyKeyInUse, 'errors.titles.idempotencyKeyInUse'],
+  [ErrorCode.IdempotencyKeyInvalid, 'errors.titles.idempotencyKeyInvalid'],
+  [ErrorCode.IdempotencyKeyRequired, 'errors.titles.idempotencyKeyRequired'],
+  [ErrorCode.IdempotencyKeyReused, 'errors.titles.idempotencyKeyReused'],
+  [ErrorCode.IdempotencyRecordUnreadable, 'errors.titles.idempotencyRecordUnreadable'],
   [ErrorCode.InvalidRequestId, 'errors.titles.invalidRequestId'],
   [ErrorCode.OtpRateLimitExceeded, 'errors.titles.otpRateLimitExceeded'],
   [ErrorCode.OtpVerificationFailed, 'errors.titles.otpVerificationFailed'],

@@ -1,6 +1,7 @@
 import { Catch, HttpException, HttpStatus } from '@nestjs/common';
 import type { ArgumentsHost, ExceptionFilter } from '@nestjs/common';
 import { I18nContext, I18nService } from '@nestjs/i18n';
+import type { I18nKey } from '@nestjs/i18n';
 import { PinoLogger } from 'nestjs-pino';
 import { ThrottlerException } from '@nestjs/throttler';
 
@@ -44,6 +45,52 @@ interface NormalizedException {
   error?: Error;
 }
 
+// The official @nestjs/idempotency package rejects requests with plain
+// HttpExceptions whose body carries its machine-readable code (ADR-039).
+// Those map onto the application's error codes so the package codes stay
+// observable in the Problem Details contract, and the package's English
+// messages are replaced with the localized catalog details (bilingual rule,
+// ADR-021) — the code string itself remains the untranslated protocol value.
+const IDEMPOTENCY_REJECTIONS: ReadonlyMap<string, { code: ErrorCode; detailKey: I18nKey }> =
+  new Map([
+    [
+      'IDEMPOTENCY_KEY_REQUIRED',
+      {
+        code: ErrorCode.IdempotencyKeyRequired,
+        detailKey: 'errors.details.idempotencyKeyRequired',
+      },
+    ],
+    [
+      'IDEMPOTENCY_KEY_INVALID',
+      { code: ErrorCode.IdempotencyKeyInvalid, detailKey: 'errors.details.idempotencyKeyInvalid' },
+    ],
+    [
+      'IDEMPOTENCY_KEY_IN_USE',
+      { code: ErrorCode.IdempotencyKeyInUse, detailKey: 'errors.details.idempotencyKeyInUse' },
+    ],
+    [
+      'IDEMPOTENCY_KEY_REUSED',
+      { code: ErrorCode.IdempotencyKeyReused, detailKey: 'errors.details.idempotencyKeyReused' },
+    ],
+    [
+      'IDEMPOTENCY_RECORD_UNREADABLE',
+      {
+        code: ErrorCode.IdempotencyRecordUnreadable,
+        detailKey: 'errors.details.idempotencyRecordUnreadable',
+      },
+    ],
+  ]);
+
+// A replayed stored application error re-enters the filter as a plain
+// HttpException carrying the original application body (ADR-039); a body
+// `code` that matches an ErrorCode member value must survive so the replayed
+// response keeps the original execution's code, type, and title.
+const ERROR_CODE_VALUES: ReadonlySet<string> = new Set(Object.values(ErrorCode) as string[]);
+
+function isErrorCodeValue(value: string): value is ErrorCode {
+  return ERROR_CODE_VALUES.has(value);
+}
+
 // Normalizes a (framework or application) HTTP exception into the status/code/
 // detail triple the Problem Details contract carries. Shared with the
 // bootstrap's root-level not-found fallback so both paths build the same body
@@ -70,11 +117,21 @@ export function normalizeHttpException(exception: unknown, i18n: I18nService): N
 
   if (exception instanceof HttpException) {
     const status = exception.getStatus();
+    const response = exception.getResponse();
+    const responseCode =
+      isRecord(response) && typeof response.code === 'string' ? response.code : undefined;
+    const rejection =
+      responseCode !== undefined ? IDEMPOTENCY_REJECTIONS.get(responseCode) : undefined;
 
     return {
       status,
-      code: errorCodeForStatus(status),
-      detail: detailFromHttpException(exception),
+      code:
+        rejection?.code ??
+        (responseCode !== undefined && isErrorCodeValue(responseCode)
+          ? responseCode
+          : errorCodeForStatus(status)),
+      detail:
+        rejection !== undefined ? i18n.t(rejection.detailKey) : detailFromHttpException(exception),
     };
   }
 

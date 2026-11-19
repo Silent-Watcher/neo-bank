@@ -172,12 +172,15 @@ services:
     # Authentication is enabled in every environment so dev matches prod.
     # The Stack entrypoint starts redis-server plus the bundled modules and
     # Redis Insight; server args are passed through REDIS_ARGS (ADR-020).
+    # --maxmemory bounds the never-evicting idempotency recordspace in dev
+    # too, mirroring production (ADR-039, security gate SEC-01).
     environment:
       REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD is required in docker/env/.env.docker.dev}
       REDIS_ARGS: >-
         --save ''
         --appendonly no
         --requirepass ${REDIS_PASSWORD:?REDIS_PASSWORD is required in docker/env/.env.docker.dev}
+        --maxmemory 256mb
     ports:
       # Bound to loopback (SEC-03, Wave 14): same rationale as the postgres
       # port — dev infrastructure stays off the LAN; containers use the

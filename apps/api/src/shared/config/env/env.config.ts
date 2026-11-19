@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { EnvValidationError } from '#errors/env-validation.error.js';
 import { dbEnvSchema } from './schema/db.env.js';
 import { enrollmentsEnvSchema } from './schema/enrollments.env.js';
+import { idempotencyEnvSchema } from './schema/idempotency.env.js';
 import { logEnvSchema } from './schema/log.env.js';
 import {
   isRecoveryThresholdInvalid,
@@ -20,6 +21,7 @@ export const envSchema = z
     ...redisEnvSchema.shape,
     ...rateLimitEnvSchema.shape,
     ...enrollmentsEnvSchema.shape,
+    ...idempotencyEnvSchema.shape,
     ...memoryProtectionEnvSchema.shape,
   })
   .superRefine((env, ctx) => {

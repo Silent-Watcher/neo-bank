@@ -31,7 +31,9 @@ All versioned endpoints follow the application-global contracts:
 - **Success envelope** (ADR-011) — every JSON success response is wrapped:
   `{ timestamp, apiVersion, requestId, status, message, data }`, where
   `status` is the HTTP status code (integer) and `message` is localized.
-  HEAD, 204/304, SSE, streams, and non-JSON content types are not wrapped.
+  HEAD, 204/304, SSE, streams, non-JSON content types, and handler payloads
+  with no JSON representation (the challenge endpoint deliberately answers an
+  empty body — see its section) are not wrapped.
 - **Errors** (ADR-010) — RFC 9457 Problem Details, `application/problem+json`,
   `type: /problems/application-error`, with extension members `code`,
   `timestamp`, `apiVersion`, `requestId`. Clients must rely on `code`, never
@@ -63,9 +65,25 @@ All versioned endpoints follow the application-global contracts:
   HTTP reason phrase is shown instead). It is cosmetic: the response itself
   is RFC-compliant, as tools like curl and Postman show.
 - **Authentication** — none implemented yet.
+- **Idempotency** (ADR-039) — endpoints decorated with `@Idempotent()` require
+  an `Idempotency-Key` header (1–255 printable ASCII characters) identifying
+  the logical operation. A missing or malformed key is rejected `400`
+  (`IDEMPOTENCY_KEY_REQUIRED` / `IDEMPOTENCY_KEY_INVALID`); a concurrent
+  duplicate with the same key gets `409 IDEMPOTENCY_KEY_IN_USE` with a
+  `Retry-After` hint; a key already used for a different request in the same
+  scope gets `422 IDEMPOTENCY_KEY_REUSED`. A completed request replayed with
+  the same key returns the stored response unchanged plus an
+  `Idempotent-Replayed: true` header and consumes no rate-limit quota.
+  Client contract: generate a new key for every new logical operation and
+  reuse exactly the same key for its retries. `Idempotent-Replayed` and
+  `Retry-After` are CORS-exposed when CORS is enabled.
 - **Rate limiting** (ADR-015) — per-IP: 10 requests/second (short) and
   100 requests/minute (long) on all non-exempt routes. Exceeding the limit
-  yields `429 Too Many Requests` as Problem Details.
+  yields `429 Too Many Requests` as Problem Details. Routes marked
+  `@DeferredRateLimit()` (currently the challenge endpoint, ADR-039) are
+  skipped by the global guard and re-enforced by a route-level interceptor
+  that runs after the idempotency gate, so idempotent replays and in-flight
+  duplicates never consume quota.
 - **Memory protection** (ADR-026) — while memory load shedding is active,
   non-exempt requests are rejected with `503` Problem Details
   (`SERVICE_UNAVAILABLE`) and a `Retry-After` header. Liveness, readiness,
@@ -98,30 +116,67 @@ Application greeting. Simple smoke-check under the versioned surface.
 
 ### POST `/api/v1/enrollments/challenge`
 
-Issues a six-digit OTP for a phone number. The OTP value is never returned
-and no SMS is sent yet (delivery not implemented).
+Issues a six-digit OTP for a phone number. The endpoint is idempotent
+(ADR-039). The OTP value is never returned and no SMS is sent yet (delivery
+not implemented).
 
+- **Request headers**: `Idempotency-Key` (required) — string, 1–255 printable
+  ASCII characters, identifying the logical challenge operation. Client
+  contract: generate a new random key for every new challenge request and
+  reuse exactly the same key for retries of that operation; a new
+  intentional request must use a new key.
 - **Request body** (JSON): `{ "phoneNumber": "09121234567" }`
   - `phoneNumber` — string; normalized before validation: surrounding
     whitespace trimmed; `+98` / `0098` / `98` prefixes and a missing leading
     zero folded to `09XXXXXXXXX`; validated against `^09\d{9}$`
     (`apps/api/src/modules/enrollments/enrollments.schema.ts`). The response
     uses the normalized form.
-- **Response `200`** — envelope, `data`: `{ "phoneNumber": "09121234567" }`.
+- **Response `202`** — intentionally **empty body**: no envelope and no
+  phone number. Challenge accepted and the OTP stored in Redis.
+- **Replay** — a retry with the same `Idempotency-Key` after completion
+  returns the identical empty `202` with an `Idempotent-Replayed: true`
+  header, without executing the handler again or consuming rate-limit quota.
+  A concurrent duplicate while the first request is still in flight gets
+  `409` (see Errors); it also consumes no quota. A replayed **stored error**
+  (a deterministic 4xx from the original execution) keeps that execution's
+  `code`, `type`, and localized `title`; its `detail` is the string
+  localized when the error was first thrown, so a retry in another locale
+  gets the original locale's detail text while the title still localizes.
 - **Errors**
+  - `400` — missing `Idempotency-Key` (`IDEMPOTENCY_KEY_REQUIRED`) or a
+    malformed one (not 1–255 printable ASCII, `IDEMPOTENCY_KEY_INVALID`);
+    Problem Details.
   - `400` — phone failed validation (Problem Details).
   - `400` — per-phone hourly quota exceeded (5 sends / rolling 60 minutes)
     or a verification lockout is active: `OTP_RATE_LIMIT_EXCEEDED` with a
     generic message. The quota, cooldown, and lockout are deliberately
     indistinguishable to clients (`apps/api/src/modules/enrollments/enrollments.service.ts`).
   - `400` — an unexpired challenge already exists (`OTP_VERIFICATION_FAILED`).
+  - `409` — a request with the same `Idempotency-Key` is still being
+    processed (`IDEMPOTENCY_KEY_IN_USE`); carries a `Retry-After` hint (1 s)
+    and the duplicate consumes no rate-limit quota.
+  - `422` — the `Idempotency-Key` was already used for a different request
+    in the same scope (`IDEMPOTENCY_KEY_REUSED`); a new logical operation
+    requires a new key. Documented as contract; on this endpoint it is
+    structurally unreachable because the idempotency scope and the
+    fingerprint both derive from the same normalized phone (ADR-039).
   - `429` — per-IP throttle: endpoint limit 2 requests/120 s on top of the
-    global limits (ADR-015).
+    global limits (ADR-015). A 429 is **never stored** as an idempotency
+    result: the key is released and a retry with the same `Idempotency-Key`
+    after the rate-limit window executes normally (ADR-039).
+  - `500` — the OTP could not be stored in Redis, or the idempotency store
+    is unavailable (fail-closed; a store-selection diagnostic is logged
+    internally only).
   - `503` — memory protection active (ADR-026).
 - **Behavior** — cryptographically random OTP (100000–999999); only its
   HMAC-SHA-256 digest, bound to a per-issuance challenge ID, is stored in
   Redis with an exact 120-second TTL; issuance is atomic and never happens
-  while a lockout is active (ADR-018/019).
+  while a lockout is active (ADR-018/019). The idempotency scope and
+  fingerprint derive from the normalized phone: equivalent spellings
+  (`+98`, `0098`, `98`, missing leading zero) of the same number share one
+  scope, so retries across spellings replay instead of colliding, and no
+  plain phone number ever reaches a Redis key (the record identifier is a
+  SHA-256 digest). Completed results are replayable for 24 hours.
 
 ### POST `/api/v1/enrollments/verify`
 
@@ -189,6 +244,7 @@ prefix-excluded so the URI stays stable across API versions. Serves
   from the Zod schemas (`apps/api/src/modules/enrollments/enrollments.schema.ts`).
 - Guards, throttling, response envelopes, and error semantics are not
   derivable from static route metadata; they are documented from source
-  (`enrollments.controller.ts`, `enrollments.service.ts`, `main.ts`,
-  ADR-010/011/015/018/019/026).
+  (`enrollments.controller.ts`, `enrollments.service.ts`,
+  `enrollments.idempotency.ts`, `main.ts`,
+  ADR-010/011/015/018/019/026/039).
 - No authentication exists; no endpoint requires or documents credentials.

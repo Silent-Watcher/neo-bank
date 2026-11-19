@@ -177,6 +177,24 @@ Compose stack injects it as `REDIS_INSIGHT_URL`; environments without Insight
 (local non-Docker development, production) never log it. The production stack
 keeps the version-pinned standalone `redis:8.2-alpine` image.
 
+**Eviction policy and memory bound (deployment prerequisite, ADR-039):**
+idempotency records must never be evicted before their TTL, or a completed
+operation could re-execute. The production Redis must run
+`maxmemory-policy noeviction` — the server default. The Compose stacks
+additionally set an explicit `--maxmemory` bound (`1gb` production,
+`256mb` development — security gate SEC-01: the persistent idempotency
+recordspace gets a fixed, alertable ceiling instead of growing into host
+RAM; exhaustion fails closed by design). Any externally managed Redis
+(ElastiCache, Upstash, self-managed) must be configured equivalently —
+`noeviction` plus a sized `maxmemory` — before serving the API.
+
+**Production runtime guard (ADR-039):** run the production API with
+`NODE_ENV=production` — the idempotency package's fail-fast guard against an
+unregistered store keys on `NODE_ENV`, while the application's own
+environment gating uses `APP_ENV`. Deployment smoke checks should verify the
+startup log line `IdempotencyStorage: RedisIdempotencyStore`, which proves
+the Redis-backed store is active and no in-memory store is in play.
+
 During development, reach PostgreSQL and Redis on `localhost` with the host
 ports above; in production they are reachable only from containers on the
 internal network, by service name (`postgres`, `redis`).

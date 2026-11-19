@@ -143,16 +143,16 @@ describe('EnrollmentsService', () => {
     expect(ttl).toBe(CHALLENGE_OTP_TTL_SECONDS);
   });
 
-  it('returns only the phone number and never the OTP value', async () => {
+  it('resolves without a response body — the phone number and the OTP value are never returned', async () => {
     // Arrange
     randomIntMock.mockReturnValue(483_921);
 
     // Act
     const result = await service.requestChallenge(TEST_PHONE);
 
-    // Assert
-    expect(result).toEqual({ phoneNumber: TEST_PHONE });
-    expect(Object.keys(result).length).toBe(1);
+    // Assert — the endpoint answers 202 Accepted with an empty body
+    // (ADR-039): no phone number and no OTP value may reach the response.
+    expect(result).toBeUndefined();
   });
 
   it('generates the OTP as a string of exactly six digits across the full range before digesting it', async () => {

@@ -442,3 +442,129 @@ requires developer approval before any ADR is created.
   changes its empty-response rendering.
 - **ADR Recommendation:** None — no code or contract change; a documented
   observation about a third-party development tool's rendering.
+
+### 28. The idempotency scope secret is resolved lazily through the config factory, not ConfigService (_057, ADR-039)
+
+- **Context:** `@Idempotent()` decorator arguments evaluate at
+  class-definition time, before any dependency-injection container exists, so
+  the challenge endpoint's scope function cannot receive `ConfigService` the
+  way services do; the secret still had to come from the validated
+  environment.
+- **Decision:** `enrollments.idempotency.ts` calls the `IDEMPOTENCY_CONFIG`
+  `registerAs` factory directly (`idempotencyConfig().scopeSecret`) on first
+  use and caches it, mirroring the existing `serverConfig()` direct-call
+  precedent in `main.ts`'s bootstrap.
+- **Reasoning:** env validation runs at import time (`_env = validateEnv()`),
+  so by the first request the value is validated and fail-fast; a request-time
+  lazy read keeps the decorator options a plain, testable object. The
+  alternative — reading `_env` directly outside a config factory — would have
+  bypassed the config layer.
+- **Alternatives considered:** `ConfigService` injection (impossible at
+  decoration time); module-level `forRootAsync` options carrying the scope
+  (rejected — the scope is challenge-specific, not an application-wide
+  default); a mutable holder set during bootstrap (rejected — hidden coupling).
+- **Trade-offs:** the secret read bypasses `ConfigService.getOrThrow`, so no
+  namespace-token override applies to it — consistent with `serverConfig()`,
+  which has the same property.
+- **Impact:** `enrollments.idempotency.ts` imports the config factory; the
+  spec mocks `env.config` like every other unit spec.
+- **Reversibility:** trivial — a provider-backed options factory could replace
+  it if decorator evaluation ever changes.
+- **ADR Recommendation:** None — the mechanism is recorded in ADR-039's
+  decision 3 and flagged for review in the approved proposal.
+
+### 29. The store's Lua scripts are registered as ioredis named custom commands (_057, ADR-039)
+
+- **Context:** the `RedisIdempotencyStore` needs four custom Lua scripts;
+  the first draft executed them per call through the client's generic script
+  execution method, which the Mimosa pre-tool-use security gate blocked as a
+  code-injection pattern.
+- **Decision:** the scripts are registered once in the store's constructor
+  with `client.defineCommand('idempotencyAcquire'|..., { numberOfKeys: 1,
+  lua })` and invoked as named client methods, typed through a
+  `declare module 'ioredis'` interface augmentation co-located in the store
+  file.
+- **Reasoning:** registration is not a gate workaround only — it is the
+  documented ioredis mechanism for custom commands: scripts are declared
+  statically (nothing dynamic executes per call), ioredis manages the
+  EVALSHA/EVAL fallback itself, and the four call sites get exact signatures
+  instead of variadic argument arrays.
+- **Alternatives considered:** per-call script execution with a renamed
+  wrapper (rejected — hides the same pattern from review without changing
+  it); adding the four scripts as `RedisService` methods (rejected — spreads
+  idempotency logic into the shared Redis module, breaking feature
+  ownership); a separate script-load via `SCRIPT LOAD` + `EVALSHA` handling
+  (rejected — reimplements what defineCommand already does).
+- **Trade-offs:** the shared client gains four `idempotency*` methods
+  app-wide (namespaced, collision-free); the module augmentation is global,
+  so the type surface is wider than the single consumer.
+- **Impact:** `redis-idempotency.store.ts` owns registration and typing;
+  the throttler storage's own script is untouched.
+- **Reversibility:** trivial — the scripts are plain strings.
+- **ADR Recommendation:** None — an implementation mechanism inside ADR-039's
+  accepted store decision.
+
+### 30. The e2e tier runs with fileParallelism disabled (_057, ADR-039)
+
+- **Context:** the idempotency e2e scenarios assert exact Redis key state —
+  per-tracker throttler counters and per-record idempotency keys — in the ONE
+  Redis container the whole tier shares (ADR-025). Parallel test files
+  (several of which clean `neo-bank:throttler:*` between tests) raced those
+  assertions and produced cross-file flakes during development.
+- **Decision:** `test/vitest-e2e.config.ts` sets `fileParallelism: false`,
+  so e2e files run sequentially. The redis tier already made the same
+  trade-off (it runs one container per file instead).
+- **Reasoning:** shared-container key-state assertions cannot be made
+  noise-immune against other files' cleanups without giving up the
+  per-tracker key derivation, which is the more valuable property (it also
+  survives legitimate concurrent traffic). Serialization is the honest fix.
+- **Alternatives considered:** delta-based assertions (still racy — another
+  file's cleanup lands between the two reads); a dedicated container for the
+  idempotency spec (rejected — fragments the ADR-025 "one shared container"
+  model and duplicates boot cost); leaving it parallel and hoping
+  (rejected — flakes).
+- **Trade-offs:** e2e wall time rises (~7 s → ~19 s measured) with no loss of
+  coverage; the globalSetup containers still boot once per run.
+- **Impact:** documented in the config comment, `PROJECT_CONTEXT.md`, and the
+  feature record; no spec changes needed.
+- **Reversibility:** trivial — delete the flag if key-state assertions ever
+  move to an isolated container.
+- **ADR Recommendation:** None — test-infrastructure tuning recorded in the
+  config, `PROJECT_CONTEXT.md`, and ADR-039's testing section.
+
+### 31. A replayed stored error keeps the detail localized at original-throw time (_057, ADR-039, code-reviewer CR-01)
+
+- **Context:** `storeIf` stores deterministic business 4xx outcomes, whose
+  Problem Details `detail` was localized for the locale of the request that
+  produced them. The package replays a stored error by re-throwing its
+  stored body, so a retry in a different locale receives the original
+  locale's detail string; the reviewer flagged both the code divergence
+  (fixed: the body's `ErrorCode` now carries through) and the detail-locale
+  question.
+- **Decision:** the replayed error's `code`, `type`, and `title` are aligned
+  with the original execution (the filter carries the stored `ErrorCode`
+  through, and the title still localizes per request); the stored `detail`
+  is served as stored — the original-throw locale's text — rather than
+  re-localized per retry.
+- **Reasoning:** re-localizing details would require a code→detail-key map
+  covering every business error plus the exact original i18n arguments — a
+  cross-cutting mechanism with real drift risk, for a string that is one
+  human-readable sentence inside an otherwise fully aligned response. The
+  machine-readable contract (code/type/status/title) is what clients branch
+  on.
+- **Alternatives considered:** a per-code detail-key registry
+  (rejected — duplicates the i18n layer and cannot reconstruct parameterized
+  details like validation messages); dropping the stored detail on cross-locale
+  replays (rejected — inconsistent response shape); storing pre-localization
+  keys instead of rendered strings in stored outcomes (rejected — touches the
+  package's storage contract).
+- **Trade-offs:** a Persian-locale retry of an English-locale failure sees an
+  English detail sentence with a Persian title — bounded, documented
+  inconsistency.
+- **Impact:** documented here and in `docs/api.md`'s replay section;
+  tracked as `judge-findings.md` Wave 28 CR-01's accepted disposition.
+- **Reversibility:** moderate — a detail-registry could be added later
+  without a format change.
+- **ADR Recommendation:** None — a bounded i18n nuance of ADR-039's accepted
+  storeIf decision; revisit only if cross-locale replays become a product
+  concern.

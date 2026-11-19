@@ -3,7 +3,7 @@
 Primary architectural and technical context for development sessions. Read
 after the root `AGENTS.md`; use it to decide which further documentation or
 source files a task needs. Detailed documents stay independent — see the
-Documentation Index. Last verified: 2026-11-17.
+Documentation Index. Last verified: 2026-11-20.
 
 ## Repository Overview
 
@@ -43,7 +43,8 @@ Key layers (Node `#` subpath import aliases, see `apps/api/package.json`):
 - `src/shared/` — cross-cutting infrastructure: `config` (Zod env validation
   - namespaced `registerAs` factories), `logging` (Pino via nestjs-pino),
     `database` (MikroORM v7 PostgreSQL, ADR-027),
-    `redis`, `memory-protection` (ADR-026), errors, filters, interceptors,
+    `redis`, `idempotency` (Redis-backed store for @nestjs/idempotency,
+    ADR-039), `memory-protection` (ADR-026), errors, filters, interceptors,
     pipes, HTTP helpers.
 - `src/i18n/{en,fa}/` — `@nestjs/i18n` catalogs (`en` default, `fa` Persian);
   all user-facing messages must exist in both locales.
@@ -71,7 +72,8 @@ Core contracts:
   use atomic Lua scripts. Consumers: enrollments OTP storage, global rate
   limiting (ADR-015, `@nestjs/throttler` v6, two policies, Redis-backed
   storage with an atomic Lua block-check script, fail-closed on Redis
-  failure).
+  failure), and the idempotency store (ADR-039 — four atomic Lua scripts on
+  the shared client, records at `neo-bank:idempotency:store:record:<sha256hex>`).
 - **Database:** global `DatabaseModule` in `src/shared/database/`
   (ADR-027, amended 2026-11-14) — MikroORM v7 on PostgreSQL; the initial
   connection is established during bootstrap with bounded retries and
@@ -107,7 +109,10 @@ Core contracts:
   specs) per test file; the
   e2e tier shares one Redis and one PostgreSQL container
   per test run via the Vitest globalSetup
-  (`apps/api/test/e2e.global-setup.ts`, ADR-025). Dynamic ports,
+  (`apps/api/test/e2e.global-setup.ts`, ADR-025); e2e files run sequentially
+  (`fileParallelism: false`, `apps/api/test/vitest-e2e.config.ts`) because
+  the rate-limit and idempotency scenarios assert exact Redis key state.
+  Dynamic ports,
   no manual Compose for any tier.
 - Vitest resolves `#` aliases via `apps/api/test/subpath-import-aliases.ts`;
   new aliases must be added there and in `apps/api/package.json`.
@@ -161,7 +166,7 @@ Core contracts:
 | `docs/api.md`                               | Human-readable API reference (nestbruno route inventory + source-verified contracts) |
 | `docs/current-state.md`                     | Feature/state snapshot (verified per feature)                                        |
 | `docs/utc-datetime.md`                      | UTC-first date/time storage policy and usage guide (ADR-030)                         |
-| `DECISIONS.md`                              | ADR-001…ADR-038, all Accepted                                                        |
+| `DECISIONS.md`                              | ADR-001…ADR-039, all Accepted                                                        |
 | `docs/docker.md`                            | Docker stacks: setup, env files, commands                                            |
 | `docs/observability/README.md`              | Monitoring stack operations                                                          |
 | `docs/observability/manual-testing.md`      | Reproducible monitoring verification scenarios                                       |

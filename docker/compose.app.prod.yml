@@ -144,8 +144,7 @@ services:
     # Data is intentionally ephemeral: no persistence, no volume, no AOF.
     # Authentication is enabled via requirepass; the API receives the same
     # password through its REDIS_PASSWORD environment value.
-    command:
-      [
+    command: [
         'redis-server',
         '--save',
         '',
@@ -153,6 +152,15 @@ services:
         'no',
         '--requirepass',
         '${REDIS_PASSWORD:?REDIS_PASSWORD is required in docker/env/.env.docker.prod}',
+        # Explicit memory bound (ADR-039, security gate SEC-01): idempotency
+        # records persist for their TTL under the server-default noeviction
+        # policy, so growth would otherwise be bounded only by host RAM. The
+        # cap fixes Redis's own footprint and gives memory alerting a
+        # ceiling; exhaustion fails closed by design (writes error, the API
+        # serves generic 500s). Size alongside host RAM and the API replica
+        # count, and revisit when the record TTLs change.
+        '--maxmemory',
+        '1gb',
       ]
     environment:
       REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD is required in docker/env/.env.docker.prod}

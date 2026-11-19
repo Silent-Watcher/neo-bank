@@ -78,6 +78,7 @@
     "@nestjs/config": "^12.0.1",
     "@nestjs/core": "12.5.0",
     "@nestjs/i18n": "^0.0.3",
+    "@nestjs/idempotency": "^0.0.4",
     "@nestjs/mapped-types": "*",
     "@nestjs/platform-node": "12.5.0",
     "@nestjs/swagger": "12.1.0",

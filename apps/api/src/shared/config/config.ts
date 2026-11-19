@@ -2,6 +2,7 @@ import { ConfigModule } from '@nestjs/config';
 
 import databaseConfig from './database.config.js';
 import enrollmentsConfig from './enrollments.config.js';
+import idempotencyConfig from './idempotency.config.js';
 import logConfig from './log.config.js';
 import memoryProtectionConfig from './memory-protection.config.js';
 import rateLimitConfig from './rate-limit.config.js';
@@ -18,6 +19,7 @@ export const configModule = ConfigModule.forRoot({
     redisConfig,
     rateLimitConfig,
     enrollmentsConfig,
+    idempotencyConfig,
     memoryProtectionConfig,
   ],
 });

@@ -1,6 +1,11 @@
 {
   "titles": {
     "applicationError": "Application Error",
+    "idempotencyKeyInUse": "Idempotency Key In Use",
+    "idempotencyKeyInvalid": "Invalid Idempotency Key",
+    "idempotencyKeyRequired": "Idempotency Key Required",
+    "idempotencyKeyReused": "Idempotency Key Reused",
+    "idempotencyRecordUnreadable": "Idempotency Record Unreadable",
     "invalidRequestId": "Invalid Request Id",
     "otpRateLimitExceeded": "Too Many Requests",
     "otpVerificationFailed": "Verification Failed",
@@ -11,7 +16,12 @@
     "unexpected": "An unexpected error occurred.",
     "rateLimited": "Too many requests. Retry later.",
     "serviceOverloaded": "The service is temporarily under heavy load. Please retry shortly.",
-    "versionConflict": "The record was modified since it was loaded. Reload it and try again."
+    "versionConflict": "The record was modified since it was loaded. Reload it and try again.",
+    "idempotencyKeyRequired": "An Idempotency-Key header is required for this operation.",
+    "idempotencyKeyInvalid": "The Idempotency-Key must be 1 to 255 printable ASCII characters.",
+    "idempotencyKeyInUse": "A request with this Idempotency-Key is still being processed. Retry after the delay indicated by the Retry-After header.",
+    "idempotencyKeyReused": "This Idempotency-Key was already used for a different request. A new logical operation requires a new key.",
+    "idempotencyRecordUnreadable": "The stored result for this idempotency key could not be read. The key stays protected until it expires."
   },
   "status": {
     "badRequest": "Bad Request",

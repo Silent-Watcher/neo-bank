@@ -7,7 +7,11 @@ const IRANIAN_MOBILE_PATTERN = /^09\d{9}$/;
 // validation: surrounding whitespace is trimmed, and a +98 / 0098 / 98
 // country code or an omitted leading zero are folded back to the 09 prefix.
 // Everything else is left untouched so validation reports it, not masks it.
-function toNationalMobile(value: string): string {
+//
+// Exported so the idempotency scope/fingerprint (enrollments.idempotency.ts)
+// reuse the exact same normalization — the idempotency interceptor runs
+// before pipes and sees the raw request body (ADR-039).
+export function toNationalMobile(value: string): string {
   const trimmed = value.trim();
 
   if (trimmed.startsWith('+98')) return `0${trimmed.slice(3)}`;

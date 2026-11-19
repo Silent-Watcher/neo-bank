@@ -1,6 +1,6 @@
 # Current Development State
 
-Snapshot of what exists in the repository. Last verified: 2026-11-17.
+Snapshot of what exists in the repository. Last verified: 2026-11-20.
 Legend: **Implemented** / **Partial** / **Planned** / **Unknown**.
 
 ## Maturity
@@ -44,7 +44,8 @@ its shared entity base plus the first feature entity (`Enrollment`, table
   `REDIS_SHUTDOWN_TIMEOUT_MS`,
   `RATE_LIMIT_SHORT_LIMIT`, `RATE_LIMIT_SHORT_TTL_SECONDS`,
   `RATE_LIMIT_LONG_LIMIT`, `RATE_LIMIT_LONG_TTL_MINUTES`,
-  `ENROLLMENTS_MAX_VERIFY_ATTEMPTS`, `REDIS_INSIGHT_URL`,
+  `ENROLLMENTS_MAX_VERIFY_ATTEMPTS`, `IDEMPOTENCY_SCOPE_SECRET`,
+  `REDIS_INSIGHT_URL`,
   `MOCKSERVER_HOST_URL`, `MOCKSERVER_DOCKER_URL`, `LOG_PRETTY`,
   `MEMORY_PROTECTION_ENABLED`, `MEMORY_PROTECTION_MAX_RSS_MB`,
   `MEMORY_PROTECTION_RECOVERY_RSS_MB`, `MEMORY_PROTECTION_SAMPLE_INTERVAL_MS`,
@@ -67,7 +68,8 @@ its shared entity base plus the first feature entity (`Enrollment`, table
   `RedisHealthProbe` (`src/shared/redis/redis.probe.ts`, ADR-037):
   single-flight over PING with a process-local 5 s success / 3 s failure
   cache and a 3 s probe deadline, so floods cannot produce one command per
-  request. Consumers: enrollments OTP storage and global rate limiting.
+  request. Consumers: enrollments OTP storage, global rate limiting, and the
+  idempotency store (ADR-039).
 - PostgreSQL persistence (ADR-027): global `DatabaseModule` in
   `src/shared/database/` with MikroORM v7 (7.2.9; `@mikro-orm/nestjs` 7.1.0,
   `PostgreSqlDriver`, `autoLoadEntities`) reading `DATABASE_URL` and
@@ -139,9 +141,44 @@ its shared entity base plus the first feature entity (`Enrollment`, table
   standard `Retry-After` and `X-RateLimit-*` headers on both success and 429.
   `@Throttle()`/`@SkipThrottle()` decorators with named throttler objects work
   correctly. Health/readiness endpoints skipped. No in-memory fallback —
-  Redis failure = HTTP 500 (fail-closed). `pnpm test:redis` runs 65 real-Redis
-  integration tests (atomicity, block regression, multi-instance sharing,
-  proxy/IPv6 behavior, Redis failure, black-hole fault injection).
+  Redis failure = HTTP 500 (fail-closed). Routes marked `@DeferredRateLimit()`
+  (ADR-039, currently the challenge endpoint) are skipped by the registered
+  global guard — `DeferredRateLimitGuard`, a `RedisThrottlerGuard` subclass
+  that honors the marker — and their quota is re-enforced by a route-level
+  interceptor that runs after the idempotency acquire gate, so idempotent
+  replays and in-flight duplicates never consume quota; every other route
+  takes the unchanged global path. `pnpm test:redis` runs 89 real-Redis
+  integration tests in 6 files (throttler atomicity/block/multi-instance
+  behavior, the idempotency store contract — ADR-039 —, proxy/IPv6 behavior,
+  Redis failure, black-hole fault injection).
+- HTTP idempotency (ADR-039): the official `@nestjs/idempotency` (0.0.4) with
+  a custom Redis-backed store (`src/shared/idempotency/` — four atomic Lua
+  scripts registered via ioredis `defineCommand` on the shared client; one
+  hash record per key at `neo-bank:idempotency:store:record:<sha256hex>`, the
+  SHA-256 of the package's `<scope>:<key>`, so the stored key is fixed-length
+  and carries no client-controlled content and no phone number). Applied to
+  `POST /enrollments/challenge` via `@Idempotent()`: the `Idempotency-Key`
+  header is required (`400 IDEMPOTENCY_KEY_REQUIRED`/`IDEMPOTENCY_KEY_INVALID`
+  otherwise), the scope is HMAC-SHA-256(`IDEMPOTENCY_SCOPE_SECRET`, normalized
+  phone) and the fingerprint is the normalized phone — equivalent phone
+  spellings share one scope, and a key-reuse `422` is structurally unreachable
+  on this endpoint because scope and fingerprint derive from the same
+  normalized phone (still documented as contract). A completed result is
+  replayable for 24 h; an in-flight lock lives 60 s (renewed every lockTtl/3)
+  and answers concurrent duplicates with `409 IDEMPOTENCY_KEY_IN_USE` +
+  `Retry-After` (1 s); `storeIf` stores every final outcome except 429 and
+  5xx — a 429 is never stored (the key is released and a retry re-executes),
+  a 5xx leaves the outcome ambiguous. Replays answer the stored result with
+  `Idempotent-Replayed: true` (and `Retry-After` on the 409); both headers are
+  CORS-exposed when CORS is enabled. Package rejections map onto
+  `ErrorCode.IdempotencyKey*` in the Problem Details filter with localized
+  en/fa titles and details. No in-memory fallback: a store failure fails the
+  request closed (500 with a store-selection diagnostic in the log).
+  Deployment prerequisite: production Redis must run
+  `maxmemory-policy noeviction` (server default) — records are not evictable;
+  the Compose stacks enforce an explicit `--maxmemory` bound (`1gb`
+  production, `256mb` development) so the never-evicting recordspace has a
+  fixed, alertable ceiling (security gate SEC-01).
 - Logging: Pino via nestjs-pino (ADR-008/009), header redaction,
   `pino-pretty` in development only (an optional `LOG_PRETTY` env override
   forces either format; the dev Compose stack sets it to `false` so the
@@ -215,8 +252,11 @@ its shared entity base plus the first feature entity (`Enrollment`, table
   conditions where concurrent requests could overwrite an existing OTP or
   extend its TTL, and an OTP is never issued while a verification lockout is
   active). The plaintext OTP never reaches Redis. The
-  response contains only the phone number; the OTP value is never
-  returned and no SMS is sent.
+  response is an empty `202 Accepted` — intentionally no envelope and no
+  phone number (ADR-039); the OTP value is never returned and no SMS is
+  sent. The endpoint is idempotent (see the idempotency bullet): a retry
+  with the same `Idempotency-Key` replays the stored empty 202 without
+  issuing a new OTP or consuming rate-limit quota.
 - Feature module `enrollments`: `POST /api/v1/enrollments/verify` —
   validates the phone and a six-character numeric OTP (string, leading zeros
   preserved) with Zod before any Redis access, then compares the submitted
@@ -234,9 +274,13 @@ its shared entity base plus the first feature entity (`Enrollment`, table
   `ENROLLMENTS_LOCKOUT_TTL_SECONDS`, default 900 s / 15 min) that blocks both
   verification and new OTP issuance for the lockout window. The lockout is
   independent of the OTP TTL and cannot be bypassed by requesting a new OTP.
-  Both endpoints are protected by the global rate limiter with endpoint-specific
-  limits aligned to the OTP window: challenge 2 req/120s, verify 5 req/120s.
-  An additional per-phone hourly rate limit (5 sends / rolling 60 min) is
+  Both endpoints keep their endpoint-specific per-IP limits aligned with the
+  OTP window (challenge 2 req/120 s, verify 5 req/120 s) on top of the global
+  policies; the challenge quota is enforced by the route-level
+  `ChallengeRateLimitInterceptor` after the idempotency acquire gate
+  (ADR-039) — replays and in-flight duplicates consume no quota — while
+  verify takes the unchanged global guard. An additional per-phone hourly
+  rate limit (5 sends / rolling 60 min) is
   enforced atomically via Redis sorted set. No registration or authentication
   steps yet.
 - Conditional requests (restored Fastify-era behavior, ADR-032; hardened and
@@ -265,8 +309,8 @@ its shared entity base plus the first feature entity (`Enrollment`, table
   parameter and the bodyless `304` only for decorator-marked JSON-success
   GET operations (`x-conditional-get`); proxy trust is optionally narrowed
   by `TRUST_PROXY_PROXIES` (see the env table in `apps/api/ONBOARDING.md`).
-- Tests: Vitest unit (51 files / 472 tests), e2e (16 files / 103 tests), Redis
-  integration (5 files / 65 tests via `pnpm test:redis`), database
+- Tests: Vitest unit (54 files / 497 tests), e2e (17 files / 115 tests), Redis
+  integration (6 files / 89 tests via `pnpm test:redis`), database
   integration (4 files / 28 tests via `pnpm test:db`,
   ADR-027/029/030/031/036 — `base-entity.db-spec.ts`, `enrollment.db-spec.ts`
   (the first feature entity), `database.db-spec.ts`,
@@ -280,6 +324,9 @@ its shared entity base plus the first feature entity (`Enrollment`, table
   fault-injection specs), and
   the e2e tier shares one Redis and one PostgreSQL container per test run
   via the Vitest globalSetup (`apps/api/test/e2e.global-setup.ts`, ADR-025) —
+  e2e files run sequentially (`fileParallelism: false`, `test/vitest-e2e.config.ts`)
+  because the rate-limit and idempotency scenarios assert exact Redis key
+  state —
   all with dynamic ports; no manual Docker Compose required. Orchestration is
   Turborepo-native (ADR-035): root `pnpm test` runs all four tiers
   concurrently (Docker-backed tiers are never cached; the pre-push hook
@@ -287,8 +334,8 @@ its shared entity base plus the first feature entity (`Enrollment`, table
   (`@vitest/coverage-v8`, text/html/lcov reports under `apps/api/coverage/`;
   measured baseline ≈ 75% statements). Future workspaces join the pipeline
   by exposing the conventional `test`/`test:coverage` scripts. Unit, e2e,
-  database, and Redis counts verified 2026-11-17 (unit 424/424, e2e 100/100,
-  database 28/28, Redis 65/65); integration-tier runs through the new
+  database, and Redis counts verified 2026-11-20 (unit 497/497, e2e 115/115,
+  database 28/28, Redis 89/89); integration-tier runs through the new
   orchestration and the pre-push failure proof are pending per
   `prompts/_052-*.md` (registry outage).
 
@@ -339,7 +386,8 @@ None. The workspace contains only `apps/*`; no `packages/` directory exists.
 **Implemented:** Redis client integration in the API (global `RedisModule`,
 ioredis 6, degraded-mode health, standardized key naming); the enrollments
 challenge feature stores its OTP in Redis; global rate limiting uses the same
-connection via atomic Lua scripts. PostgreSQL persistence is integrated in
+connection via atomic Lua scripts, and so does the idempotency store
+(ADR-039). PostgreSQL persistence is integrated in
 the API (ADR-027, amended 2026-11-14): a global `DatabaseModule` with
 MikroORM v7 — the initial connection is established during bootstrap with
 bounded retries (5 attempts, capped backoff, per-attempt timeout; startup
@@ -441,6 +489,6 @@ Per-app commands are listed in each `apps/<app>/ONBOARDING.md`.
 
 All ADRs live in [DECISIONS.md](../DECISIONS.md). Status as of this snapshot:
 
-- **Accepted:** ADR-001 (Turborepo), ADR-002 (Fastify — superseded by ADR-032), ADR-003 (SWC), ADR-004 (@nestjs/config + Zod), ADR-005 (URI versioning), ADR-006 (1 MiB body limit), ADR-007 (`api` prefix), ADR-008/009 (Pino / nestjs-pino), ADR-010 (UUIDv4 request IDs), ADR-011 (envelope exclusions), ADR-012 (ioredis without a wrapper), ADR-013 (Redis module architecture), ADR-014 (Swagger/OpenAPI, development-only), ADR-015 (Global HTTP rate limiting with Redis-backed @nestjs/throttler), ADR-016 (Testcontainers for integration and e2e testing), ADR-017 (OTP verification attempt lockout for enrollment security), ADR-018 (HMAC-SHA-256 digest storage for enrollment OTPs), ADR-019 (OTP verification hardening — conditional attempt counting and challenge identity), ADR-020 (development Redis service migrated to Redis Stack with bundled Redis Insight), ADR-021 (bilingual internationalization en/fa via the official @nestjs/i18n), ADR-022 (centralized logging with Grafana Alloy, Loki, and Grafana), ADR-023 (project-level multi-agent development workflow for ZCode + Claude Code), ADR-024 (MockServer for development-time resilience testing), ADR-025 (managing the e2e Redis with Testcontainers — one shared container per run), ADR-026 (memory-based load shedding and health-aware readiness), ADR-027 (Use MikroORM v7 with PostgreSQL for Persistence), ADR-028 (pgAdmin 4 as the development-only PostgreSQL web UI), ADR-029 (Shared MikroORM BaseEntity with Actor Audit Context and Native Optimistic Locking), ADR-030 (UTC-First TIMESTAMPTZ Storage Policy), ADR-031 (Use nestjs-cls for the Application Actor Context), ADR-032 (Migrate the API HTTP Platform from Fastify to the NestJS NodeAdapter — supersedes ADR-002), ADR-033 (Immutable Migration Policy and Dedicated Migration Reviewer), ADR-034 (Database Connection Lifecycle Logging via the pg Pool), ADR-035 (Centralized Monorepo Test Orchestration, Parallel Execution, and Vitest Coverage via Turborepo), ADR-036 (Bounded, Coalesced Database Health Probes and Explicit PostgreSQL Pool Configuration), ADR-037 (Bounded Redis Commands, Black-Hole Recovery, and Coalesced Redis Health Probes), ADR-038 (Opt-In Conditional GET with RFC 9110 If-None-Match, Hardened ETag Generation, and a 304-Aware Response Envelope).
+- **Accepted:** ADR-001 (Turborepo), ADR-002 (Fastify — superseded by ADR-032), ADR-003 (SWC), ADR-004 (@nestjs/config + Zod), ADR-005 (URI versioning), ADR-006 (1 MiB body limit), ADR-007 (`api` prefix), ADR-008/009 (Pino / nestjs-pino), ADR-010 (UUIDv4 request IDs), ADR-011 (envelope exclusions), ADR-012 (ioredis without a wrapper), ADR-013 (Redis module architecture), ADR-014 (Swagger/OpenAPI, development-only), ADR-015 (Global HTTP rate limiting with Redis-backed @nestjs/throttler), ADR-016 (Testcontainers for integration and e2e testing), ADR-017 (OTP verification attempt lockout for enrollment security), ADR-018 (HMAC-SHA-256 digest storage for enrollment OTPs), ADR-019 (OTP verification hardening — conditional attempt counting and challenge identity), ADR-020 (development Redis service migrated to Redis Stack with bundled Redis Insight), ADR-021 (bilingual internationalization en/fa via the official @nestjs/i18n), ADR-022 (centralized logging with Grafana Alloy, Loki, and Grafana), ADR-023 (project-level multi-agent development workflow for ZCode + Claude Code), ADR-024 (MockServer for development-time resilience testing), ADR-025 (managing the e2e Redis with Testcontainers — one shared container per run), ADR-026 (memory-based load shedding and health-aware readiness), ADR-027 (Use MikroORM v7 with PostgreSQL for Persistence), ADR-028 (pgAdmin 4 as the development-only PostgreSQL web UI), ADR-029 (Shared MikroORM BaseEntity with Actor Audit Context and Native Optimistic Locking), ADR-030 (UTC-First TIMESTAMPTZ Storage Policy), ADR-031 (Use nestjs-cls for the Application Actor Context), ADR-032 (Migrate the API HTTP Platform from Fastify to the NestJS NodeAdapter — supersedes ADR-002), ADR-033 (Immutable Migration Policy and Dedicated Migration Reviewer), ADR-034 (Database Connection Lifecycle Logging via the pg Pool), ADR-035 (Centralized Monorepo Test Orchestration, Parallel Execution, and Vitest Coverage via Turborepo), ADR-036 (Bounded, Coalesced Database Health Probes and Explicit PostgreSQL Pool Configuration), ADR-037 (Bounded Redis Commands, Black-Hole Recovery, and Coalesced Redis Health Probes), ADR-038 (Opt-In Conditional GET with RFC 9110 If-None-Match, Hardened ETag Generation, and a 304-Aware Response Envelope), ADR-039 (Redis-Backed Idempotency for the Enrollment Challenge with a Deferred Rate-Limit Enforcement Layer).
 
 All architectural decisions are accepted and implemented. Do not build on rejected alternatives (e.g. do not introduce header versioning or a second logger).
