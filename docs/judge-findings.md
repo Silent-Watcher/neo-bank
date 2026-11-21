@@ -2082,6 +2082,13 @@ change for approval.
   the E.164 documentation shape with the HTTP-facing `09XXXXXXXXX`
   normalization before persisting unvalidated input. No unique constraint on
   `phone_number`, ever.
+- **Supersession (2026-11-22, Enrollment master prompt Phase 0):** the
+  2026-11-16 phone-uniqueness rejection above is superseded — the developer
+  now requires at most one non-expired `Enrollment` per normalized phone
+  number, to be enforced by a partial unique index on `phone_number`
+  (`WHERE status <> 'EXPIRED'`) when the write path lands (root
+  `AGENTS.md` → "Neo Bank Business Domain"; `DEFERRED.md` updated). The
+  retention/backup/encryption and phone-shape decisions remain deferred.
 
 ## Wave 22 — test orchestration & coverage review (_052, code-reviewer, 2026-11-17)
 

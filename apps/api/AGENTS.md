@@ -324,6 +324,15 @@ Constraints:
   `up()`/`down()`. Every generated migration is inspected before execution
   and must pass the `migration-reviewer` subagent's structured review before
   the task completes.
+- Schema design follows the root "Strict Database Constraint Discipline"
+  (Database Entity and Migration Governance): every field gets an
+  intentional database contract (type, nullability, length/precision,
+  defaults, check/unique constraints, indexes); application validation never
+  replaces database constraints. Unclear field semantics stop schema work
+  until the developer approves the contract. Business invariants that bound
+  row existence (the one-non-expired-Enrollment-per-phone rule, root
+  "Neo Bank Business Domain") are enforced by database constraints such as
+  partial unique indexes, not by application-level lookups.
 - Outside an HTTP request context there is no request-scoped
   `EntityManager`: use `em.fork()` or the `@CreateRequestContext()`
   decorator (from `@mikro-orm/decorators/legacy`) for background work. Such

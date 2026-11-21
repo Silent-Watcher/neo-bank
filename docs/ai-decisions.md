@@ -568,3 +568,43 @@ requires developer approval before any ADR is created.
 - **ADR Recommendation:** None — a bounded i18n nuance of ADR-039's accepted
   storeIf decision; revisit only if cross-locale replays become a product
   concern.
+
+### 32. Phase 0 documentation strategy for superseding the phone-uniqueness rejection (_058, Enrollment master prompt Phase 0)
+
+- **Context:** the Enrollment master prompt's Phase 0 (documentation-only)
+  required superseding the 2026-11-16 developer rejection of phone-number
+  uniqueness with the new one-non-expired-Enrollment-per-phone invariant.
+  The rejection was recorded in two durable places (`DEFERRED.md` entry 1 of
+  the _051 section, bundled with three still-open decisions;
+  `docs/judge-findings.md` Wave 21 SEC-02), and the master prompt expected
+  `docs/security-otp-enrollment.md` to still present the rejected decision —
+  it does not.
+- **Decision:** supersession is recorded inline as dated annotations
+  (strikethrough + supersession note in `DEFERRED.md`; a dated supersession
+  bullet in SEC-02), never by rewriting or deleting the historical text;
+  `docs/security-otp-enrollment.md` was left untouched because it contains
+  no phone-uniqueness statements (verified by search); no ADR was written
+  for the invariant in Phase 0 — the ADR proposal is scheduled for the phase
+  that lands the partial unique index migration (Phase 2), where the
+  ADR-first workflow already applies.
+- **Reasoning:** the registry's own convention ("Do not delete items — mark
+  them Done with a reference") and findings-tracker integrity both demand
+  traceable, dated annotations over silent rewrites; a Phase 0 ADR would
+  duplicate the master prompt's developer decision before the implementation
+  details (index DDL, legacy-data backfill) it must record exist.
+- **Alternatives considered:** deleting the rejection sentence (rejected —
+  destroys traceability); marking the whole `DEFERRED.md` entry "Won't Do"
+  (rejected — three of its four decisions are still open); writing the ADR
+  now with placeholder implementation details (rejected — speculative).
+- **Trade-offs:** readers hit the struck-through rejection before the
+  supersession note in `DEFERRED.md`; acceptable — the note names the new
+  rule and its enforcement path.
+- **Impact:** root `AGENTS.md` gained the "Neo Bank Business Domain" section
+  and the "Strict Database Constraint Discipline" subsection;
+  `apps/api/AGENTS.md` references the discipline; `DEFERRED.md` and
+  `docs/judge-findings.md` carry dated supersessions;
+  `docs/current-state.md`/`docs/architecture.md` needed no change (they
+  assert no uniqueness position).
+- **Reversibility:** trivial — the annotations are additive.
+- **ADR Recommendation:** ADR candidate for Phase 2 (partial unique index +
+  legacy-data backfill strategy), not for Phase 0.

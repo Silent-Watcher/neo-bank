@@ -10,6 +10,38 @@ This is a TypeScript monorepo managed with pnpm and Turborepo.
 - `prompts/`: Feature records and implementation prompts.
 - `docs/`: Repository-level architecture documentation.
 
+## Neo Bank Business Domain
+
+The product is a retail bank. Customer onboarding starts with a multi-step
+Enrollment form, gated by phone-number OTP verification. An Enrollment is a
+customer's onboarding application — it is not an active bank account and does
+not establish an authenticated banking identity. After an Enrollment is
+completed and (in a future workflow) approved, the customer gains access to
+banking capabilities: opening and activating a bank account, receiving a bank
+card, depositing funds, and performing banking operations.
+
+### Enrollment Business Invariants
+
+- **At most one non-expired Enrollment per normalized phone number.** The
+  statuses `INITIAL`, `IN_PROGRESS`, `PENDING_REVIEW`, `REJECTED`, and
+  `APPROVED` occupy the phone number; `EXPIRED` releases it. PostgreSQL must
+  enforce this through a partial unique index on `phone_number`
+  (`WHERE status <> 'EXPIRED'`) — application-level lookups alone cannot
+  survive concurrent requests. This invariant supersedes the earlier
+  developer rejection of phone-number uniqueness (2026-11-16) recorded in
+  `DEFERRED.md` and `docs/judge-findings.md` (SEC-02).
+- **Expiration.** Every new Enrollment carries a fixed expiration instant
+  set at creation (target: creation time + 24 hours), never extended by
+  later user activity. Only `INITIAL` and `IN_PROGRESS` can expire. An
+  expired Enrollment remains stored as historical data and releases its
+  phone number (and, once collected, national code and username); the
+  customer may then start a new Enrollment with the same phone number.
+- **Rejection.** A `REJECTED` Enrollment is not an opportunity to create a
+  separate application — the customer is directed to correct the existing
+  application through the future correction workflow. `APPROVED` must not be
+  used to create another Enrollment unless an explicitly approved future
+  banking-lifecycle policy says otherwise.
+
 ## Documentation and Context Management
 
 - Read this root file first; it applies to every task in the repository.
@@ -322,6 +354,29 @@ Do not introduce unexplained string literals for application states, domain valu
 
 Permanent rules for entity organization and database migrations (ADR-033).
 Applies to every agent and every future schema change.
+
+### Strict Database Constraint Discipline
+
+The database is the final enforcement boundary for data integrity. Every new
+or modified field gets an intentional database contract; application
+validation never replaces database constraints.
+
+- For every new or modified field, evaluate: PostgreSQL data type,
+  nullability, maximum length or precision, default or generated-value
+  behavior, check constraints, unique constraints, required indexes,
+  lifecycle-dependent validity, and referential integrity.
+- An incomplete record must be able to store only what has been collected so
+  far; fields belonging to later lifecycle steps stay nullable until the
+  business lifecycle makes them mandatory.
+- Never add speculative constraints, and never translate an assumption into
+  a database constraint: when a field's meaning, uniqueness, nullability,
+  allowed values, lifecycle, or relationship is unclear, stop the schema
+  work, present alternatives with consequences and a recommendation, and get
+  explicit developer approval first.
+- Business invariants that bound row existence (for example the
+  one-non-expired-Enrollment-per-phone rule in "Neo Bank Business Domain")
+  are enforced by database constraints such as partial unique indexes, not
+  by application-level lookups.
 
 ### Entity Organization
 
