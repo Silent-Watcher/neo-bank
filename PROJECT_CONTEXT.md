@@ -104,7 +104,7 @@ Core contracts:
   database integration (`pnpm test:db`) — apps/api workspace only.
 - Real-Redis and real-PostgreSQL tests use Testcontainers
   (`apps/api/test/testcontainers.ts`) — the Redis and database integration
-  tiers run an isolated container (`redis:8.2-alpine` / `postgres:17.6-alpine`,
+  tiers run an isolated container (`redis:8.2-alpine` / `postgres:18.7-alpine`,
   plus Toxiproxy for the database and Redis black-hole fault-injection
   specs) per test file; the
   e2e tier shares one Redis and one PostgreSQL container

@@ -131,7 +131,7 @@ export async function startTestRedis(options?: {
  * (ADR-027).
  *
  * Provides a real PostgreSQL server with dynamic port mapping, matching the
- * project's production image (`postgres:17.6-alpine`, the same pin as the
+ * project's production image (`postgres:18.7-alpine`, the same pin as the
  * Compose stacks). The connection is returned as a PostgreSQL URL, the shape
  * `DATABASE_CONFIG` and the MikroORM options builder consume.
  */
@@ -154,7 +154,7 @@ export class TestPostgres {
     /** Alias to address the container by inside the shared network. */
     networkAlias?: string;
   }): Promise<string> {
-    const image = options?.image ?? 'postgres:17.6-alpine';
+    const image = options?.image ?? 'postgres:18.7-alpine';
     const username = options?.username ?? 'neo_bank';
     const password = options?.password ?? 'test-password';
     const database = options?.database ?? 'neo_bank';

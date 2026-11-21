@@ -118,7 +118,7 @@ services:
     logging: *default-logging
 
   postgres:
-    image: postgres:17.6-alpine
+    image: postgres:18.7-alpine
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-neo_bank}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required in docker/env/.env.docker.prod}
@@ -128,7 +128,10 @@ services:
       # SHOW TimeZone always returns UTC regardless of image or env drift.
       TZ: UTC
     volumes:
-      - postgres_prod_data:/var/lib/postgresql/data
+      # PostgreSQL 18+ images store data in major-version subdirectories
+      # under /var/lib/postgresql (docker-library/postgres#1259) and refuse
+      # the legacy /var/lib/postgresql/data mount (ADR-040).
+      - postgres_prod_data:/var/lib/postgresql
     restart: unless-stopped
     networks:
       - internal

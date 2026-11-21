@@ -8,7 +8,7 @@ administration (ADR-028).
 
 **Note on automated testing (ADR-016):** Integration and e2e tests use
 Testcontainers (`apps/api/test/testcontainers.ts`) to start isolated
-`redis:8.2-alpine` (and future `postgres:17.6-alpine`) containers per test
+`redis:8.2-alpine` (and future `postgres:18.7-alpine`) containers per test
 file with dynamic ports — no manual `docker compose up` required. The
 development Compose stack remains for local development
 (hot reloading, persistent volumes, multi-service stack).
@@ -399,7 +399,7 @@ installed into the volumes.
   its own workspace slice (no unrelated application source, no devDependencies).
 - All containers run as non-root users; application root filesystems are
   read-only with writable `/tmp` only.
-- Base images are version-pinned (`node:24.20.0-slim`, `postgres:17.6-alpine`,
+- Base images are version-pinned (`node:24.20.0-slim`, `postgres:18.7-alpine`,
   `redis:8.2-alpine`, `nginxinc/nginx-unprivileged:1.29-alpine`).
 - The admin runtime is plain nginx (SPA fallback, hashed-asset caching,
   baseline security headers) — no Node.js in that final image.

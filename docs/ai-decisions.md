@@ -608,3 +608,41 @@ requires developer approval before any ADR is created.
 - **Reversibility:** trivial — the annotations are additive.
 - **ADR Recommendation:** ADR candidate for Phase 2 (partial unique index +
   legacy-data backfill strategy), not for Phase 0.
+
+### 33. PostgreSQL 18 upgrade execution adaptations (_059, ADR-040, Enrollment Phase 1)
+
+- **Context:** ADR-040's approved procedure said "rename the old volume" and
+  change pins. Execution found two realities: `docker volume rename` does
+  not exist as a Docker CLI command, and the PostgreSQL 18+ official images
+  refuse to start with a mount at the legacy `/var/lib/postgresql/data`
+  (they require the parent `/var/lib/postgresql` and store data in
+  major-version subdirectories — docker-library/postgres#1259).
+- **Decision:** the old volume was preserved by a byte-verified `tar` copy
+  into an archive volume (1277 files, 48,321,376 bytes, exact parity) before
+  the original volume was removed and a fresh one created under the
+  Compose-managed name; the Compose mount points (dev and prod) moved to
+  `/var/lib/postgresql`; ADR-040 Decision 1 was amended inline to record the
+  image-layout requirement; the restore drops the auto-initialized
+  application database before replaying the `pg_dumpall` archive.
+- **Reasoning:** the archive copy preserves the ADR's invariant (old data
+  kept, nothing deleted before a verified backup exists) through the only
+  mechanism the CLI offers; the mount-point move has no alternative path —
+  the image hard-errors on the legacy mount — so applying it during
+  implementation with an ADR amendment and a developer-visible flag honors
+  both the approved decision and the amendment workflow.
+- **Alternatives considered:** renaming the Compose volume to a new name
+  (rejected — leaves the active volume name holding stale PG 17 data and
+  diverges dev/prod naming); `PGDATA` env override to keep the legacy mount
+  (rejected — fights the image's supported layout and blocks the
+  `pg_upgrade --link` capability the new layout exists to enable); `pg_upgrade`
+  (already rejected in ADR-040).
+- **Trade-offs:** one extra copy step per environment; the archive volume
+  and dump file occupy host space until the developer approves disposal.
+- **Impact:** `docker/compose.app.dev.yml`, `docker/compose.app.prod.yml`
+  (mounts + comments), ADR-040 Decision 1; captured for reuse in the prod
+  procedure.
+- **Reversibility:** full — mount the archive volume at the legacy path with
+  the 17.6 image (or copy back) and revert the pins.
+- **ADR Recommendation:** None beyond the applied ADR-040 amendment — the
+  layout requirement is an image/platform fact, recorded where it was
+  discovered.

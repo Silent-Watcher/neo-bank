@@ -273,7 +273,7 @@ file with a dynamic port in `beforeAll` and stops it in `afterAll` (the
 black-hole spec `test/redis-black-hole.redis-spec.ts` additionally routes
 the client through a Toxiproxy container for fault injection, ADR-037); the
 database integration tier (`pnpm test:db`, loads `env/.env.db-test`) starts
-its own `postgres:17.6-alpine` container per test file the same way; the
+its own `postgres:18.7-alpine` container per test file the same way; the
 e2e tier (`pnpm test:e2e`) shares one Redis and one PostgreSQL container
 per test run, started by the Vitest globalSetup
 (`test/e2e.global-setup.ts`) and injected into the specs through

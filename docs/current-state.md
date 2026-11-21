@@ -319,7 +319,7 @@ its shared entity base plus the first feature entity (`Enrollment`, table
   Toxiproxy established-connection black-hole proof)). All integration
   and e2e tests use Testcontainers (`apps/api/test/testcontainers.ts`,
   ADR-016): the Redis and database integration tiers start isolated
-  containers per test file (`redis:8.2-alpine`, `postgres:17.6-alpine`, plus
+  containers per test file (`redis:8.2-alpine`, `postgres:18.7-alpine`, plus
   `ghcr.io/shopify/toxiproxy:2.12.0` for the database and Redis black-hole
   fault-injection specs), and
   the e2e tier shares one Redis and one PostgreSQL container per test run
@@ -415,7 +415,7 @@ addresses (host and Compose network) at startup. It also runs pgAdmin 4
 `http://localhost:5050` (default) whose `postgres` server definition is
 auto-registered at startup from a rendered template; nothing depends on the
 service. Testcontainers (ADR-016/025) provides isolated `redis:8.2-alpine` and
-`postgres:17.6-alpine` containers
+`postgres:18.7-alpine` containers
 for integration and e2e tests — the Redis and database integration tiers start their own
 container per test file (dynamic ports, `beforeAll`/`afterAll`; the database
 tier via `pnpm test:db`), while the

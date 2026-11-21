@@ -355,7 +355,7 @@ Constraints:
   `mikro-orm.options.ts` (`DATABASE_POOL_MAX`, default 10); the CLI migration
   configuration keeps `statement_timeout` off.
 - Database integration tests use Testcontainers (`pnpm test:db`,
-  image `postgres:17.6-alpine`): each
+  image `postgres:18.7-alpine`): each
   `*.db-spec.ts` file boots the real AppModule against its own container
   and overrides `MIKRO_ORM_MODULE_OPTIONS` (overriding the
   `DATABASE_CONFIG` `registerAs` token does not propagate through
