@@ -2159,3 +2159,56 @@ No migration changes; existing migrations remain immutable (ADR-033). Verificati
 - Master prompt §6 (PostgreSQL Upgrade and UUIDv7) and Phase 1; prompt record `_058` (Phase 0)
 - [PostgreSQL 18.7, 17.12, 16.16, 15.20, 14.25, and 19 RC 2 Released](https://www.postgresql.org/about/news/postgresql-187-1712-1616-1520-1425-and-19-rc-2-released-3442); [PostgreSQL 18 release notes](https://www.postgresql.org/docs/current/release-18.html); [UUID functions](https://www.postgresql.org/docs/current/functions-uuid.html)
 - Pins: `docker/compose.app.dev.yml`, `docker/compose.app.prod.yml`, `apps/api/test/testcontainers.ts`; `prompts/_059-...md` (Phase 1 record)
+
+## ADR-041: Enrollment Core Data Model — Canonical Phone Storage, the One-Active-Per-Phone Invariant, and a Database-Native UUIDv7 Public Identifier
+
+- **Status:** Accepted
+- **Date:** 2026-11-22
+
+### Context
+
+Phase 2 of the Enrollment master prompt adds the Enrollment lifecycle fields (`publicId`, `expiresAt`, `status`, `currentStep`) and the phone-number invariant to the existing `enrollments` table (currently `BaseEntity` columns + `phone_number varchar(255)` with no write path). Two facts force explicit decisions before the schema lands. First, the stored phone representation was inconsistent: the entity documentation claimed E.164 while the HTTP layer (`toNationalMobile`, `enrollments.schema.ts`) normalizes Iranian mobile numbers to `09XXXXXXXXX` — and that normalized form is already the keying basis for the OTP storage, rate limiting, and the ADR-039 idempotency scope. Second, the master prompt supersedes the 2026-11-16 developer rejection of phone-number uniqueness with the one-non-expired-Enrollment-per-phone invariant (recorded in root `AGENTS.md`, Phase 0), which PostgreSQL must enforce for concurrent requests. PostgreSQL 18.7 (ADR-040) provides native `uuidv7()`. Legacy data: the table holds 0 rows (verified before and after the Phase 1 upgrade), so no duplicate classification exists.
+
+### Decision
+
+1. **Canonical phone storage is the national format `09XXXXXXXXX`** — `varchar(11)` with `CHECK (phone_number ~ '^09[0-9]{9}$')`. Every accepted request spelling is normalized to this one persisted representation by the single seam (`toNationalMobile`); E.164 is a presentation/formatting concern at any future SMS-provider boundary, never storage. The entity's stale E.164 documentation is corrected.
+2. **The one-active invariant is enforced by a partial unique index**: `CREATE UNIQUE INDEX ... ON enrollments (phone_number) WHERE status <> 'EXPIRED'`. The predicate references only persisted lifecycle status — never `now()` or `expires_at`; `EXPIRED` records release the phone number by transitioning status, and the transition is persisted before any replacement insert.
+3. **`public_id` is `uuid NOT NULL DEFAULT uuidv7()`, UNIQUE**, with `CHECK (uuid_extract_version(public_id) = 7)` defending the version-7 invariant against any writer that bypasses the ORM. The application never generates Enrollment public identifiers, and MikroORM must read the database-generated value back after insertion (verified by integration test).
+4. **Lifecycle columns are `text` + CHECK constraints** (amended 2026-11-22 per developer direction from the originally proposed plain `varchar` — the two are physically identical in PostgreSQL, and `text` is the idiomatic spelling when a length limit is deliberately not part of the contract): `status text CHECK (status in (...6 values...)) DEFAULT 'INITIAL'`; `current_step text CHECK (current_step in (...9 values in master-prompt §7.4 order...)) DEFAULT 'NATIONAL_CODE'`. `phone_number` keeps its exact `varchar(11)` bound — for a fixed-format identifier the length is the contract, independent of the format CHECK. Native PostgreSQL enum types are deliberately avoided — value-set changes stay ordinary forward migrations. The check expressions are composed from the exported `ENROLLMENT_STATUSES` / `ENROLLMENT_STEPS` constants (single source of truth; no duplicated value lists).
+5. **`expires_at` is `timestamptz(3) NOT NULL` with no database default**: the application sets it as `createdAt + 24 hours` from the same clock reading that produces `createdAt` (the subclass field initializer reads the already-initialized inherited `createdAt`), satisfying the master prompt's one-clock-reading rule (§7.2). A database `now() + interval` default would pair a second clock with the app-clock creation instant. Existing rows backfill as `expires_at = created_at + interval '24 hours'`.
+6. **Field-constraint matrix (approved 2026-11-22):** inherited `BaseEntity` columns unchanged; `public_id` (uuid, not null, default `uuidv7()`, unique, v7 CHECK), `phone_number` (varchar(11), not null, format CHECK, partial unique), `status` (text, not null, default `INITIAL`, CHECK), `current_step` (text, not null, default `NATIONAL_CODE`, CHECK), `expires_at` (timestamptz(3), not null, app-set). Step-data fields (`nationalCode`, names, `birthDate`, `referralCode`, `username`, `passwordHash`, `occupation`, `videoKey`) are Phase 3 scope and are not added here.
+7. **Migration discipline (ADR-033):** one new forward migration adds the columns and constraints (adding `expires_at` nullable, backfilling from `created_at`, then `SET NOT NULL` — the standard non-blocking pattern); `down()` is the exact reverse including restoring `phone_number varchar(255)`. The migration passes the `migration-reviewer` subagent before completion; the existing `Migration20261116181139` is untouched.
+
+### Options Considered
+
+- **E.164 storage (`+989XXXXXXXXX`):** rejected — every existing consumer (OTP Redis keys, rate-limit keys, idempotency scope/fingerprint, request validation) normalizes to `09XXXXXXXXX`; E.164 storage would force a conversion at every boundary or a re-keying of live storage, with no consumer that wants it today.
+- **Storing both representations:** rejected — two sources of truth for the same identity; guarantees eventual divergence.
+- **Native PostgreSQL enum types for status/step:** rejected — `ALTER TYPE` friction for value-set changes and cross-migration coupling; `varchar` + CHECK keeps the contract a table-level, forward-migration-friendly fact.
+- **Database default for `expires_at` (`now() + interval '24 hours'`):** rejected — introduces a second clock reading relative to the application-set `createdAt`, exactly the inconsistency the master prompt forbids.
+- **No uuidv7 CHECK on `public_id`:** rejected — the CHECK is the only column-wide defense against a non-ORM writer persisting a v4; cost is negligible.
+
+### Rationale
+
+The decisions keep exactly one persisted representation per identity concept, put every cross-request invariant in the database rather than application lookups, and leave every future change an ordinary forward migration. The clock-reading rule removes a class of silent lifecycle inconsistency (an Enrollment expiring at a different instant than "creation + 24 h").
+
+### Security Assessment
+
+The phone CHECK bounds the persisted domain to valid national mobile numbers, so the partial unique index operates on a canonical value (equivalent spellings can never bypass uniqueness). `public_id` remains an identifier, not an authorization mechanism — the master prompt's BOLA deferral (§13.5/§13.6) is unchanged. The plaintext-PII posture is unchanged: retention/backup/encryption decisions stay open in `DEFERRED.md` (_051 entry) and must be resolved before the first write path exposes data.
+
+### Performance Implications
+
+UUIDv7's time ordering improves insertion locality for the `public_id` unique index and any future foreign keys referencing it. The partial unique index excludes `EXPIRED` rows, keeping it small as historical records accumulate. The `uuid_extract_version` CHECK evaluates a cheap immutable function on insert/update of the column only.
+
+### Operational Implications
+
+No runtime configuration. The migration is online-safe at the current scale (0 rows); the `expires_at` backfill-then-`SET NOT NULL` pattern avoids a full-table rewrite failure on any future replay against non-empty data. Rollback via `down()` restores the exact previous schema shape.
+
+### Testing and Migration Implications
+
+PostgreSQL integration tests (Testcontainers, ADR-016) must prove: two active enrollments cannot share a phone; an `EXPIRED` enrollment releases the phone and multiple historical `EXPIRED` records may share it; `PENDING_REVIEW`, `REJECTED`, and `APPROVED` each block a new enrollment; `public_id` is version 7 and read back after insert; defaults apply (`INITIAL` / `NATIONAL_CODE`); CHECK violations reject bad phone formats and unknown status/step values; `expiresAt` equals `createdAt` + 24 h. Entity metadata tests cover the mapping (types, defaults, index, checks). No existing migration is modified.
+
+### References
+
+- Master prompt §3.1/3.2/3.4/§7.1–7.4/§8.1/§8.5, Phase 2; Phase 0 supersession (root `AGENTS.md` → "Neo Bank Business Domain")
+- ADR-040 (PostgreSQL 18.7 native `uuidv7()`), ADR-033 (migration immutability), ADR-039 (idempotency scope built on the same normalization seam)
+- `DEFERRED.md` _051 entry (PII protection decisions — still open, unchanged by this ADR); `prompts/_060-...md` (Phase 2 record)

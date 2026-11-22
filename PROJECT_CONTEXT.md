@@ -3,7 +3,7 @@
 Primary architectural and technical context for development sessions. Read
 after the root `AGENTS.md`; use it to decide which further documentation or
 source files a task needs. Detailed documents stay independent — see the
-Documentation Index. Last verified: 2026-11-20.
+Documentation Index. Last verified: 2026-11-22.
 
 ## Repository Overview
 
@@ -25,8 +25,9 @@ Frontends contain no API client code; client→API communication is not
 implemented. No authentication/authorization, no shared types. The API has a
 PostgreSQL persistence layer (MikroORM v7, ADR-027): the shared `BaseEntity`
 (ADR-029) and the first feature entity — `Enrollment` (table `enrollments`,
-first migration `Migration20261116181139` applied to dev) — exist, and
-Redis remains the only store feature code uses.
+ADR-041 core schema; migrations `Migration20261116181139` and
+`Migration20261122000737` applied to dev) — exist, and Redis remains the
+only store feature code uses.
 
 ## API Architecture (`apps/api`)
 
@@ -85,9 +86,12 @@ Core contracts:
   explicitly configured pool (ADR-036). After boot, a pool-level lifecycle
   logger (ADR-034) logs new physical connections and pool errors. The shared
   `BaseEntity` (ADR-029) and the UTC-first timestamp policy (ADR-030) are in
-  place, the first feature entity `Enrollment` (table `enrollments`) exists,
-  and migrations are immutable and migration-reviewer-gated (ADR-033); no
-  feature flow persists rows yet.
+  place, the first feature entity `Enrollment` (table `enrollments`) carries
+  the ADR-041 core lifecycle schema — canonical `09XXXXXXXXX` phone storage,
+  database-native uuidv7 `public_id`, CHECK-constrained `status`/
+  `current_step`, application-set 24-hour `expires_at`, and the
+  one-active-per-phone partial unique index — and migrations are immutable
+  and migration-reviewer-gated (ADR-033); no feature flow persists rows yet.
 - **Logging:** Pino only (ADR-008/009); JSON in production, pretty in dev,
   `LOG_PRETTY` override; never `console.log`, never log OTPs/secrets.
 - **Memory protection:** `src/shared/memory-protection/` (ADR-026) samples
@@ -130,7 +134,8 @@ Core contracts:
   Ops: `docs/docker.md`.
 - **Database:** PostgreSQL persistence layer in the API (MikroORM v7,
   ADR-027) — first feature entity `Enrollment` (table `enrollments`,
-  migration applied to dev) with the shared `BaseEntity` in place (ADR-029);
+  ADR-041 core schema, migrations applied to dev) with the shared
+  `BaseEntity` in place (ADR-029);
   the dev/prod
   Compose stacks provide the server (containers pinned to UTC, ADR-030) and
   inject `DATABASE_URL` into the API service.
@@ -166,7 +171,7 @@ Core contracts:
 | `docs/api.md`                               | Human-readable API reference (nestbruno route inventory + source-verified contracts) |
 | `docs/current-state.md`                     | Feature/state snapshot (verified per feature)                                        |
 | `docs/utc-datetime.md`                      | UTC-first date/time storage policy and usage guide (ADR-030)                         |
-| `DECISIONS.md`                              | ADR-001…ADR-039, all Accepted                                                        |
+| `DECISIONS.md`                              | ADR-001…ADR-041, all Accepted                                                        |
 | `docs/docker.md`                            | Docker stacks: setup, env files, commands                                            |
 | `docs/observability/README.md`              | Monitoring stack operations                                                          |
 | `docs/observability/manual-testing.md`      | Reproducible monitoring verification scenarios                                       |

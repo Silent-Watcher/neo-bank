@@ -646,3 +646,45 @@ requires developer approval before any ADR is created.
 - **ADR Recommendation:** None beyond the applied ADR-040 amendment — the
   layout requirement is an image/platform fact, recorded where it was
   discovered.
+
+### 34. Enrollment core data model implementation choices (_060, ADR-041, Enrollment Phase 2)
+
+- **Context:** implementing the accepted ADR-041 raised two choices the ADR
+  deliberately left open: how `expiresAt = createdAt + 24h` is produced
+  without a second clock reading, and how to regenerate a migration after
+  the entity metadata changed while an unapplied generated migration
+  existed.
+- **Decision:** `expiresAt` is a subclass field initializer reading
+  `this.createdAt` (parent class fields initialize before subclass fields,
+  so the inherited initializer's instant is available) rather than an
+  `onCreate` hook — hook ordering between the inherited `BaseEntity.onCreate`
+  and a child callback is not a documented contract, and the initializer is
+  plain JavaScript semantics. A unit-level round-trip test pins the 24-hour
+  delta. For the migration, the abandoned generated file and its
+  `.snapshot-*.json` were deleted together and regenerated against the live
+  database (v7's `migration:create` diffs against the snapshot, not the DB —
+  a poisoned snapshot yields hybrid diffs), then the reviewer-mandated
+  corrections (expires_at backfill sequence, narrowing precondition comment)
+  were applied to the fresh file before first application.
+- **Reasoning:** the initializer gives the one-clock-reading guarantee with
+  zero framework contract; the snapshot reset restores the only source of
+  truth the CLI trusts. Both are recorded because the same choices recur in
+  Phase 3 (more columns, same initializer pattern) and every future
+  migration regeneration.
+- **Alternatives considered:** an entity `onCreate` for `expiresAt`
+  (rejected — undocumented parent/child hook ordering); a DB
+  `now() + interval` default (rejected by ADR-041 — second clock); editing
+  the first generated migration in place with only type changes while
+  keeping the snapshot (rejected — the snapshot/migration pair must stay
+  consistent; deletion + regeneration is the verifiable path).
+- **Trade-offs:** `expiresAt` depends on JS class-field initialization order
+  (stable, spec-defined, but implicit — pinned by the round-trip test); the
+  regeneration path costs one extra CLI run.
+- **Impact:** `enrollment.entity.ts`, `enrollments.enums.ts`
+  (`ENROLLMENT_TTL_MS` as the shared TTL constant), the migration files, and
+  the test fixtures; the tooling behavior is captured in the
+  `~/Downloads/tips/mikroorm-migration-snapshot-gotcha.md` note.
+- **Reversibility:** both choices are local and trivially reversible (hook
+  swap; snapshot regeneration).
+- **ADR Recommendation:** None — implementation mechanics of the accepted
+  ADR-041; no new architectural surface.

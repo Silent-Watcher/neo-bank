@@ -93,6 +93,37 @@ original task requirements and must be addressed in future work.
 
 ---
 
+## Mandated by the Enrollment Core Data Model Phase (_060, ADR-041)
+
+### 1. Migration-Replay Parity Smoke Test (Deferred)
+
+**Origin**: migration review of `Migration20261122000737` (2026-11-22, INFO finding 3 — the dedicated `migration-reviewer` subagent was unavailable on the platform; the review ran through the `code-reviewer` subagent + primary-agent checklist per the documented fallback).
+**Status**: Open.
+**Requirement**: The integration tier builds schema from entity metadata via `MikroORM.schema.create()`, so entity↔migration parity is proven by review only. Add a smoke test that executes the MikroORM `Migrator` against a fresh Testcontainers PostgreSQL (applying all migrations from zero) and asserts the same shape assertions the `schema.create()`-based specs make, closing the entity/migration gap mechanically.
+**Rationale**: Migration files can drift from entity metadata silently; the review verifies parity once, a Migrator-based spec verifies it on every run.
+
+### 2. Pool-Lifecycle Test Relocation (Deferred)
+
+**Origin**: code review of `_060` (Wave 31 finding CR-07, 2026-11-22) — `test/enrollment.db-spec.ts` hosts the `DatabaseLifecycleLogger` pool-listener test (ADR-034), which is infrastructure coverage, not Enrollment coverage; it predates this task.
+**Status**: Open.
+**Requirement**: Move the pool-lifecycle test to a lifecycle-focused db-spec (e.g. `test/database-lifecycle.db-spec.ts`, reusing the probe-app pattern) so file purpose and name agree; mind the db-tier cost model (one container per file).
+**Rationale**: A reader scanning the enrollment suite finds an infrastructure test, and the lifecycle coverage follows the enrollment file's fate in future refactors.
+
+### 3. Enrollment db-spec Fixture Parameterization (Deferred)
+
+**Origin**: code review of `_060` (Wave 31 CR-10 remainder, 2026-11-22) — the `insertEnrollmentSql(phone, status?)` fixture helper in `test/enrollment.db-spec.ts` interpolated its compile-time test literals into raw SQL; the Mimosa security gate flagged the pattern as injection-shaped and blocked Edit-tool writes (a catch-22: the scanner greps the pre-state, so even the removal diff was blocked).
+**Status**: **Done** (2026-11-22) — at the developer's explicit direction the helper was replaced via a structural rewrite script; the fixture is fully parameterized and all matcher sites use `ENROLLMENT_SCHEMA_CONSTRAINT_NAMES`. Post-rewrite: typecheck clean, unit 504/504, db 36/36, e2e 115/115, redis 89/89.
+**Rationale**: The interpolated-SQL shape was the scanner's flagged pattern; parameterization removed it and is the production-grade shape anyway.
+
+### 4. Enrollment Write-Path Payload Construction Constraints (Deferred)
+
+**Origin**: security review of `_060` (Wave 32 findings SEC-01/SEC-03, 2026-11-22).
+**Status**: Open — binding for the Phase 4/5 Enrollment write path.
+**Requirement**: (a) Construct creation payloads explicitly — `em.create(Enrollment, { phoneNumber: normalizedPhone })` — and never spread request input; create DTOs must exclude `publicId`, `status`, `currentStep`, `createdAt`, and `expiresAt` (SEC-03, CWE-915: a smuggled `status: 'APPROVED'` would satisfy the value-set CHECKs and bypass the lifecycle). Add a regression test asserting a create-path request cannot influence those fields. (b) Document the uuidv7 timestamp trade-off (SEC-01, CWE-359: `publicId` embeds the creation instant to millisecond precision) in the docs of the first endpoint that exposes `publicId`.
+**Rationale**: The database CHECKs validate value sets, not state transitions; payload hygiene at the application boundary is the lifecycle's actual enforcement point until the Phase 4 state machine adds transition guards.
+
+---
+
 ## How to Use This Registry
 
 - When starting work on a deferred item, move it from this file to a new ADR proposal (or link to an existing one).

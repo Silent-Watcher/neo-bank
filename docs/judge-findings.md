@@ -3031,3 +3031,132 @@ re-verified.
   mitigation was already present: the store registers in its constructor
   (broken registration fails startup) and an e2e test asserts the active
   store is the Redis implementation.
+
+## Wave 30 — migration review (_060, code-reviewer acting as migration-reviewer, 2026-11-22)
+
+Scope: `Migration20261122000737.ts` (Enrollment core data model, ADR-041) plus
+the entity, enums source, prior immutable migration, and the db-spec. The
+dedicated `migration-reviewer` subagent was unavailable on the platform; the
+fallback documented in root `AGENTS.md` was used — the `code-reviewer`
+subagent performed the migration-review role against the same checklist,
+with the primary agent's own structured review alongside. Verdict:
+**APPROVED_WITH_SUGGESTIONS** — no blocking findings; up()/down()
+reversibility, the expires_at add-nullable → backfill → SET NOT NULL
+ordering, CHECK/enum parity, the partial-index predicate, statement ordering,
+and naming consistency all passed explicitly.
+
+- **MIG-01 (Minor, Correctness) — silent truncation semantics of the phone
+  narrowing USING-cast.** `using ("phone_number"::varchar(11))` would
+  truncate over-length values without raising on a hypothetically populated
+  table. **Resolved** — comment documenting the empty-table/no-writer
+  precondition added to the migration before first application (the
+  reviewer's suggested remedy; no SQL change).
+- **MIG-02 (Info, Design) — enum value lists and `'24 hours'` snapshotted as
+  literals in the migration.** **Won't Fix (with technical justification)** —
+  an immutable migration must snapshot the vocabulary at its point in
+  history; composing SQL from the live enums at runtime would retroactively
+  alter a historical migration. The snapshot matches the single-source arrays
+  exactly; future value changes are new forward migrations.
+- **MIG-03 (Info, Testing) — migration↔entity parity proven by inspection,
+  not by any test tier** (integration specs use `schema.create()` from
+  metadata; no Migrator-based test exists). **Deferred** — recorded as
+  `DEFERRED.md` entry 1 of the _060 section (migration-replay parity smoke
+  test).
+
+## Wave 31 — Phase 2 implementation code review (_060, code-reviewer, 2026-11-22) — CHANGES_REQUIRED
+
+Scope: `enrollments.enums.ts`, `enrollment.entity.ts`,
+`enrollment.entity.spec.ts`, `enrollment.db-spec.ts` (migration reviewed
+separately in Wave 30). The reviewer verified its runtime/type claims
+against the installed MikroORM 7.2.9 sources (EntityFactory, EntityManager,
+typings, AbstractSqlDriver RETURNING mechanism). Two compile-level blockers
+were invisible to the green vitest run because Vitest strips types without
+checking.
+
+- **CR-01 (High, Correctness) — undefined identifier
+  `PostgreSqlSqlConnection` in the db-spec cast** (`test/enrollment.db-spec.ts`):
+  `pnpm typecheck` fails (TS2304); vitest never sees it. **Resolved** — cast
+  uses the imported `PostgreSqlSqlConnection`→`PostgreSqlConnection`.
+- **CR-02 (High, Correctness) — `em.create()` typing forces callers to
+  supply `publicId` and `expiresAt`**, contradicting the entity's own
+  contract (database-generated identifier; one-clock-reading expiry). Root
+  cause: neither property carries the `Opt` brand or an `[OptionalProps]`
+  declaration, so `RequiredEntityData<Enrollment>` requires both. **Resolved**
+  — `[OptionalProps]: 'publicId' | 'expiresAt'` declared on the entity
+  (runtime behavior unchanged; the database-generated and derived fields are
+  now the only path, and Phase 4 call sites cannot be forced to supply
+  forbidden values).
+- **CR-03 (Medium, Convention) — inline `type` modifiers mixed into value
+  import lists** (entity: `type EnrollmentStatus`/`type EnrollmentStep`;
+  db-spec: `type TestPostgres`). **Resolved** — dedicated `import type`
+  statements per the project rule.
+- **CR-04 (Low, Test quality) — unique-index property assertions weaker
+  than the invariant** (`arrayContaining` accepts a composite unique).
+  **Resolved** — exact `properties: ['phoneNumber']` / `['publicId']`
+  assertions; db-spec `indexdef` assertion tightened.
+- **CR-05 (Low, Test quality) — raw `expires_at` selected but never
+  asserted; timestamp annotations mismatched the driver's materialized
+  types.** **Resolved** — DB↔entity parity assertion added; annotations
+  corrected.
+- **CR-06 (Low, Design/YAGNI) — `EXPIRABLE_ENROLLMENT_STATUSES` has no
+  consumer yet.** **Won't Fix (with technical justification)** — the list is
+  part of the master prompt §7.3 status-enum specification (approved Phase 2
+  scope) and is consumed by the Phase 4 state machine (`expireIfDue`);
+  removing it would reintroduce the identical constant next phase.
+- **CR-07 (Low, Maintainability) — pool-lifecycle test (ADR-034) lives in
+  the enrollment db-spec** despite being infrastructure coverage.
+  **Deferred** — pre-existing placement predating this task; recorded as
+  `DEFERRED.md` _060 entry 2.
+- **CR-08 (Low, Future-correctness) — explicit `createdAt` in create/assign
+  data would silently break the 24-hour invariant** (hydration overwrites
+  the initializer-derived value after construction). **Resolved** — the
+  constraint is documented on the entity's `expiresAt` doc comment; the
+  Phase 4 creation service must never accept or forward `createdAt`/
+  `expiresAt` (carried in the `_060` record's deferred section).
+- **CR-09 (Low, Convention) — schema constraint/index names duplicated as
+  literals across entity, both specs, and the migration.** **Resolved** —
+  names exported once from `enrollments.enums.ts` and referenced by the
+  entity and both specs; the applied migration keeps its (identical)
+  literals — immutability rules forbid touching it.
+- **CR-10 (Low, Convention; CR-09 residual, iteration 2) — four behavioral
+  error-message regexes still hardcode constraint names.**
+  **Resolved** — after the Mimosa gate repeatedly blocked Edit-tool writes to
+  the file while the flagged pattern sat in the diff (a catch-22: the
+  scanner greps the pre-state, so even the removal was blocked), the fixture
+  helper was replaced via a structural rewrite script at the developer's
+  explicit direction, removing the interpolation entirely. The fixture is
+  now fully parameterized (`?` placeholders + bound values) and all six
+  matcher sites build from `ENROLLMENT_SCHEMA_CONSTRAINT_NAMES`. The
+  security review had independently assessed the fixture as zero-risk
+  (compile-time literals only); the gate's flag was a shape false-positive.
+  Post-rewrite gates: typecheck clean, unit 504/504, db 36/36, e2e 115/115,
+  redis 89/89.
+
+## Wave 32 — Phase 2 implementation security review (_060, code-security-analyzer, 2026-11-22) — SECURITY_APPROVED_WITH_INFORMATIONAL_FINDINGS
+
+Scope: entity, enums, db-spec (fixture pattern assessed for real risk),
+migration, base entity. The analyzer confirmed the HTTP trust boundary is
+unchanged (the OTP flow is Redis-only; zero raw-SQL execution in
+`apps/api/src`), the check-expression composition has no injection surface,
+fail-closed defaults throughout, and no TOCTOU window against the partial
+unique index (non-deferrable, insert-time serialization of concurrent
+conflicts).
+
+- **SEC-01 (Informational, CWE-359) — `publicId` (uuidv7) embeds the
+  creation timestamp to millisecond precision in a client-visible
+  identifier.** No endpoint returns `publicId` yet; randomness (~74 bits)
+  prevents enumeration. **Won't Fix (accepted ADR-040 trade-off)** — to be
+  documented at the first endpoint that exposes `publicId`; carried in the
+  `_060` record's deferred section.
+- **SEC-02 (Informational, CWE-312) — plaintext `phone_number` PII
+  posture.** **Tracked** — carried by `DEFERRED.md` _051 (retention/backup/
+  encryption decided with the first write path); the analyzer assessed this
+  change as not worsening the posture (format CHECK + narrowing partially
+  resolve the "never receives unvalidated input" sub-item).
+- **SEC-03 (Informational, CWE-915) — future write path must construct
+  creation payloads explicitly** (`em.create(Enrollment, { phoneNumber })` —
+  never spread request input; DTOs must exclude `publicId`/`status`/
+  `currentStep`/`createdAt`/`expiresAt`; regression test that a create-path
+  request cannot influence those fields). No exploit path today. **Deferred**
+  — recorded as `DEFERRED.md` _060 entry 4, binding for the Phase 4/5 write
+  path.

@@ -138,11 +138,20 @@ repository (not a Turbo task), so formatting is repository-wide.
   strict `/health/ready`); after boot, a pool-level lifecycle logger
   (ADR-034) logs new physical connections and pool errors through the
   application logger. The first feature entity exists: `Enrollment` (table
-  `enrollments`, created by migration `Migration20261116181139` — applied
-  to the dev PostgreSQL) inherits the shared abstract `BaseEntity`
+  `enrollments`, ADR-041) inherits the shared abstract `BaseEntity`
   ([ADR-029](../DECISIONS.md)) columns (BIGINT primary key, `timestamptz(3)`
   timestamps, actor audit attribution, optimistic-lock version, soft-delete
-  surface); migrations are immutable and gated by the dedicated
+  surface) and adds the core lifecycle fields: `phone_number` (canonical
+  national format `09XXXXXXXXX`, `varchar(11)` format CHECK), `public_id`
+  (uuid with the database-native `uuidv7()` default per ADR-040, unique,
+  version-7 CHECK — the only client-visible identifier), `status` and
+  `current_step` (CHECK-constrained text lifecycle values, defaults
+  `INITIAL` and `NATIONAL_CODE`), and `expires_at` (`timestamptz(3)` NOT
+  NULL, application-set `createdAt` + 24 h, no database default). A partial
+  unique index (`WHERE status <> 'EXPIRED'`) enforces the
+  one-non-expired-Enrollment-per-phone invariant. Two migrations
+  (`Migration20261116181139`, `Migration20261122000737`) are applied to the
+  dev PostgreSQL; migrations are immutable and gated by the dedicated
   `migration-reviewer` subagent (ADR-033). A UTC-first TIMESTAMPTZ storage
   policy ([ADR-030](../DECISIONS.md)) governs
   how timestamps are stored and converted — developer guide:
@@ -160,7 +169,8 @@ repository (not a Turbo task), so formatting is repository-wide.
 - The persistence layer has no feature writes yet: MikroORM v7 and
   PostgreSQL are wired in (ADR-027) with migrations configured, and the
   first feature entity exists (`Enrollment`, table `enrollments`, ADR-029
-  base columns), but no application flow persists rows.
+  base columns plus the ADR-041 core lifecycle schema), but no application
+  flow persists rows.
 - No authentication/authorization anywhere.
 - The frontends are scaffolds: no routing beyond the index page, no state
   management, no styling system, no tests.

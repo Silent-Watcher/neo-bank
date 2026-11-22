@@ -4,12 +4,18 @@ import { PostgreSqlDriver } from '@mikro-orm/postgresql';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { BaseEntity } from '#database/base.entity.js';
+import {
+  ENROLLMENT_INITIAL_STATUS,
+  ENROLLMENT_INITIAL_STEP,
+  ENROLLMENT_SCHEMA_CONSTRAINT_NAMES,
+} from '#modules/enrollments/enrollments.enums.js';
 
 import { Enrollment } from './enrollment.entity.js';
 
 // Spec-local twin of the metadata fixture pattern from base.entity.spec.ts:
 // metadata-level verification without a database — the physical schema shape
-// is proven against real PostgreSQL in test/enrollment.db-spec.ts.
+// (columns, checks, unique index, constraint behavior) is proven against real
+// PostgreSQL in test/enrollment.db-spec.ts.
 
 @Entity()
 class MetadataProbeEntity extends BaseEntity {
@@ -52,7 +58,7 @@ describe('Enrollment metadata', () => {
     expect(enrollment.collection).toBe('enrollments');
   });
 
-  it('declares phoneNumber as its only own property', () => {
+  it('adds exactly the approved core lifecycle properties to the inherited base columns', () => {
     // Arrange
     const enrollment = orm.em.getMetadata().get(Enrollment);
     const base = orm.em.getMetadata().get(MetadataProbeEntity);
@@ -61,42 +67,100 @@ describe('Enrollment metadata', () => {
     // Act
     const own = Object.keys(enrollment.properties).filter((name) => !inherited.has(name));
 
-    // Assert — the inherited set is inlined and phoneNumber is the sole
-    // addition; no inherited property is redeclared as a distinct definition.
-    expect(own).toEqual(['phoneNumber']);
+    // Assert — the inherited set is inlined and these are the sole additions
+    // (ADR-041 core data model); no inherited property is redeclared as a
+    // distinct definition.
+    expect(own).toEqual(['phoneNumber', 'publicId', 'status', 'currentStep', 'expiresAt']);
   });
 
-  it('stores phoneNumber as a non-null snake_case varchar column without lifecycle callbacks', () => {
+  it('stores phoneNumber as the canonical national-format varchar(11)', () => {
     // Arrange
     const phoneNumber = orm.em.getMetadata().get(Enrollment).properties['phoneNumber'];
 
     // Act & Assert
     expect(phoneNumber.fieldNames).toEqual(['phone_number']);
-    expect(phoneNumber.columnTypes[0]).toBe('varchar(255)');
+    expect(phoneNumber.columnTypes[0]).toBe('varchar(11)');
     expect(phoneNumber.runtimeType).toBe('string');
     expect(phoneNumber.nullable ?? false).toBe(false);
     expect(phoneNumber.onCreate).toBeUndefined();
     expect(phoneNumber.onUpdate).toBeUndefined();
   });
 
-  it('inlines the inherited BaseEntity columns into the enrollments table', () => {
+  it('maps publicId to a uuid column with the database-native uuidv7() default', () => {
+    // Arrange
+    const publicId = orm.em.getMetadata().get(Enrollment).properties['publicId'];
+
+    // Act & Assert — the application never generates the identifier
+    // (ADR-040/041): the column carries the database default and the driver
+    // reads the generated value back after insert.
+    expect(publicId.fieldNames).toEqual(['public_id']);
+    expect(publicId.columnTypes[0]).toBe('uuid');
+    expect(publicId.runtimeType).toBe('string');
+    expect(publicId.nullable ?? false).toBe(false);
+    expect(publicId.defaultRaw).toBe('uuidv7()');
+  });
+
+  it('defaults status and currentStep from the single-source enums', () => {
     // Arrange
     const properties = orm.em.getMetadata().get(Enrollment).properties;
 
-    // Act & Assert
-    for (const name of [
-      'id',
-      'createdAt',
-      'updatedAt',
-      'createdBy',
-      'updatedBy',
-      'version',
-      'deletedAt',
-    ] as const) {
-      expect(properties[name]).toBeDefined();
-    }
-    expect(properties['id'].columnTypes[0]).toBe('bigserial');
-    expect(properties['id'].runtimeType).toBe('string');
-    expect(properties['version'].version).toBe(true);
+    // Act & Assert — text carries the value contract via CHECK constraints
+    // (ADR-041 amendment); no arbitrary length limit.
+    expect(properties['status'].columnTypes[0]).toBe('text');
+    expect(properties['status'].default).toBe(ENROLLMENT_INITIAL_STATUS);
+    expect(properties['currentStep'].columnTypes[0]).toBe('text');
+    expect(properties['currentStep'].default).toBe(ENROLLMENT_INITIAL_STEP);
+  });
+
+  it('maps expiresAt as a non-null timestamptz(3) without any database default', () => {
+    // Arrange
+    const expiresAt = orm.em.getMetadata().get(Enrollment).properties['expiresAt'];
+
+    // Act & Assert — the one-clock-reading rule (ADR-041): the value comes
+    // from the same application clock as createdAt, never from the database.
+    expect(expiresAt.fieldNames).toEqual(['expires_at']);
+    expect(expiresAt.columnTypes[0]).toBe('timestamptz(3)');
+    expect(expiresAt.nullable ?? false).toBe(false);
+    expect(expiresAt.defaultRaw).toBeUndefined();
+    expect(expiresAt.default).toBeUndefined();
+  });
+
+  it('declares the enrollment check constraints from the single-source enums', () => {
+    // Arrange
+    const checks = orm.em.getMetadata().get(Enrollment).checks;
+
+    // Act
+    const names = checks.map((check) => check.name);
+
+    // Assert
+    expect(names).toEqual(
+      expect.arrayContaining([
+        ENROLLMENT_SCHEMA_CONSTRAINT_NAMES.phoneNumberFormat,
+        ENROLLMENT_SCHEMA_CONSTRAINT_NAMES.publicIdUuidv7,
+        ENROLLMENT_SCHEMA_CONSTRAINT_NAMES.statusValid,
+        ENROLLMENT_SCHEMA_CONSTRAINT_NAMES.currentStepValid,
+      ]),
+    );
+  });
+
+  it('declares the partial unique phone index and the public_id unique constraint', () => {
+    // Arrange
+    const uniques = orm.em.getMetadata().get(Enrollment).uniques;
+
+    // Act
+    const byName = new Map(uniques.map((unique) => [unique.name, unique]));
+
+    // Assert — the one-active-per-phone invariant indexes exactly the phone
+    // column (a composite unique would weaken it) and predicates on
+    // persisted lifecycle status only (ADR-041).
+    expect(byName.get(ENROLLMENT_SCHEMA_CONSTRAINT_NAMES.phoneActiveUnique)).toMatchObject({
+      properties: ['phoneNumber'],
+    });
+    expect(
+      String(byName.get(ENROLLMENT_SCHEMA_CONSTRAINT_NAMES.phoneActiveUnique)?.where ?? ''),
+    ).toContain("status <> 'EXPIRED'");
+    expect(byName.get(ENROLLMENT_SCHEMA_CONSTRAINT_NAMES.publicIdUnique)).toMatchObject({
+      properties: ['publicId'],
+    });
   });
 });
