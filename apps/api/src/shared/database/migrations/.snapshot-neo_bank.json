@@ -6,6 +6,23 @@
       "name": "enrollments",
       "schema": "public",
       "columns": {
+        "birth_date": {
+          "name": "birth_date",
+          "type": "date",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "collation": null,
+          "enumItems": [],
+          "mappedType": "date"
+        },
         "created_at": {
           "name": "created_at",
           "type": "timestamptz(3)",
@@ -91,6 +108,23 @@
           "enumItems": [],
           "mappedType": "datetime"
         },
+        "first_name": {
+          "name": "first_name",
+          "type": "text",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "collation": null,
+          "enumItems": [],
+          "mappedType": "text"
+        },
         "id": {
           "name": "id",
           "type": "bigint",
@@ -107,6 +141,74 @@
           "collation": null,
           "enumItems": [],
           "mappedType": "bigint"
+        },
+        "last_name": {
+          "name": "last_name",
+          "type": "text",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "collation": null,
+          "enumItems": [],
+          "mappedType": "text"
+        },
+        "national_code": {
+          "name": "national_code",
+          "type": "varchar(10)",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "unique": true,
+          "length": 10,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "collation": null,
+          "enumItems": [],
+          "mappedType": "string"
+        },
+        "occupation": {
+          "name": "occupation",
+          "type": "text",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "collation": null,
+          "enumItems": [],
+          "mappedType": "text"
+        },
+        "password_hash": {
+          "name": "password_hash",
+          "type": "text",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "collation": null,
+          "enumItems": [],
+          "mappedType": "text"
         },
         "phone_number": {
           "name": "phone_number",
@@ -141,6 +243,23 @@
           "collation": null,
           "enumItems": [],
           "mappedType": "uuid"
+        },
+        "referral_code": {
+          "name": "referral_code",
+          "type": "text",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "collation": null,
+          "enumItems": [],
+          "mappedType": "text"
         },
         "status": {
           "name": "status",
@@ -193,6 +312,23 @@
           "enumItems": [],
           "mappedType": "bigint"
         },
+        "username": {
+          "name": "username",
+          "type": "text",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "unique": true,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "collation": null,
+          "enumItems": [],
+          "mappedType": "text"
+        },
         "version": {
           "name": "version",
           "type": "int",
@@ -209,9 +345,35 @@
           "collation": null,
           "enumItems": [],
           "mappedType": "integer"
+        },
+        "video_key": {
+          "name": "video_key",
+          "type": "text",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "collation": null,
+          "enumItems": [],
+          "mappedType": "text"
         }
       },
       "indexes": [
+        {
+          "columnNames": ["national_code"],
+          "composite": false,
+          "constraint": false,
+          "keyName": "enrollments_national_code_active_unique",
+          "primary": false,
+          "unique": true,
+          "where": "national_code IS NOT NULL AND status <> 'EXPIRED'"
+        },
         {
           "columnNames": ["phone_number"],
           "composite": false,
@@ -236,6 +398,15 @@
           "keyName": "enrollments_public_id_unique",
           "primary": false,
           "unique": true
+        },
+        {
+          "columnNames": ["username"],
+          "composite": false,
+          "constraint": false,
+          "keyName": "enrollments_username_active_unique",
+          "primary": false,
+          "unique": true,
+          "where": "username IS NOT NULL AND status <> 'EXPIRED'"
         }
       ],
       "checks": [
@@ -250,6 +421,26 @@
           "definition": "check (current_step in ('NATIONAL_CODE', 'FULL_NAME', 'BIRTH_DATE', 'REFERRAL_CODE', 'USERNAME', 'PASSWORD', 'OCCUPATION', 'VIDEO_VERIFICATION', 'COMPLETED'))"
         },
         {
+          "name": "enrollments_first_name_length",
+          "expression": "char_length(first_name) <= 50",
+          "definition": "check (char_length(first_name) <= 50)"
+        },
+        {
+          "name": "enrollments_last_name_length",
+          "expression": "char_length(last_name) <= 50",
+          "definition": "check (char_length(last_name) <= 50)"
+        },
+        {
+          "name": "enrollments_national_code_format",
+          "expression": "national_code ~ '^[0-9]{10}$'",
+          "definition": "check (national_code ~ '^[0-9]{10}$')"
+        },
+        {
+          "name": "enrollments_occupation_length",
+          "expression": "char_length(occupation) <= 100",
+          "definition": "check (char_length(occupation) <= 100)"
+        },
+        {
           "name": "enrollments_phone_number_format",
           "expression": "phone_number ~ '^09[0-9]{9}$'",
           "definition": "check (phone_number ~ '^09[0-9]{9}$')"
@@ -260,9 +451,24 @@
           "definition": "check (uuid_extract_version(public_id) = 7)"
         },
         {
+          "name": "enrollments_referral_code_length",
+          "expression": "char_length(referral_code) <= 20",
+          "definition": "check (char_length(referral_code) <= 20)"
+        },
+        {
           "name": "enrollments_status_valid",
           "expression": "status in ('INITIAL', 'IN_PROGRESS', 'PENDING_REVIEW', 'REJECTED', 'APPROVED', 'EXPIRED')",
           "definition": "check (status in ('INITIAL', 'IN_PROGRESS', 'PENDING_REVIEW', 'REJECTED', 'APPROVED', 'EXPIRED'))"
+        },
+        {
+          "name": "enrollments_username_format",
+          "expression": "username ~ '^[a-z0-9._-]{3,30}$'",
+          "definition": "check (username ~ '^[a-z0-9._-]{3,30}$')"
+        },
+        {
+          "name": "enrollments_video_key_length",
+          "expression": "char_length(video_key) <= 500",
+          "definition": "check (char_length(video_key) <= 500)"
         }
       ],
       "triggers": [],

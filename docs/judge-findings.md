@@ -3160,3 +3160,85 @@ conflicts).
   request cannot influence those fields). No exploit path today. **Deferred**
   — recorded as `DEFERRED.md` _060 entry 4, binding for the Phase 4/5 write
   path.
+
+## Wave 33 — Phase 3 implementation code review (_061, code-reviewer, 2026-11-22) — CHANGES_REQUIRED
+
+Scope: enums, entity, entity spec, db-spec, the new parity and lifecycle
+specs, and the db-tier config. Migration reviewed separately (Wave 30
+fallback; Phase 3 migration `Migration20261122011051` reviewed by the
+dedicated `migration-reviewer` — APPROVED, zero findings, first run of that
+agent on this platform).
+
+- **CR-01 (High, Test correctness) — username-unique test collides on the
+  round-trip test's row, never exercising its own `shared.user`
+  fixture.** **Resolved** — second insert reuses `shared.user`; the fixture
+  is now the collision target.
+- **CR-02 (Medium, Test infrastructure) — the parity spec's hand-maintained
+  `migrationsList` can silently drift** (a fourth migration would never be
+  replayed; `getPending()` stays 0). **Resolved** — the spec now asserts the
+  list names against the `Migration*.ts` files on disk (`readdirSync`), so
+  adding a migration without updating the list fails loudly.
+- **CR-03 (Low, DRY) — phone format duplicated** (entity CHECK literal +
+  Zod `IRANIAN_MOBILE_PATTERN`) despite the enums single-source claim.
+  **Partially resolved** — `ENROLLMENT_PHONE_NUMBER_FORMAT` added to the
+  enums and the entity CHECK composes from it; deriving the Zod pattern
+  from the constant is **deferred** (`DEFERRED.md` _061 entry 1, touches the
+  validation layer — Phase 6 scope).
+- **CR-04 (Low, Test quality) — parity tier skips `status`/`current_step`
+  defaults and CHECK expression bodies.** **Partially resolved** — defaults
+  and the remaining column types asserted; the full expression-body
+  comparison (`pg_get_constraintdef` vs metadata, normalized) is
+  **deferred** (`DEFERRED.md` _061 entry 2).
+- **CR-05 (Low, Consistency) — occupied-status list hardcoded** instead of
+  deriving from `ENROLLMENT_STATUSES`. **Resolved** — derived via filter
+  with the named constants.
+- **CR-06 (Low, Formatting) — mis-formatted object literal** left by the
+  rewrite script. **Resolved** — oxfmt run over the file.
+- **CR-07 (Low, DRY) — `createProbeApp` duplicated verbatim** across the
+  enrollment and lifecycle db-specs. **Resolved** — extracted to
+  `test/create-probe-app.ts` with the override rationale in one place.
+- **CR-08 (Low, Documentation) — stale file header** in the enrollment
+  db-spec (still says "ADR-041 core data model / four check constraints").
+  **Resolved** — header updated to the ADR-041+042 coverage.
+- **CR-09 (Low, Documentation; iteration 2) — `create-probe-app.ts` docblock
+  mis-cited the parity suite as a consumer** (it initializes MikroORM
+  directly). **Resolved** — docblock corrected to name the two real
+  consumers and note the parity exception. Verdict after iteration 2:
+  APPROVED_WITH_SUGGESTIONS.
+
+## Wave 34 — Phase 3 implementation security review (_061, code-security-analyzer, 2026-11-22) — SECURITY_APPROVED_WITH_INFORMATIONAL_FINDINGS
+
+Scope: entity, enums, migration, test tiers, shared helper. The analyzer
+confirmed end-to-end that the HTTP trust boundary is unchanged (the entity
+has no importer outside its module; no raw writes to `enrollments` in
+`src`), the fixture SQL is fully parameterized with only compile-time
+constants in DDL composition, the `readdirSync` drift check has no
+silent-pass path, the two new partial unique indexes are race-safe at the
+database layer, and the ASCII username charset blocks case-folding bypasses.
+All four findings are informational and forward-looking — persisted per the
+developer's standing rule:
+
+- **SEC-01 (Informational, CWE-312) — national code plaintext PII with
+  indefinite retention.** Pre-existing developer-deferred posture; the
+  change does not worsen it (column inert). **Tracked** — scope note added
+  to the `DEFERRED.md` _051 data-protection entry (Phase 6 write path must
+  decide retention/backup/encryption for `national_code` explicitly).
+- **SEC-02 (Informational, CWE-20) — `passwordHash` unbounded by design**
+  (application-generated column; a Phase 6 regression could persist
+  unbounded client input silently). **Deferred** — `DEFERRED.md` _061
+  entry 3: Phase 6 adds a bounded hash invariant at the Zod→service
+  boundary plus a test proving client input never reaches the column
+  verbatim.
+- **SEC-03 (Informational, CWE-672) — identifier release depends entirely
+  on the future persisted-status transition** (time-based expiry alone
+  releases nothing; stale INITIAL rows could squat identities if the write
+  path ships without reliable expiration). **Deferred** — `DEFERRED.md`
+  _061 entry 4: the expiration transition is a security-relevant dependency
+  of identifier release and must land with (or before) the first write path.
+- **SEC-04 (Informational, CWE-204) — identity-collision error mapping
+  becomes an enumeration decision in Phase 6** (distinct
+  national-code-taken responses enable third-party national-code
+  enumeration; username-taken disclosure is standard UX). **Deferred** —
+  `DEFERRED.md` _061 entry 5: generic indistinguishable national-code
+  collision handling per Error Response Security, rate limiting on step
+  submission, and a deliberate username reservation policy.

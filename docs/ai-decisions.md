@@ -688,3 +688,44 @@ requires developer approval before any ADR is created.
   swap; snapshot regeneration).
 - **ADR Recommendation:** None — implementation mechanics of the accepted
   ADR-041; no new architectural surface.
+
+### 35. Enrollment step-data model implementation choices (_061, ADR-042, Enrollment Phase 3)
+
+- **Context:** implementing ADR-042 raised a testing-strategy choice (how
+  the new migration-replay parity tier integrates) and several
+  test-contract details the ADR left open.
+- **Decision:** the parity spec boots its own MikroORM instance with an
+  explicit `migrationsList` of migration classes (no snapshot, no
+  filesystem globs) and asserts the same information_schema shape the
+  metadata tier asserts — divergence between migrations and metadata now
+  fails a tier on every run. The occupied-status test asserts a combined
+  regex matching either active-unique constraint (the identity pair
+  violates both; PostgreSQL reports whichever check fires first — either
+  proves the invariant, documented in the assertion). Format strings
+  (`ENROLLMENT_NATIONAL_CODE_FORMAT`, `ENROLLMENT_USERNAME_FORMAT`) and
+  `ENROLLMENT_STEP_FIELD_MAX_LENGTHS` live once in `enrollments.enums.ts`,
+  consumed by both the SQL CHECK composition and the Phase 6 Zod schemas.
+  The db-tier vitest config carries `hookTimeout: 30000`.
+- **Reasoning:** an explicit migrationsList avoids the CLI snapshot
+  machinery entirely inside tests (the snapshot-poisoning gotcha from
+  `_060`); the combined regex keeps the test honest about the invariant it
+  proves instead of asserting a PG-internal index ordering; the shared
+  format strings are the single source the master prompt's DRY rule
+  demands.
+- **Alternatives considered:** diffing the migration-built schema against
+  a `schema.create()`-built schema (rejected — indirect; direct shape
+  assertions are readable and fail with precise messages); asserting only
+  the national-code constraint in the occupied-status test (rejected —
+  would encode PG-internal ordering); duplicating the patterns in the
+  Zod schemas (rejected — drift risk).
+- **Trade-offs:** the parity spec duplicates the shape assertions in
+  textual form (kept deliberately self-contained, mirroring the db-spec
+  file pattern); a combined-regex failure message names one of two
+  constraints.
+- **Impact:** `test/migrations-parity.db-spec.ts` (new),
+  `test/database-lifecycle.db-spec.ts` (new),
+  `test/vitest-db.config.ts`, `enrollments.enums.ts`; v7 init gotchas are
+  encoded as comments in the parity spec.
+- **Reversibility:** trivial — spec files are additive; config is one key.
+- **ADR Recommendation:** None — testing-infrastructure choices within the
+  accepted ADR-042 scope.

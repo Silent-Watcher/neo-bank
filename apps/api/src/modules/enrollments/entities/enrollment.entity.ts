@@ -6,11 +6,15 @@ import { BaseEntity } from '#database/base.entity.js';
 import {
   ENROLLMENT_INITIAL_STATUS,
   ENROLLMENT_INITIAL_STEP,
+  ENROLLMENT_NATIONAL_CODE_FORMAT,
+  ENROLLMENT_PHONE_NUMBER_FORMAT,
   ENROLLMENT_SCHEMA_CONSTRAINT_NAMES,
   ENROLLMENT_STATUS_EXPIRED,
   ENROLLMENT_STATUSES,
+  ENROLLMENT_STEP_FIELD_MAX_LENGTHS,
   ENROLLMENT_STEPS,
   ENROLLMENT_TTL_MS,
+  ENROLLMENT_USERNAME_FORMAT,
 } from '#modules/enrollments/enrollments.enums.js';
 import type { EnrollmentStatus, EnrollmentStep } from '#modules/enrollments/enrollments.enums.js';
 
@@ -18,18 +22,21 @@ import type { EnrollmentStatus, EnrollmentStep } from '#modules/enrollments/enro
 const checkValues = (values: readonly string[]): string =>
   values.map((value) => `'${value}'`).join(', ');
 
+/** Renders a SQL length CHECK for a prose column (ADR-042). */
+const lengthCheck = (column: string, max: number): string => `char_length(${column}) <= ${max}`;
+
 /**
- * A customer's onboarding application (ADR-041) — not an active bank account
- * and not an authenticated banking identity. Carries the inherited
- * `BaseEntity` columns (ADR-029) and adds the Enrollment core lifecycle
- * fields. The class-level checks and the partial unique index mirror the
- * approved field-constraint matrix; the database is the final enforcement
- * boundary for every invariant.
+ * A customer's onboarding application (ADR-041/042) — not an active bank
+ * account and not an authenticated banking identity. Carries the inherited
+ * `BaseEntity` columns (ADR-029), the Enrollment core lifecycle fields, and
+ * the step-data fields. The class-level checks and the partial unique
+ * indexes mirror the approved field-constraint matrices; the database is
+ * the final enforcement boundary for every invariant.
  */
 @Entity({ tableName: 'enrollments' })
 @Check({
   name: ENROLLMENT_SCHEMA_CONSTRAINT_NAMES.phoneNumberFormat,
-  expression: "phone_number ~ '^09[0-9]{9}$'",
+  expression: `phone_number ~ '${ENROLLMENT_PHONE_NUMBER_FORMAT}'`,
 })
 @Check({
   name: ENROLLMENT_SCHEMA_CONSTRAINT_NAMES.publicIdUuidv7,
@@ -43,6 +50,34 @@ const checkValues = (values: readonly string[]): string =>
   name: ENROLLMENT_SCHEMA_CONSTRAINT_NAMES.currentStepValid,
   expression: `current_step in (${checkValues(ENROLLMENT_STEPS)})`,
 })
+@Check({
+  name: ENROLLMENT_SCHEMA_CONSTRAINT_NAMES.nationalCodeFormat,
+  expression: `national_code ~ '${ENROLLMENT_NATIONAL_CODE_FORMAT}'`,
+})
+@Check({
+  name: ENROLLMENT_SCHEMA_CONSTRAINT_NAMES.usernameFormat,
+  expression: `username ~ '${ENROLLMENT_USERNAME_FORMAT}'`,
+})
+@Check({
+  name: ENROLLMENT_SCHEMA_CONSTRAINT_NAMES.firstNameLength,
+  expression: lengthCheck('first_name', ENROLLMENT_STEP_FIELD_MAX_LENGTHS.firstName),
+})
+@Check({
+  name: ENROLLMENT_SCHEMA_CONSTRAINT_NAMES.lastNameLength,
+  expression: lengthCheck('last_name', ENROLLMENT_STEP_FIELD_MAX_LENGTHS.lastName),
+})
+@Check({
+  name: ENROLLMENT_SCHEMA_CONSTRAINT_NAMES.referralCodeLength,
+  expression: lengthCheck('referral_code', ENROLLMENT_STEP_FIELD_MAX_LENGTHS.referralCode),
+})
+@Check({
+  name: ENROLLMENT_SCHEMA_CONSTRAINT_NAMES.occupationLength,
+  expression: lengthCheck('occupation', ENROLLMENT_STEP_FIELD_MAX_LENGTHS.occupation),
+})
+@Check({
+  name: ENROLLMENT_SCHEMA_CONSTRAINT_NAMES.videoKeyLength,
+  expression: lengthCheck('video_key', ENROLLMENT_STEP_FIELD_MAX_LENGTHS.videoKey),
+})
 @Unique({
   name: ENROLLMENT_SCHEMA_CONSTRAINT_NAMES.phoneActiveUnique,
   properties: ['phoneNumber'],
@@ -53,6 +88,20 @@ const checkValues = (values: readonly string[]): string =>
 @Unique({
   name: ENROLLMENT_SCHEMA_CONSTRAINT_NAMES.publicIdUnique,
   properties: ['publicId'],
+})
+@Unique({
+  name: ENROLLMENT_SCHEMA_CONSTRAINT_NAMES.nationalCodeActiveUnique,
+  properties: ['nationalCode'],
+  // Identifier release (ADR-042): an expired enrollment frees its national
+  // code exactly as it frees its phone number; the other non-expired
+  // statuses keep occupying it.
+  where: `national_code IS NOT NULL AND status <> '${ENROLLMENT_STATUS_EXPIRED}'`,
+})
+@Unique({
+  name: ENROLLMENT_SCHEMA_CONSTRAINT_NAMES.usernameActiveUnique,
+  properties: ['username'],
+  // Identifier release (ADR-042): same semantics as the national code.
+  where: `username IS NOT NULL AND status <> '${ENROLLMENT_STATUS_EXPIRED}'`,
 })
 export class Enrollment extends BaseEntity {
   /**
@@ -106,4 +155,74 @@ export class Enrollment extends BaseEntity {
    */
   @Property({ columnType: 'timestamptz(3)' })
   expiresAt: Date = new Date(this.createdAt.getTime() + ENROLLMENT_TTL_MS);
+
+  /**
+   * Iranian national code (کد ملی, ADR-042): canonical 10-digit storage
+   * with a format CHECK; the checksum algorithm validates at the
+   * application layer (Phase 6). Sensitive plaintext PII — the retention/
+   * backup/encryption decisions stay open in `DEFERRED.md` (_051) until the
+   * first write path. Released when the enrollment expires.
+   */
+  @Property({ columnType: 'varchar(10)' })
+  nationalCode: Opt<string> | null = null;
+
+  /**
+   * Given name (ADR-042): prose with an explicit length contract.
+   */
+  @Property({ columnType: 'text' })
+  firstName: Opt<string> | null = null;
+
+  /**
+   * Family name (ADR-042): prose with an explicit length contract.
+   */
+  @Property({ columnType: 'text' })
+  lastName: Opt<string> | null = null;
+
+  /**
+   * Birth date (ADR-042): PostgreSQL `date` — native validity, application
+   * representation `YYYY-MM-DD`.
+   */
+  @Property({ type: 'date' })
+  birthDate: Opt<string> | null = null;
+
+  /**
+   * Referral code (ADR-042): opaque string with an explicit length
+   * contract; the referral-provider integration is deferred, so no format
+   * CHECK is speculated.
+   */
+  @Property({ columnType: 'text' })
+  referralCode: Opt<string> | null = null;
+
+  /**
+   * Username (ADR-042): stored lowercase-normalized — the application
+   * normalizes to lowercase before persisting (Phase 6); mixed-case input
+   * is rejected by the CHECK rather than silently folded. Released when the
+   * enrollment expires.
+   */
+  @Property({ columnType: 'text' })
+  username: Opt<string> | null = null;
+
+  /**
+   * Password hash (ADR-042): application-generated only (the hashing
+   * implementation belongs to the Phase 6 PASSWORD step); never receives
+   * unvalidated client input, so no length cap is speculated. Plaintext
+   * passwords are never stored.
+   */
+  @Property({ columnType: 'text' })
+  passwordHash: Opt<string> | null = null;
+
+  /**
+   * Occupation (ADR-042): free text per developer decision — no controlled
+   * enumeration until the review workflow defines categories.
+   */
+  @Property({ columnType: 'text' })
+  occupation: Opt<string> | null = null;
+
+  /**
+   * Video verification storage reference (ADR-042): a controlled storage
+   * key, not an arbitrary client-provided URL; the upload integration is
+   * deferred, so only the length contract applies.
+   */
+  @Property({ columnType: 'text' })
+  videoKey: Opt<string> | null = null;
 }

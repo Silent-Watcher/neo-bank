@@ -2212,3 +2212,55 @@ PostgreSQL integration tests (Testcontainers, ADR-016) must prove: two active en
 - Master prompt §3.1/3.2/3.4/§7.1–7.4/§8.1/§8.5, Phase 2; Phase 0 supersession (root `AGENTS.md` → "Neo Bank Business Domain")
 - ADR-040 (PostgreSQL 18.7 native `uuidv7()`), ADR-033 (migration immutability), ADR-039 (idempotency scope built on the same normalization seam)
 - `DEFERRED.md` _051 entry (PII protection decisions — still open, unchanged by this ADR); `prompts/_060-...md` (Phase 2 record)
+
+## ADR-042: Enrollment Step Data Model — Canonical Identity Columns, Uniqueness with Expired Release, and Type Contracts
+
+- **Status:** Accepted
+- **Date:** 2026-11-22
+
+### Context
+
+Phase 3 of the Enrollment master prompt adds the onboarding step-data fields to `enrollments`: `nationalCode`, `firstName`, `lastName`, `birthDate`, `referralCode`, `username`, `passwordHash`, `occupation`, `videoKey`. All remain nullable while the enrollment is incomplete (fields land as collected; the lifecycle never backfills). The master prompt requires explicit developer decisions before the uniqueness indexes exist: national-code validation semantics (§8.2), username case-sensitivity and canonicalization (§8.3), confirmation of the proposed field lengths (§7.5), and whether occupation is free text or a controlled enumeration (§14.7). An expired enrollment must release its `national_code` and `username` exactly as it releases its phone number. Legacy data: the table still holds 0 rows. The type-contract precedent comes from ADR-041 (fixed-format identifiers get exact `varchar(n)`; prose got `text` after the developer directed `text` over plain `varchar`).
+
+### Decision
+
+1. **National code (`کد ملی`) is `varchar(10)` + `CHECK (national_code ~ '^[0-9]{10}$')`** (developer-approved: format-only DB CHECK). The Iranian weighted-mod-11 checksum algorithm validates at the application layer (Zod, Phase 6 step submission) — a DB-side checksum CHECK would be an opaque SQL expression out of scale for a pre-launch table. Uniqueness: partial unique index `WHERE national_code IS NOT NULL AND status <> 'EXPIRED'` — a national code cannot be assigned to another non-expired enrollment; `EXPIRED` releases it; `PENDING_REVIEW`, `REJECTED`, and `APPROVED` still occupy it.
+2. **Usernames are stored lowercase-normalized** (developer-approved): `text` + `CHECK (username ~ '^[a-z0-9._-]{3,30}$')` — one canonical form, mirroring the phone decision. The application normalizes to lowercase before persisting (Phase 6); no `citext`, no `lower()` expression index — the uniqueness is a plain partial unique index `WHERE username IS NOT NULL AND status <> 'EXPIRED'`. Mixed-case or out-of-charset input is rejected by the CHECK rather than silently folded.
+3. **Type contracts** (developer-approved): fixed-format identifiers get exact `varchar(n)` (`national_code` varchar(10)); free-text/prose fields get `text` + `CHECK (char_length(...) <= n)` — `first_name` 50, `last_name` 50, `referral_code` 20, `occupation` 100, `video_key` 500; `birth_date` is PostgreSQL `date` (native validity, application representation `YYYY-MM-DD`); `password_hash` is `text` with no length CHECK (application-generated only — it never receives unvalidated client input, so no speculative cap). All nine columns nullable; no database defaults; no backfill needed.
+4. **Constraint names extend the single source** in `enrollments.enums.ts` (`ENROLLMENT_SCHEMA_CONSTRAINT_NAMES` gains the national-code format, username format, five length checks, and the two active-unique index names); the entity decorators and both verification specs reference the constants, and the applied migration carries identical literals (immutability respected).
+5. **Migration discipline (ADR-033):** one new forward migration adds the columns, CHECKs, and the two partial unique indexes; `down()` is the exact reverse (drop indexes/constraints, drop columns). Every nullable column makes the migration online-safe regardless of row count; the migration passes the migration-review gate before execution.
+
+### Options Considered
+
+- **DB-side national-code checksum CHECK:** rejected — an opaque expression in the migration for a check the application must own anyway (user-facing error messaging belongs to Zod); the format CHECK still bounds the domain.
+- **Case-sensitive usernames with a `lower(username)` expression index:** rejected — preserves two spellings of one username alive in the table; the lowercase-normalized store gives one canonical form and a plain index.
+- **`citext` extension:** rejected — adds an extension dependency the stack deliberately avoids (native PostgreSQL only, ADR-040/041).
+- **`varchar(n)` for every bounded field:** rejected — arbitrary type-level limits on prose; `text` + length CHECK is the idiom chosen in Phase 2 for prose (and carried further here per developer direction).
+- **Unbounded `text` for all prose (no length CHECKs):** rejected — the master prompt's constraint discipline requires an intentional contract per field; the approved lengths become CHECKs.
+- **Controlled occupation enumeration:** rejected (developer decision) — no business source for the value set exists yet; free text up to 100 chars; revisit when the review workflow defines categories.
+
+### Rationale
+
+Every identity concept gets one canonical persisted form and a database-enforced uniqueness bound that expires on exactly the same predicate as the phone number; every prose field gets an explicit length contract without speculative structure. The decisions keep Phase 6 (step submission APIs) free of any new storage-layer surprises: the CHECKs mirror what Zod will enforce.
+
+### Security Assessment
+
+The national-code and username CHECKs bound the stored domain, so the partial unique indexes operate on canonical values only. `password_hash` stays nullable, unbounded, and application-generated — plaintext passwords are never stored (the hashing implementation belongs to the Phase 6 PASSWORD step). The plaintext-PII posture is unchanged: `national_code` is sensitive PII and its retention/backup/encryption decisions remain open in `DEFERRED.md` (_051 entry), to be resolved with the first write path. No new trust boundary is introduced; no endpoint changes.
+
+### Performance Implications
+
+Two additional partial unique indexes (small — they exclude `EXPIRED` rows and NULL-NULL columns); `date` and `text` columns add negligible storage. The `char_length` CHECKs evaluate only on writes to the column.
+
+### Operational Implications
+
+No runtime configuration. All columns nullable → the migration is safe at any row count; the exact-reverse `down()` restores the Phase-2 shape. The uniqueness release semantics (`EXPIRED` frees `national_code`/`username`) are the same lifecycle behavior the phone number already follows.
+
+### Testing and Migration Implications
+
+PostgreSQL integration tests must prove: two active enrollments cannot share a `national_code` or `username`; an expired enrollment releases both (a replacement may claim them; multiple historical EXPIRED rows may share); `PENDING_REVIEW`/`REJECTED`/`APPROVED` still occupy; CHECK violations reject non-10-digit national codes, out-of-charset or out-of-range usernames; `char_length` CHECKs reject over-length prose; `birth_date` round-trips as `YYYY-MM-DD`; nullable defaults hold for a minimal create; and the full-column metadata contract. A Migrator-based parity smoke test (DEFERRED _060 entry 1) is implemented in this phase: migrations replayed from zero on a fresh Testcontainers PostgreSQL must produce the same schema shape the metadata tier asserts.
+
+### References
+
+- Master prompt §7.5 (step data), §8.2/8.3 (uniqueness), §8.5 (legacy), §12 Phase 3, §14.5–7 (approval gates); prompt record `_061`
+- ADR-041 (type-contract precedent, constraint-name single source), ADR-040 (PG 18.7), ADR-033 (migration immutability)
+- `DEFERRED.md` _051 (national code is PII — protection decisions still open); `DEFERRED.md` _060 entries 1–2 (implemented in this phase)

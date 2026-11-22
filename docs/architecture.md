@@ -147,10 +147,22 @@ repository (not a Turbo task), so formatting is repository-wide.
   version-7 CHECK — the only client-visible identifier), `status` and
   `current_step` (CHECK-constrained text lifecycle values, defaults
   `INITIAL` and `NATIONAL_CODE`), and `expires_at` (`timestamptz(3)` NOT
-  NULL, application-set `createdAt` + 24 h, no database default). A partial
+  NULL, application-set `createdAt` + 24 h, no database default) plus the
+  ADR-042 step-data fields, all nullable with no database defaults:
+  `national_code` (Iranian national code, `varchar(10)` format CHECK) and
+  `username` (lowercase-normalized, CHECK `^[a-z0-9._-]{3,30}$`) as identity
+  columns, prose fields with `char_length` CHECKs (`first_name`/`last_name`
+  ≤ 50, `referral_code` ≤ 20, `occupation` ≤ 100, `video_key` ≤ 500),
+  `birth_date` (native PostgreSQL `date`, application representation
+  `YYYY-MM-DD`), and `password_hash` (text, application-generated only —
+  hashing lands in Phase 6). A partial
   unique index (`WHERE status <> 'EXPIRED'`) enforces the
-  one-non-expired-Enrollment-per-phone invariant. Two migrations
-  (`Migration20261116181139`, `Migration20261122000737`) are applied to the
+  one-non-expired-Enrollment-per-phone invariant, and matching partial
+  unique indexes on `national_code` and `username`
+  (`WHERE <column> IS NOT NULL AND status <> 'EXPIRED'`) release those
+  identifiers when an enrollment expires. Three migrations
+  (`Migration20261116181139`, `Migration20261122000737`,
+  `Migration20261122011051`) are applied to the
   dev PostgreSQL; migrations are immutable and gated by the dedicated
   `migration-reviewer` subagent (ADR-033). A UTC-first TIMESTAMPTZ storage
   policy ([ADR-030](../DECISIONS.md)) governs
@@ -169,8 +181,8 @@ repository (not a Turbo task), so formatting is repository-wide.
 - The persistence layer has no feature writes yet: MikroORM v7 and
   PostgreSQL are wired in (ADR-027) with migrations configured, and the
   first feature entity exists (`Enrollment`, table `enrollments`, ADR-029
-  base columns plus the ADR-041 core lifecycle schema), but no application
-  flow persists rows.
+  base columns plus the ADR-041 core lifecycle schema and the ADR-042
+  step-data schema), but no application flow persists rows.
 - No authentication/authorization anywhere.
 - The frontends are scaffolds: no routing beyond the index page, no state
   management, no styling system, no tests.

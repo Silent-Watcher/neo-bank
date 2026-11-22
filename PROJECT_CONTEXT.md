@@ -25,8 +25,9 @@ Frontends contain no API client code; client→API communication is not
 implemented. No authentication/authorization, no shared types. The API has a
 PostgreSQL persistence layer (MikroORM v7, ADR-027): the shared `BaseEntity`
 (ADR-029) and the first feature entity — `Enrollment` (table `enrollments`,
-ADR-041 core schema; migrations `Migration20261116181139` and
-`Migration20261122000737` applied to dev) — exist, and Redis remains the
+ADR-041 core schema plus the ADR-042 step-data schema; migrations
+`Migration20261116181139`, `Migration20261122000737`, and
+`Migration20261122011051` applied to dev) — exist, and Redis remains the
 only store feature code uses.
 
 ## API Architecture (`apps/api`)
@@ -90,7 +91,10 @@ Core contracts:
   the ADR-041 core lifecycle schema — canonical `09XXXXXXXXX` phone storage,
   database-native uuidv7 `public_id`, CHECK-constrained `status`/
   `current_step`, application-set 24-hour `expires_at`, and the
-  one-active-per-phone partial unique index — and migrations are immutable
+  one-active-per-phone partial unique index — plus the ADR-042 step-data
+  schema (national code and username identity columns with format CHECKs and
+  expired-release unique indexes, prose fields with length CHECKs, birth
+  date, password hash), and migrations are immutable
   and migration-reviewer-gated (ADR-033); no feature flow persists rows yet.
 - **Logging:** Pino only (ADR-008/009); JSON in production, pretty in dev,
   `LOG_PRETTY` override; never `console.log`, never log OTPs/secrets.
@@ -134,7 +138,8 @@ Core contracts:
   Ops: `docs/docker.md`.
 - **Database:** PostgreSQL persistence layer in the API (MikroORM v7,
   ADR-027) — first feature entity `Enrollment` (table `enrollments`,
-  ADR-041 core schema, migrations applied to dev) with the shared
+  ADR-041 core schema plus the ADR-042 step-data schema, 3 migrations
+  applied to dev) with the shared
   `BaseEntity` in place (ADR-029);
   the dev/prod
   Compose stacks provide the server (containers pinned to UTC, ADR-030) and
@@ -171,7 +176,7 @@ Core contracts:
 | `docs/api.md`                               | Human-readable API reference (nestbruno route inventory + source-verified contracts) |
 | `docs/current-state.md`                     | Feature/state snapshot (verified per feature)                                        |
 | `docs/utc-datetime.md`                      | UTC-first date/time storage policy and usage guide (ADR-030)                         |
-| `DECISIONS.md`                              | ADR-001…ADR-041, all Accepted                                                        |
+| `DECISIONS.md`                              | ADR-001…ADR-042, all Accepted                                                        |
 | `docs/docker.md`                            | Docker stacks: setup, env files, commands                                            |
 | `docs/observability/README.md`              | Monitoring stack operations                                                          |
 | `docs/observability/manual-testing.md`      | Reproducible monitoring verification scenarios                                       |

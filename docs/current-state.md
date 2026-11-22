@@ -117,13 +117,32 @@ its shared entity base plus the first feature entity (`Enrollment`, table
   steps), and `expires_at` (`timestamptz(3)` NOT NULL, application-set
   `createdAt` + 24 h from one clock reading, deliberately no database
   default). The value lists and defaults come from the single-source enums
-  (`enrollments.enums.ts`). Two migrations are applied to the dev Compose
-  PostgreSQL: `Migration20261116181139` created the table and
+  (`enrollments.enums.ts`), which also carry the ADR-042 step-schema
+  contracts (`ENROLLMENT_NATIONAL_CODE_FORMAT`, `ENROLLMENT_USERNAME_FORMAT`,
+  `ENROLLMENT_STEP_FIELD_MAX_LENGTHS`, and the extended
+  `ENROLLMENT_SCHEMA_CONSTRAINT_NAMES`). The entity additionally carries the
+  ADR-042 step-data fields (all nullable, no database defaults):
+  `national_code` (Iranian national code کد ملی, `varchar(10)` with a format
+  CHECK — sensitive plaintext PII whose retention/backup decisions stay open
+  per `DEFERRED.md`), `username` (text, stored lowercase-normalized, CHECK
+  `^[a-z0-9._-]{3,30}$`), prose fields with `char_length` CHECKs
+  (`first_name`/`last_name` ≤ 50, `referral_code` ≤ 20, `occupation` ≤ 100
+  free text per developer decision, `video_key` ≤ 500), `birth_date` (native
+  PostgreSQL `date`, application representation `YYYY-MM-DD`), and
+  `password_hash` (text, no length cap — application-generated only; hashing
+  lands in Phase 6). Partial unique indexes on `national_code` and
+  `username` (`WHERE <column> IS NOT NULL AND status <> 'EXPIRED'`) release
+  those identifiers when an enrollment expires, with the same semantics as
+  the phone number. Three migrations are applied to the dev Compose
+  PostgreSQL: `Migration20261116181139` created the table,
   `Migration20261122000737` added the lifecycle columns and constraints,
   narrowed `phone_number` to `varchar(11)`, and created the
   `enrollments_phone_active_unique` partial unique index
   (`WHERE status <> 'EXPIRED'`) that — together with the class-level CHECKs
-  — enforces the one-non-expired-Enrollment-per-phone invariant (ADR-041).
+  — enforces the one-non-expired-Enrollment-per-phone invariant (ADR-041),
+  and `Migration20261122011051` added the ADR-042 step-data columns, their
+  format/length CHECKs, and the national-code/username identifier-release
+  partial unique indexes.
 - Shared entity base and actor audit context (ADR-029): abstract `BaseEntity`
   (`src/shared/database/base.entity.ts`) inlined into every future entity —
   BIGINT `bigserial` id (TypeScript `string`, propagated `id > 0` check),
@@ -323,17 +342,26 @@ its shared entity base plus the first feature entity (`Enrollment`, table
   parameter and the bodyless `304` only for decorator-marked JSON-success
   GET operations (`x-conditional-get`); proxy trust is optionally narrowed
   by `TRUST_PROXY_PROXIES` (see the env table in `apps/api/ONBOARDING.md`).
-- Tests: Vitest unit (54 files / 504 tests), e2e (17 files / 115 tests), Redis
+- Tests: Vitest unit (54 files / 505 tests), e2e (17 files / 115 tests), Redis
   integration (6 files / 89 tests via `pnpm test:redis`), database
-  integration (4 files / 36 tests via `pnpm test:db`,
-  ADR-027/029/030/031/036/041 — `base-entity.db-spec.ts`,
+  integration (6 files / 49 tests via `pnpm test:db`,
+  ADR-027/029/030/031/033/034/036/041/042 — `base-entity.db-spec.ts`,
   `enrollment.db-spec.ts` (the first feature entity: schema shape, the
   persistence round-trip with the database-generated version-7 `public_id`,
-  the one-active-per-phone invariant, and the database-enforced column
-  contracts), `database.db-spec.ts`,
+  the one-active-per-phone invariant, the ADR-042 step-data columns, and the
+  database-enforced column contracts), `database.db-spec.ts`,
   `database-health.db-spec.ts` (bounded probe: deadline eviction, exactly-once
   client release, single-flight/TTL cache, forced-failure recovery, and the
-  Toxiproxy established-connection black-hole proof)). All integration
+  Toxiproxy established-connection black-hole proof),
+  `migrations-parity.db-spec.ts` (migration-replay parity: replays every
+  migration from zero through the real Migrator against a fresh container
+  and asserts the same schema shape the metadata tier asserts, closing the
+  entity↔migration gap mechanically on every run), and
+  `database-lifecycle.db-spec.ts` (pool-lifecycle logger registration and
+  detach/reattach — relocated out of `enrollment.db-spec.ts` so the
+  enrollment suite stays about the data model)). The database tier's Vitest
+  config sets `hookTimeout: 30000` (`test/vitest-db.config.ts`) because
+  container boots under Docker load can exceed the 10 s default. All integration
   and e2e tests use Testcontainers (`apps/api/test/testcontainers.ts`,
   ADR-016): the Redis and database integration tiers start isolated
   containers per test file (`redis:8.2-alpine`, `postgres:18.7-alpine`, plus
@@ -350,10 +378,9 @@ its shared entity base plus the first feature entity (`Enrollment`, table
   gates on all of them), and `pnpm test:coverage` adds unit-tier coverage
   (`@vitest/coverage-v8`, text/html/lcov reports under `apps/api/coverage/`;
   measured baseline ≈ 75% statements). Future workspaces join the pipeline
-  by exposing the conventional `test`/`test:coverage` scripts. Unit and
-  database counts verified 2026-11-22 (unit 504/504, database 36/36); e2e
-  and Redis counts verified 2026-11-20 (e2e 115/115, Redis 89/89);
-  integration-tier runs through the new
+  by exposing the conventional `test`/`test:coverage` scripts. All four tiers
+  verified 2026-11-22 (unit 505/505, database 49/49, e2e 115/115,
+  Redis 89/89); integration-tier runs through the new
   orchestration and the pre-push failure proof are pending per
   `prompts/_052-*.md` (registry outage).
 
@@ -362,6 +389,8 @@ its shared entity base plus the first feature entity (`Enrollment`, table
 - `enrollments` module: the OTP is generated, stored (120s TTL), and
   verified atomically; the `Enrollment` entity carries the full ADR-041 core
   schema (lifecycle columns and the one-active-per-phone invariant index)
+  plus the ADR-042 step-data schema (identity, prose, birth-date, and
+  password-hash columns with their CHECKs and identifier-release indexes),
   and its `enrollments` table exists (registered via `forFeature`), but no
   flow writes rows yet — SMS delivery and the registration flow after
   verification are planned.
@@ -416,9 +445,10 @@ configuration errors are not retried), while post-boot outages keep
 degraded-liveness/strict-readiness health, and a pool-level lifecycle
 logger records new connections and pool errors (ADR-034); explicit
 migrations only (immutable, migration-reviewer-gated — ADR-033); the first
-feature entity `Enrollment` (table `enrollments`, ADR-041 core schema) exists
-with migrations `Migration20261116181139` and `Migration20261122000737`
-applied to dev; the dev and prod Compose stacks
+feature entity `Enrollment` (table `enrollments`, ADR-041 core schema plus
+the ADR-042 step-data schema) exists with migrations
+`Migration20261116181139`, `Migration20261122000737`, and
+`Migration20261122011051` applied to dev; the dev and prod Compose stacks
 inject `DATABASE_URL` into the API service and pin the PostgreSQL services
 to UTC (`TZ: UTC`, ADR-030 — the Testcontainers test image does the same).
 The development Compose stack runs
@@ -510,6 +540,6 @@ Per-app commands are listed in each `apps/<app>/ONBOARDING.md`.
 
 All ADRs live in [DECISIONS.md](../DECISIONS.md). Status as of this snapshot:
 
-- **Accepted:** ADR-001 (Turborepo), ADR-002 (Fastify — superseded by ADR-032), ADR-003 (SWC), ADR-004 (@nestjs/config + Zod), ADR-005 (URI versioning), ADR-006 (1 MiB body limit), ADR-007 (`api` prefix), ADR-008/009 (Pino / nestjs-pino), ADR-010 (UUIDv4 request IDs), ADR-011 (envelope exclusions), ADR-012 (ioredis without a wrapper), ADR-013 (Redis module architecture), ADR-014 (Swagger/OpenAPI, development-only), ADR-015 (Global HTTP rate limiting with Redis-backed @nestjs/throttler), ADR-016 (Testcontainers for integration and e2e testing), ADR-017 (OTP verification attempt lockout for enrollment security), ADR-018 (HMAC-SHA-256 digest storage for enrollment OTPs), ADR-019 (OTP verification hardening — conditional attempt counting and challenge identity), ADR-020 (development Redis service migrated to Redis Stack with bundled Redis Insight), ADR-021 (bilingual internationalization en/fa via the official @nestjs/i18n), ADR-022 (centralized logging with Grafana Alloy, Loki, and Grafana), ADR-023 (project-level multi-agent development workflow for ZCode + Claude Code), ADR-024 (MockServer for development-time resilience testing), ADR-025 (managing the e2e Redis with Testcontainers — one shared container per run), ADR-026 (memory-based load shedding and health-aware readiness), ADR-027 (Use MikroORM v7 with PostgreSQL for Persistence), ADR-028 (pgAdmin 4 as the development-only PostgreSQL web UI), ADR-029 (Shared MikroORM BaseEntity with Actor Audit Context and Native Optimistic Locking), ADR-030 (UTC-First TIMESTAMPTZ Storage Policy), ADR-031 (Use nestjs-cls for the Application Actor Context), ADR-032 (Migrate the API HTTP Platform from Fastify to the NestJS NodeAdapter — supersedes ADR-002), ADR-033 (Immutable Migration Policy and Dedicated Migration Reviewer), ADR-034 (Database Connection Lifecycle Logging via the pg Pool), ADR-035 (Centralized Monorepo Test Orchestration, Parallel Execution, and Vitest Coverage via Turborepo), ADR-036 (Bounded, Coalesced Database Health Probes and Explicit PostgreSQL Pool Configuration), ADR-037 (Bounded Redis Commands, Black-Hole Recovery, and Coalesced Redis Health Probes), ADR-038 (Opt-In Conditional GET with RFC 9110 If-None-Match, Hardened ETag Generation, and a 304-Aware Response Envelope), ADR-039 (Redis-Backed Idempotency for the Enrollment Challenge with a Deferred Rate-Limit Enforcement Layer), ADR-040 (PostgreSQL 18 Upgrade for Native UUIDv7 Generation), ADR-041 (Enrollment Core Data Model — Canonical Phone Storage, the One-Active-Per-Phone Invariant, and a Database-Native UUIDv7 Public Identifier).
+- **Accepted:** ADR-001 (Turborepo), ADR-002 (Fastify — superseded by ADR-032), ADR-003 (SWC), ADR-004 (@nestjs/config + Zod), ADR-005 (URI versioning), ADR-006 (1 MiB body limit), ADR-007 (`api` prefix), ADR-008/009 (Pino / nestjs-pino), ADR-010 (UUIDv4 request IDs), ADR-011 (envelope exclusions), ADR-012 (ioredis without a wrapper), ADR-013 (Redis module architecture), ADR-014 (Swagger/OpenAPI, development-only), ADR-015 (Global HTTP rate limiting with Redis-backed @nestjs/throttler), ADR-016 (Testcontainers for integration and e2e testing), ADR-017 (OTP verification attempt lockout for enrollment security), ADR-018 (HMAC-SHA-256 digest storage for enrollment OTPs), ADR-019 (OTP verification hardening — conditional attempt counting and challenge identity), ADR-020 (development Redis service migrated to Redis Stack with bundled Redis Insight), ADR-021 (bilingual internationalization en/fa via the official @nestjs/i18n), ADR-022 (centralized logging with Grafana Alloy, Loki, and Grafana), ADR-023 (project-level multi-agent development workflow for ZCode + Claude Code), ADR-024 (MockServer for development-time resilience testing), ADR-025 (managing the e2e Redis with Testcontainers — one shared container per run), ADR-026 (memory-based load shedding and health-aware readiness), ADR-027 (Use MikroORM v7 with PostgreSQL for Persistence), ADR-028 (pgAdmin 4 as the development-only PostgreSQL web UI), ADR-029 (Shared MikroORM BaseEntity with Actor Audit Context and Native Optimistic Locking), ADR-030 (UTC-First TIMESTAMPTZ Storage Policy), ADR-031 (Use nestjs-cls for the Application Actor Context), ADR-032 (Migrate the API HTTP Platform from Fastify to the NestJS NodeAdapter — supersedes ADR-002), ADR-033 (Immutable Migration Policy and Dedicated Migration Reviewer), ADR-034 (Database Connection Lifecycle Logging via the pg Pool), ADR-035 (Centralized Monorepo Test Orchestration, Parallel Execution, and Vitest Coverage via Turborepo), ADR-036 (Bounded, Coalesced Database Health Probes and Explicit PostgreSQL Pool Configuration), ADR-037 (Bounded Redis Commands, Black-Hole Recovery, and Coalesced Redis Health Probes), ADR-038 (Opt-In Conditional GET with RFC 9110 If-None-Match, Hardened ETag Generation, and a 304-Aware Response Envelope), ADR-039 (Redis-Backed Idempotency for the Enrollment Challenge with a Deferred Rate-Limit Enforcement Layer), ADR-040 (PostgreSQL 18 Upgrade for Native UUIDv7 Generation), ADR-041 (Enrollment Core Data Model — Canonical Phone Storage, the One-Active-Per-Phone Invariant, and a Database-Native UUIDv7 Public Identifier), ADR-042 (Enrollment Step Data Model — Canonical Identity Columns, Uniqueness with Expired Release, and Type Contracts).
 
 All architectural decisions are accepted and implemented. Do not build on rejected alternatives (e.g. do not introduce header versioning or a second logger).

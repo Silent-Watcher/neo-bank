@@ -58,7 +58,7 @@ describe('Enrollment metadata', () => {
     expect(enrollment.collection).toBe('enrollments');
   });
 
-  it('adds exactly the approved core lifecycle properties to the inherited base columns', () => {
+  it('adds exactly the approved core lifecycle and step-data properties to the inherited base columns', () => {
     // Arrange
     const enrollment = orm.em.getMetadata().get(Enrollment);
     const base = orm.em.getMetadata().get(MetadataProbeEntity);
@@ -68,9 +68,58 @@ describe('Enrollment metadata', () => {
     const own = Object.keys(enrollment.properties).filter((name) => !inherited.has(name));
 
     // Assert — the inherited set is inlined and these are the sole additions
-    // (ADR-041 core data model); no inherited property is redeclared as a
-    // distinct definition.
-    expect(own).toEqual(['phoneNumber', 'publicId', 'status', 'currentStep', 'expiresAt']);
+    // (ADR-041 core data model + ADR-042 step data); no inherited property is
+    // redeclared as a distinct definition.
+    expect(own).toEqual([
+      'phoneNumber',
+      'publicId',
+      'status',
+      'currentStep',
+      'expiresAt',
+      'nationalCode',
+      'firstName',
+      'lastName',
+      'birthDate',
+      'referralCode',
+      'username',
+      'passwordHash',
+      'occupation',
+      'videoKey',
+    ]);
+  });
+
+  it('maps every step-data field as nullable with its approved type contract (ADR-042)', () => {
+    // Arrange
+    const properties = orm.em.getMetadata().get(Enrollment).properties;
+
+    // Act & Assert — fixed-format identifiers get exact varchar(n); prose
+    // gets text; birthDate is a native date column carrying YYYY-MM-DD
+    // strings; all nullable, none with database defaults.
+    expect(properties['nationalCode'].columnTypes[0]).toBe('varchar(10)');
+    expect(properties['nationalCode'].nullable ?? false).toBe(true);
+    expect(properties['firstName'].columnTypes[0]).toBe('text');
+    expect(properties['lastName'].columnTypes[0]).toBe('text');
+    expect(properties['birthDate'].columnTypes[0]).toBe('date');
+    expect(properties['birthDate'].runtimeType).toBe('string');
+    expect(properties['referralCode'].columnTypes[0]).toBe('text');
+    expect(properties['username'].columnTypes[0]).toBe('text');
+    expect(properties['passwordHash'].columnTypes[0]).toBe('text');
+    expect(properties['occupation'].columnTypes[0]).toBe('text');
+    expect(properties['videoKey'].columnTypes[0]).toBe('text');
+    for (const name of [
+      'nationalCode',
+      'firstName',
+      'lastName',
+      'birthDate',
+      'referralCode',
+      'username',
+      'passwordHash',
+      'occupation',
+      'videoKey',
+    ] as const) {
+      expect(properties[name].defaultRaw).toBeUndefined();
+      expect(properties[name].default).toBeUndefined();
+    }
   });
 
   it('stores phoneNumber as the canonical national-format varchar(11)', () => {
@@ -139,11 +188,18 @@ describe('Enrollment metadata', () => {
         ENROLLMENT_SCHEMA_CONSTRAINT_NAMES.publicIdUuidv7,
         ENROLLMENT_SCHEMA_CONSTRAINT_NAMES.statusValid,
         ENROLLMENT_SCHEMA_CONSTRAINT_NAMES.currentStepValid,
+        ENROLLMENT_SCHEMA_CONSTRAINT_NAMES.nationalCodeFormat,
+        ENROLLMENT_SCHEMA_CONSTRAINT_NAMES.usernameFormat,
+        ENROLLMENT_SCHEMA_CONSTRAINT_NAMES.firstNameLength,
+        ENROLLMENT_SCHEMA_CONSTRAINT_NAMES.lastNameLength,
+        ENROLLMENT_SCHEMA_CONSTRAINT_NAMES.referralCodeLength,
+        ENROLLMENT_SCHEMA_CONSTRAINT_NAMES.occupationLength,
+        ENROLLMENT_SCHEMA_CONSTRAINT_NAMES.videoKeyLength,
       ]),
     );
   });
 
-  it('declares the partial unique phone index and the public_id unique constraint', () => {
+  it('declares the partial unique identifier indexes and the public_id unique constraint', () => {
     // Arrange
     const uniques = orm.em.getMetadata().get(Enrollment).uniques;
 
@@ -152,7 +208,8 @@ describe('Enrollment metadata', () => {
 
     // Assert — the one-active-per-phone invariant indexes exactly the phone
     // column (a composite unique would weaken it) and predicates on
-    // persisted lifecycle status only (ADR-041).
+    // persisted lifecycle status only (ADR-041); the national code and
+    // username follow the same release semantics (ADR-042).
     expect(byName.get(ENROLLMENT_SCHEMA_CONSTRAINT_NAMES.phoneActiveUnique)).toMatchObject({
       properties: ['phoneNumber'],
     });
@@ -162,5 +219,17 @@ describe('Enrollment metadata', () => {
     expect(byName.get(ENROLLMENT_SCHEMA_CONSTRAINT_NAMES.publicIdUnique)).toMatchObject({
       properties: ['publicId'],
     });
+    expect(byName.get(ENROLLMENT_SCHEMA_CONSTRAINT_NAMES.nationalCodeActiveUnique)).toMatchObject({
+      properties: ['nationalCode'],
+    });
+    expect(
+      String(byName.get(ENROLLMENT_SCHEMA_CONSTRAINT_NAMES.nationalCodeActiveUnique)?.where ?? ''),
+    ).toContain("national_code IS NOT NULL AND status <> 'EXPIRED'");
+    expect(byName.get(ENROLLMENT_SCHEMA_CONSTRAINT_NAMES.usernameActiveUnique)).toMatchObject({
+      properties: ['username'],
+    });
+    expect(
+      String(byName.get(ENROLLMENT_SCHEMA_CONSTRAINT_NAMES.usernameActiveUnique)?.where ?? ''),
+    ).toContain("username IS NOT NULL AND status <> 'EXPIRED'");
   });
 });

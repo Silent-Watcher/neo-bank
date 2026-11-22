@@ -98,15 +98,13 @@ original task requirements and must be addressed in future work.
 ### 1. Migration-Replay Parity Smoke Test (Deferred)
 
 **Origin**: migration review of `Migration20261122000737` (2026-11-22, INFO finding 3 — the dedicated `migration-reviewer` subagent was unavailable on the platform; the review ran through the `code-reviewer` subagent + primary-agent checklist per the documented fallback).
-**Status**: Open.
-**Requirement**: The integration tier builds schema from entity metadata via `MikroORM.schema.create()`, so entity↔migration parity is proven by review only. Add a smoke test that executes the MikroORM `Migrator` against a fresh Testcontainers PostgreSQL (applying all migrations from zero) and asserts the same shape assertions the `schema.create()`-based specs make, closing the entity/migration gap mechanically.
+**Status**: **Done** (2026-11-22, Phase 3 / `_061`) — `apps/api/test/migrations-parity.db-spec.ts` replays every migration from zero through the real Migrator (`migrationsList` with explicit classes, no snapshot) on a fresh Testcontainers PostgreSQL and asserts the same column/constraint/index shape the metadata tier asserts. Gotchas encoded in the spec: v7 API is `orm.migrator` / `migrator.getPending()`; direct `MikroORM.init` needs `metadataProvider: ReflectMetadataProvider` and `clientUrl` (a URL in `dbName` drops the password at SASL).
 **Rationale**: Migration files can drift from entity metadata silently; the review verifies parity once, a Migrator-based spec verifies it on every run.
 
 ### 2. Pool-Lifecycle Test Relocation (Deferred)
 
-**Origin**: code review of `_060` (Wave 31 finding CR-07, 2026-11-22) — `test/enrollment.db-spec.ts` hosts the `DatabaseLifecycleLogger` pool-listener test (ADR-034), which is infrastructure coverage, not Enrollment coverage; it predates this task.
-**Status**: Open.
-**Requirement**: Move the pool-lifecycle test to a lifecycle-focused db-spec (e.g. `test/database-lifecycle.db-spec.ts`, reusing the probe-app pattern) so file purpose and name agree; mind the db-tier cost model (one container per file).
+**Origin**: code review of `_060` (Wave 31 finding CR-07, 2026-11-22) — `test/enrollment.db-spec.ts` hosted the `DatabaseLifecycleLogger` pool-listener test (ADR-034), which is infrastructure coverage, not Enrollment coverage.
+**Status**: **Done** (2026-11-22, Phase 3 / `_061`) — the test moved to `apps/api/test/database-lifecycle.db-spec.ts` (self-contained probe-app pattern); the enrollment db-spec carries only data-model coverage. db-tier `hookTimeout` raised to 30 s (container boots under Docker load exceed the 10 s default).
 **Rationale**: A reader scanning the enrollment suite finds an infrastructure test, and the lifecycle coverage follows the enrollment file's fate in future refactors.
 
 ### 3. Enrollment db-spec Fixture Parameterization (Deferred)
@@ -121,6 +119,43 @@ original task requirements and must be addressed in future work.
 **Status**: Open — binding for the Phase 4/5 Enrollment write path.
 **Requirement**: (a) Construct creation payloads explicitly — `em.create(Enrollment, { phoneNumber: normalizedPhone })` — and never spread request input; create DTOs must exclude `publicId`, `status`, `currentStep`, `createdAt`, and `expiresAt` (SEC-03, CWE-915: a smuggled `status: 'APPROVED'` would satisfy the value-set CHECKs and bypass the lifecycle). Add a regression test asserting a create-path request cannot influence those fields. (b) Document the uuidv7 timestamp trade-off (SEC-01, CWE-359: `publicId` embeds the creation instant to millisecond precision) in the docs of the first endpoint that exposes `publicId`.
 **Rationale**: The database CHECKs validate value sets, not state transitions; payload hygiene at the application boundary is the lifecycle's actual enforcement point until the Phase 4 state machine adds transition guards.
+
+## Mandated by the Enrollment Step Data Model Phase (_061, ADR-042)
+
+### 1. Derive the Zod Phone Pattern from the Shared Format Constant (Deferred)
+
+**Origin**: code review of `_061` (Wave 33 finding CR-03, 2026-11-22) — `ENROLLMENT_PHONE_NUMBER_FORMAT` now single-sources the entity's phone CHECK, but `IRANIAN_MOBILE_PATTERN` in `enrollments.schema.ts` still carries its own `/^09\d{9}$/` literal.
+**Status**: Open — natural fit with the Phase 6 step-submission schemas.
+**Requirement**: Replace the Zod-side pattern literal with one derived from `ENROLLMENT_PHONE_NUMBER_FORMAT` (`new RegExp(...)`, `d` ↔ `[0-9]` equivalence checked against PostgreSQL POSIX behavior), keeping the i18n validation messages intact.
+**Rationale**: A future format change must then land in exactly one place; today the application layer and the database could drift.
+
+### 2. Parity-Tier CHECK Expression-Body Comparison (Deferred)
+
+**Origin**: code review of `_061` (Wave 33 finding CR-04, 2026-11-22) — the parity tier asserts constraint names, column defaults, and types, but not the CHECK expression _bodies_; a migration regression in an expression body would pass both tiers.
+**Status**: Open.
+**Requirement**: Compare `pg_get_constraintdef` output against the metadata `checks[].expression` (normalized — `\$` template-literal escaping, POSIX quoting) in `migrations-parity.db-spec.ts`, closing the entity↔migration parity claim fully.
+**Rationale**: The parity tier currently proves shape, names, defaults, and predicates; expression bodies remain covered by the migration review only.
+
+### 3. Password-Hash Column Bound at the Phase 6 Write Path (Deferred)
+
+**Origin**: security review of `_061` (Wave 34 finding SEC-02, 2026-11-22, CWE-20) — `password_hash` is text with no length cap by design (application-generated only); a Phase 6 regression mapping client input to the column would persist unbounded data with no DB signal.
+**Status**: Open — binding for the Phase 6 PASSWORD step.
+**Requirement**: When the write path lands, add an application-side bounded invariant (named constant for the expected hash format/length, asserted at the Zod→service boundary) or a DB CHECK in that phase's migration, plus a test proving client input never reaches the column verbatim (hashing happens first).
+**Rationale**: The column is inert today; the bound is only meaningful together with the hashing implementation it protects.
+
+### 4. Expiration Transition Is a Security Dependency of Identifier Release (Deferred)
+
+**Origin**: security review of `_061` (Wave 34 finding SEC-03, 2026-11-22, CWE-672) — all three identifier-release predicates key exclusively on persisted `status <> 'EXPIRED'`; time-based expiry alone releases nothing, so stale rows could squat phone numbers, usernames, or national codes if the write path ships without reliable expiration.
+**Status**: Open — binding for the Phase 4/5 write path.
+**Requirement**: The lazy expiration transition (persisted before any rejection, master prompt §3.3/§11.1) must land with — or before — the first Enrollment write path; the future background expiration job (deferred by the master prompt) remains the operational backstop. The DB-side design itself is sound and race-free.
+**Rationale**: Identity-occupation denial of service is the failure mode; the persisted-status transition is the release mechanism the database indexes depend on.
+
+### 5. National-Code Collision Responses Must Be Indistinguishable (Deferred)
+
+**Origin**: security review of `_061` (Wave 34 finding SEC-04, 2026-11-22, CWE-204) — once the write path surfaces unique-violation errors, distinct "national code already enrolled" responses enable third-party national-code enumeration (the format is public knowledge; enrollment presence is sensitive). Username-taken disclosure is standard UX.
+**Status**: Open — binding for the Phase 6 step-submission APIs.
+**Requirement**: Map national-code collisions to the generic, indistinguishable error contract per the root Error Response Security rules (detailed diagnostics in logs only); apply rate limiting to step submission; decide a deliberate username reservation policy (the CHECK charset permits `admin`, `system`, etc.).
+**Rationale**: Bulk verification of national-code enrollment status is a privacy violation against non-consenting third parties; the distinction must be a deliberate Phase 6 design decision, not an accident of constraint-name surfacing.
 
 ---
 

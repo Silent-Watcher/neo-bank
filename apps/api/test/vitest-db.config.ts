@@ -13,5 +13,9 @@ export default defineConfig({
     include: ['**/*.db-spec.ts'],
     environment: 'node',
     fileParallelism: false,
+    // Each db-spec file boots its own Testcontainers container in beforeAll;
+    // under Docker load a boot can exceed the 10s default before the first
+    // hook resolves.
+    hookTimeout: 30000,
   },
 });
