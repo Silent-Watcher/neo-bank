@@ -24,6 +24,7 @@ function loadCatalog(locale: string, namespace: string): Catalog {
 
 const ENGLISH_CATALOG: Record<string, Record<string, unknown>> = {
   common: loadCatalog('en', 'common'),
+  enrollment: loadCatalog('en', 'enrollment'),
   errors: loadCatalog('en', 'errors'),
   health: loadCatalog('en', 'health'),
   otp: loadCatalog('en', 'otp'),
@@ -32,6 +33,7 @@ const ENGLISH_CATALOG: Record<string, Record<string, unknown>> = {
 
 const PERSIAN_CATALOG: Record<string, Record<string, unknown>> = {
   common: loadCatalog('fa', 'common'),
+  enrollment: loadCatalog('fa', 'enrollment'),
   errors: loadCatalog('fa', 'errors'),
   health: loadCatalog('fa', 'health'),
   otp: loadCatalog('fa', 'otp'),

@@ -3242,3 +3242,67 @@ developer's standing rule:
   `DEFERRED.md` _061 entry 5: generic indistinguishable national-code
   collision handling per Error Response Security, rate limiting on step
   submission, and a deliberate username reservation policy.
+
+## Wave 35 — Phase 4 implementation code review (_062, code-reviewer, 2026-11-22) — CHANGES_REQUIRED
+
+Scope: the state machine service/error, error-code extension, bilingual
+catalogs, module registration, unit spec, and the new db-spec integration
+suites. The reviewer verified guard ordering, completion-path state math,
+the §11.1 persist-before-map enforceability question (caller discipline by
+prescribed design — accepted), and error-detail leakage (clean) explicitly.
+
+- **CR-01 (High, Test integrity / type safety) — the new `enrollment` i18n
+  namespace was never registered** in `i18n.types.ts` (typed keys) or
+  `i18n.catalog.spec.ts` (en/fa parity suite), and the detail-key constants
+  were typed plain `string` — key drift could not fail any check, and the
+  Phase 6 mapping call site would need a banned `as I18nKey` cast. **Resolved**
+  — namespace registered in both files; detail-key constants and the error
+  field typed `I18nKey`; the feature record's catalog-validation claim
+  corrected.
+- **CR-02 (Low, Test quality) — the "programming error" channel of
+  `transitionTo` was never exercised through the public API**; the only
+  reachable path is a corrupt hydrated row (`status=INITIAL`,
+  `currentStep=VIDEO_VERIFICATION`) completing the form. **Resolved** —
+  dedicated unit case asserts a plain `Error` (not the domain rejection).
+- **CR-03 (Low, Test quality) — the "one millisecond before" test name
+  mismatched its 24-hour fixture.** **Resolved** — fixture set to NOW+1 ms.
+- **CR-04 (Low, Type safety) — catch-block `as` casts in tests; the
+  machine's `as number` map casts.** **Resolved** — `instanceof` narrowing
+  in both specs; a total-map `stepIndex()` helper replaces the casts.
+- **CR-05 (Low, Edge-case coverage) — no unit case pinned that a throwing
+  `apply()` leaves the entity untouched.** **Resolved** — dedicated case
+  asserting the caller's error propagates and status/currentStep are
+  unchanged.
+- **CR-06 (Low, Documentation; iteration 2) — feature record's validation
+  counts stale after remediation** (23 cases / 528 tests vs the delivered
+  25 / 530). **Resolved** — counts updated. Verdict after iteration 2:
+  APPROVED_WITH_SUGGESTIONS.
+
+## Wave 36 — Phase 4 implementation security review (_062, code-security-analyzer, 2026-11-22) — SECURITY_APPROVED_WITH_INFORMATIONAL_FINDINGS
+
+Scope: state machine, domain error, error codes, catalogs, module
+registration, specs. The analyzer confirmed the HTTP surface is unchanged
+(the machine has no caller), the plain-Error from→to detail is log-only
+(generic-500 normalization verified in the filter), the race surface
+serializes on the optimistic-lock version column, and no authorization
+material lives in the machine. All three findings are informational and
+forward-looking — persisted per the developer's standing rule:
+
+- **SEC-01 (Informational, CWE-203) — 410/409 lifecycle distinctions are a
+  state-probing oracle behind Phase 6 challenger authentication.**
+  **Deferred** — `DEFERRED.md` _062 entry 1: Phase 6 must authenticate the
+  OTP challenger and authorize it against the enrollment before invoking
+  the machine; never map `EnrollmentStateMachineError` for
+  unauthenticated/unauthorized callers.
+- **SEC-02 (Informational, contract reliance) — persist-before-map and the
+  410-vs-409 split for the expired condition rely on the future caller**
+  (a due-but-unpersisted row answers 410; an already-persisted EXPIRED row
+  answers 409). **Deferred** — `DEFERRED.md` _062 entry 2: Phase 6 persists
+  in the same fork before mapping and decides whether the expired condition
+  keeps a single representative status code.
+- **SEC-03 (Informational, CWE-754) — corrupt pair `IN_PROGRESS` +
+  `currentStep=COMPLETED` was fail-open for step edits** (unreachable state;
+  every real step would pass as an earlier-step edit on a completed form).
+  **Resolved** — fail-fast programming error added to the machine (in
+  component, trivially small) with a dedicated unit case; the dangerous
+  `INITIAL`+`VIDEO_VERIFICATION` pair was already pinned.

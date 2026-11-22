@@ -159,6 +159,31 @@ original task requirements and must be addressed in future work.
 
 ---
 
+## Mandated by the Enrollment State Machine Phase (_062, master prompt §10/§11)
+
+### 1. Step-Submission Endpoint Must Authenticate the Challenger Before Mapping State Errors (Deferred)
+
+**Origin**: security review of `_062` (Wave 36 finding SEC-01, 2026-11-22, CWE-203) — the machine's 410 (`ENROLLMENT_EXPIRED`) vs 409 (`ENROLLMENT_STEP_NOT_ALLOWED`) distinction becomes a lifecycle-state probing oracle if a Phase 6 endpoint maps those errors for unauthenticated or insufficiently authorized callers.
+**Status**: Open — binding for the Phase 6 step-submission APIs (authorization is explicitly deferred by the master prompt; this records the constraint).
+**Requirement**: Authenticate the OTP challenger and authorize it against the enrollment before invoking `EnrollmentStateMachine.executeStep`; never map `EnrollmentStateMachineError` for unauthenticated/unauthorized callers (fall through to the generic not-found/unauthorized semantics). `publicId` remains an identifier, never proof of authorization.
+**Rationale**: One bit-class of lifecycle state per probe is the worst-case disclosure; the guard belongs to the flow, not the identifier.
+
+### 2. Persist-Before-Map Discipline and the Expired-Condition Status Split (Deferred)
+
+**Origin**: security review of `_062` (Wave 36 finding SEC-02, 2026-11-22) — a due-but-unpersisted row answers 410 `ENROLLMENT_EXPIRED` while an already-persisted `EXPIRED` row answers 409 `ENROLLMENT_STEP_NOT_ALLOWED`; both the persist-before-map ordering and the representative status for the identical expired condition are caller decisions.
+**Status**: Open — binding for the Phase 6 step-submission APIs.
+**Requirement**: Persist the expiration in the same EntityManager fork before mapping the rejection (master prompt §11.1); decide deliberately whether an already-`EXPIRED` row should also answer 410 so the expired condition keeps a single representative status code, and document the choice for clients.
+**Rationale**: The worst case without the discipline is a transient response/database divergence (self-healing on the next lazy pass, no integrity violation); the split is a client-contract consistency decision that must be explicit rather than accidental.
+
+### 3. Optimistic-Lock Failure Mapping Must Stay Caller-Owned for Machine Workflows (Deferred)
+
+**Origin**: security review of `_062` (Wave 36 clean-checklist note carried forward) — concurrent step submissions and the expiration/submission race serialize on the inherited optimistic-lock version column, surfacing through `mapOptimisticLockError` → 409 `VersionConflict`.
+**Status**: Open — binding for the Phase 6 step-submission APIs.
+**Requirement**: Wrap `flush()` (and `em.lock`, where used) in the try block that maps through `mapOptimisticLockError`, per the established convention; never blanket-retry a machine-driven update whose result is ambiguous.
+**Rationale**: The mapping is proven at the database tier; keeping it caller-owned preserves the no-automatic-retry rule for operations with side effects.
+
+---
+
 ## How to Use This Registry
 
 - When starting work on a deferred item, move it from this file to a new ADR proposal (or link to an existing one).

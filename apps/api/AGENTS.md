@@ -148,7 +148,7 @@ in the root `AGENTS.md`; this section covers the API-specific mechanics.
   (`throw` in development/test, `fallback` in production), and catalog
   loading/watching.
 - **Catalogs:** `src/i18n/{en,fa}/<namespace>.json`. Namespaces so far:
-  `common`, `errors`, `health`, `otp`, `validation`. The English catalog is
+  `common`, `enrollment`, `errors`, `health`, `otp`, `validation`. The English catalog is
   the key source of truth; `src/i18n/i18n.types.ts` registers its shape with
   `I18nTypes`, making translation keys compile-time checked. Persian messages
   use formal, natural Persian with correct نیم‌فاصله; genuinely ambiguous

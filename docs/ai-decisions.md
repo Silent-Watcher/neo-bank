@@ -729,3 +729,48 @@ requires developer approval before any ADR is created.
 - **Reversibility:** trivial — spec files are additive; config is one key.
 - **ADR Recommendation:** None — testing-infrastructure choices within the
   accepted ADR-042 scope.
+
+### 36. State-machine rejection contract and no-ADR judgment (_062, Enrollment Phase 4)
+
+- **Context:** the Phase 4 state machine must reject operations while
+  remaining a pure domain component (master prompt §10: no HTTP, no Redis,
+  no clock), but the application's rejection contract
+  (`AppHttpException`) localizes its detail at throw time through the
+  request-scoped i18n service.
+- **Decision:** the machine throws a dedicated domain type
+  (`EnrollmentStateMachineError`) carrying the typed `ErrorCode`, the i18n
+  detail key, and the intended HTTP status (410 Gone for expiration, 409
+  Conflict for step guards); the request-scoped caller (Phase 5/6) persists
+  any pending expiration first and then maps the error to the localized
+  Problem Details. The step-receptive statuses reuse the expirable-status
+  constant set (the two incomplete lifecycle states — the identity is
+  pinned by a comment), and the legal transition table is exported as
+  domain vocabulary so the table-driven tests can pin it exactly. No ADR
+  was written for the state machine: master prompt §10/§11 prescribes the
+  full design verbatim, leaving no open architectural decision.
+- **Reasoning:** injecting the i18n service into the machine would couple
+  it to the request scope it deliberately lacks; a raw-English detail would
+  violate the bilingual contract; carrying the key keeps the machine pure
+  and makes the Phase 6 mapping mechanical. The receptive/expirable
+  identity avoids a second constant for the same member set while the
+  comment documents why they coincide (an incomplete enrollment both can
+  expire and can receive steps).
+- **Alternatives considered:** throwing `AppHttpException` with a static
+  English detail (rejected — breaks per-locale details); injecting
+  `I18nService` (rejected — request scope); a `citext`-style receptive
+  list separate from the expirable list (rejected — two sources for one
+  member set that the master prompt keeps identical); an ADR restating
+  master prompt §10 (rejected — duplication of an approved specification).
+- **Trade-offs:** the mapping responsibility moves to the caller (documented
+  on the error class and proven by the db-tier persistence tests); the
+  receptive/expirable identity could diverge if the master prompt ever
+  separates them (the comment marks the coupling point).
+- **Impact:** `enrollment-state-machine.service.ts`,
+  `enrollment-state-machine.error.ts`, `error.code.ts` (+2 codes),
+  `src/i18n/{en,fa}/enrollment.json` (new) and both `errors.json` catalogs;
+  Phase 5/6 services consume the machine.
+- **Reversibility:** moderate — the rejection type is internal to the
+  module; swapping it for a localized throw later touches only the machine
+  and its callers.
+- **ADR Recommendation:** None — the design is the master prompt's
+  prescription; the rejection-contract shape is implementation mechanics.

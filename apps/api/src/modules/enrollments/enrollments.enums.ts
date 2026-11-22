@@ -41,6 +41,16 @@ export type EnrollmentStep = (typeof ENROLLMENT_STEPS)[number];
 export const ENROLLMENT_INITIAL_STATUS: EnrollmentStatus = 'INITIAL';
 export const ENROLLMENT_INITIAL_STEP: EnrollmentStep = 'NATIONAL_CODE';
 
+/** The first submitted step moves the enrollment into the working state. */
+export const ENROLLMENT_STATUS_IN_PROGRESS: EnrollmentStatus = 'IN_PROGRESS';
+/** Completing VIDEO_VERIFICATION moves the enrollment into review. */
+export const ENROLLMENT_STATUS_PENDING_REVIEW: EnrollmentStatus = 'PENDING_REVIEW';
+
+/** The last form step; completing it moves the enrollment to review. */
+export const ENROLLMENT_STEP_VIDEO_VERIFICATION: EnrollmentStep = 'VIDEO_VERIFICATION';
+/** Completion marker (master prompt §7.4) — never a client-submittable step. */
+export const ENROLLMENT_STEP_COMPLETED: EnrollmentStep = 'COMPLETED';
+
 /** The only status that releases the phone number (ADR-041). */
 export const ENROLLMENT_STATUS_EXPIRED: EnrollmentStatus = 'EXPIRED';
 

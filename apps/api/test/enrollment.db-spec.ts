@@ -1,15 +1,21 @@
-import { EntityManager, MikroORM } from '@mikro-orm/core';
+import { EntityManager, LockMode, MikroORM } from '@mikro-orm/core';
 import type { Connection } from '@mikro-orm/core';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
+import { AppHttpException } from '#errors/app-http.exception.js';
+import { ErrorCode } from '#errors/error.code.js';
+import { mapOptimisticLockError } from '#errors/optimistic-lock.mapper.js';
 import { Enrollment } from '#modules/enrollments/entities/enrollment.entity.js';
 import {
   ENROLLMENT_INITIAL_STATUS,
+  ENROLLMENT_INITIAL_STEP,
   ENROLLMENT_SCHEMA_CONSTRAINT_NAMES,
   ENROLLMENT_STATUS_EXPIRED,
   ENROLLMENT_STATUSES,
   ENROLLMENT_TTL_MS,
 } from '#modules/enrollments/enrollments.enums.js';
+import { EnrollmentStateMachine } from '#modules/enrollments/enrollment-state-machine.service.js';
+import { EnrollmentStateMachineError } from '#modules/enrollments/enrollment-state-machine.error.js';
 
 import { createProbeApp } from './create-probe-app.js';
 import { startTestPostgres } from './testcontainers.js';
@@ -492,6 +498,108 @@ describe('Database-enforced column contracts (ADR-041)', () => {
     expect(rows).toHaveLength(1);
     expect(rows[0].public_id).toMatch(UUIDV7_PATTERN);
     expect(rows[0].uuid_version).toBe(7);
+    await app.close();
+  });
+});
+
+describe('Lazy expiration persistence (master prompt §11.1)', () => {
+  it('persists the expiration transition before the step rejection surfaces', async () => {
+    // Arrange — a row already past its expires_at, driven through the real
+    // state machine: the guards pass, the transition applies to the entity,
+    // then the rejection throws (apply() never runs).
+    const app = await createProbeApp(databaseUrl);
+    const em = app.get(EntityManager).fork();
+    const machine = app.get(EnrollmentStateMachine);
+    const enrollment = em.create(Enrollment, {
+      phoneNumber: '09120000041',
+      expiresAt: new Date(Date.now() - 60_000),
+    });
+    await em.flush();
+    const apply = vi.fn();
+
+    // Act
+    expect(() =>
+      machine.executeStep(enrollment, ENROLLMENT_INITIAL_STEP, new Date(), apply),
+    ).toThrowError(EnrollmentStateMachineError);
+
+    // Assert — the expiration is already on the entity; flushing persists
+    // it (the exception never rolled it back).
+    expect(apply).not.toHaveBeenCalled();
+    expect(enrollment.status).toBe(ENROLLMENT_STATUS_EXPIRED);
+    await em.flush();
+    const rows: Array<{ status: string }> = await em
+      .getConnection()
+      .execute(`SELECT status FROM enrollments WHERE phone_number = '09120000041'`);
+    expect(rows[0].status).toBe(ENROLLMENT_STATUS_EXPIRED);
+    await app.close();
+  });
+
+  it('releases the phone number once the lazy expiration is persisted', async () => {
+    // Arrange
+    const app = await createProbeApp(databaseUrl);
+    const em = app.get(EntityManager).fork();
+    const connection = app.get(EntityManager).getConnection();
+    const machine = app.get(EnrollmentStateMachine);
+    const enrollment = em.create(Enrollment, {
+      phoneNumber: '09120000042',
+      expiresAt: new Date(Date.now() - 60_000),
+    });
+    await em.flush();
+
+    // Act — lazy-expire and persist, then claim the same phone again.
+    machine.expireIfDue(enrollment, new Date());
+    await em.flush();
+    await insertEnrollment(connection, '09120000042');
+
+    // Assert — the released phone carries one EXPIRED row and one active row.
+    const counts: Array<{ status: string; total: string }> = await connection.execute(
+      `SELECT status, count(*) AS total FROM enrollments WHERE phone_number = '09120000042' GROUP BY status`,
+    );
+    expect(counts.find((row) => row.status === ENROLLMENT_STATUS_EXPIRED)?.total).toBe('1');
+    expect(counts.find((row) => row.status === 'INITIAL')?.total).toBe('1');
+    await app.close();
+  });
+});
+
+describe('Optimistic locking through the state machine (master prompt §11.2)', () => {
+  it('maps a stale version to the VersionConflict contract', async () => {
+    // Arrange — two forks hold the same row; fork A flushes a real update
+    // first, so fork B's entity carries a stale version.
+    const app = await createProbeApp(databaseUrl);
+    const machine = app.get(EnrollmentStateMachine);
+    const emA = app.get(EntityManager).fork();
+    const emB = app.get(EntityManager).fork();
+    const enrollment = emA.create(Enrollment, { phoneNumber: '09120000043' });
+    await emA.flush();
+    const stale = await emB.findOneOrFail(Enrollment, { id: enrollment.id });
+    const fresh = await emA.findOneOrFail(Enrollment, { id: enrollment.id });
+    fresh.firstName = 'آرش';
+    await emA.flush();
+
+    // Act — fork B runs the machine (state changes apply) and flushes with
+    // the inherited version: the optimistic lock fails and the mapper
+    // converts it to the established VersionConflict contract.
+    machine.executeStep(stale, ENROLLMENT_INITIAL_STEP, new Date(), () => {
+      stale.nationalCode = '0923456789';
+    });
+    let caught: unknown;
+    try {
+      await emB.lock(stale, LockMode.OPTIMISTIC, { lockVersion: stale.version });
+      await emB.flush();
+    } catch (error) {
+      caught = error;
+    }
+
+    // Assert — the mapper rethrows the lock failure as a 409
+    // VersionConflict; any other failure would surface unchanged.
+    expect(caught).toBeDefined();
+    expect(() => mapOptimisticLockError(caught, 'conflict detail')).toThrowError(AppHttpException);
+    try {
+      mapOptimisticLockError(caught, 'conflict detail');
+    } catch (error) {
+      if (!(error instanceof AppHttpException)) throw error;
+      expect(error.code).toBe(ErrorCode.VersionConflict);
+    }
     await app.close();
   });
 });

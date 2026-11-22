@@ -1,4 +1,5 @@
 import type common from './en/common.json';
+import type enrollment from './en/enrollment.json';
 import type errors from './en/errors.json';
 import type health from './en/health.json';
 import type otp from './en/otp.json';
@@ -12,6 +13,7 @@ import type validation from './en/validation.json';
 // at runtime, so the type mirrors that `<namespace>.<path>` key space.
 export interface Translations {
   common: typeof common;
+  enrollment: typeof enrollment;
   errors: typeof errors;
   health: typeof health;
   otp: typeof otp;

@@ -41,7 +41,10 @@ function and must not be extracted. Platform: `@nestjs/platform-node`
 Key layers (Node `#` subpath import aliases, see `apps/api/package.json`):
 
 - `src/modules/<feature>/` — feature code. Currently one feature:
-  `enrollments` (OTP challenge + verify, no SMS, no registration yet).
+  `enrollments` (OTP challenge + verify, plus the pure-domain enrollment
+  lifecycle state machine — legal transition table, lazy expiration, typed
+  domain rejections — not yet reachable from any endpoint; no SMS, no
+  registration yet).
 - `src/shared/` — cross-cutting infrastructure: `config` (Zod env validation
   - namespaced `registerAs` factories), `logging` (Pino via nestjs-pino),
     `database` (MikroORM v7 PostgreSQL, ADR-027),
@@ -95,7 +98,11 @@ Core contracts:
   schema (national code and username identity columns with format CHECKs and
   expired-release unique indexes, prose fields with length CHECKs, birth
   date, password hash), and migrations are immutable
-  and migration-reviewer-gated (ADR-033); no feature flow persists rows yet.
+  and migration-reviewer-gated (ADR-033); the feature also owns a
+  pure-domain `EnrollmentStateMachine` (legal transition table, lazy
+  expiration, typed domain rejections with persist-before-map semantics)
+  that touches no database, Redis, or clock, and no feature flow persists
+  rows yet.
 - **Logging:** Pino only (ADR-008/009); JSON in production, pretty in dev,
   `LOG_PRETTY` override; never `console.log`, never log OTPs/secrets.
 - **Memory protection:** `src/shared/memory-protection/` (ADR-026) samples

@@ -164,8 +164,17 @@ repository (not a Turbo task), so formatting is repository-wide.
   (`Migration20261116181139`, `Migration20261122000737`,
   `Migration20261122011051`) are applied to the
   dev PostgreSQL; migrations are immutable and gated by the dedicated
-  `migration-reviewer` subagent (ADR-033). A UTC-first TIMESTAMPTZ storage
-  policy ([ADR-030](../DECISIONS.md)) governs
+  `migration-reviewer` subagent (ADR-033). The feature also owns a
+  pure-domain `EnrollmentStateMachine`
+  (`src/modules/enrollments/enrollment-state-machine.service.ts`, registered
+  in `EnrollmentsModule`, record `_062`): an exported legal transition table
+  (`INITIAL` → `IN_PROGRESS`/`EXPIRED`, `IN_PROGRESS` →
+  `PENDING_REVIEW`/`EXPIRED`, terminal statuses), lazy expiration
+  (`expireIfDue` at `expiresAt <= now`), and guarded step execution
+  (`executeStep`) — no database, no Redis, no clock; rejections are typed
+  domain errors (`ENROLLMENT_EXPIRED` 410 / `ENROLLMENT_STEP_NOT_ALLOWED` 409) that the request-scoped caller maps after persisting any pending
+  expiration. No endpoint invokes the machine yet. A UTC-first TIMESTAMPTZ
+  storage policy ([ADR-030](../DECISIONS.md)) governs
   how timestamps are stored and converted — developer guide:
   [utc-datetime.md](./utc-datetime.md). No feature flow persists rows yet.
 - **Applications ↔ observability:** none at runtime. The monitoring stack
@@ -182,7 +191,9 @@ repository (not a Turbo task), so formatting is repository-wide.
   PostgreSQL are wired in (ADR-027) with migrations configured, and the
   first feature entity exists (`Enrollment`, table `enrollments`, ADR-029
   base columns plus the ADR-041 core lifecycle schema and the ADR-042
-  step-data schema), but no application flow persists rows.
+  step-data schema), but no application flow persists rows. The pure-domain
+  `EnrollmentStateMachine` governs the lifecycle in code; its lazy
+  expiration and optimistic-lock behavior are proven at the database tier.
 - No authentication/authorization anywhere.
 - The frontends are scaffolds: no routing beyond the index page, no state
   management, no styling system, no tests.

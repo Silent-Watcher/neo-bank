@@ -1,6 +1,8 @@
 {
   "titles": {
     "applicationError": "Application Error",
+    "enrollmentExpired": "Enrollment Expired",
+    "enrollmentStepNotAllowed": "Enrollment Step Not Allowed",
     "idempotencyKeyInUse": "Idempotency Key In Use",
     "idempotencyKeyInvalid": "Invalid Idempotency Key",
     "idempotencyKeyRequired": "Idempotency Key Required",

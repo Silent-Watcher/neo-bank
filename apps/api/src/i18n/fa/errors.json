@@ -1,6 +1,8 @@
 {
   "titles": {
     "applicationError": "خطای برنامه",
+    "enrollmentExpired": "ثبت‌نام منقضی شده",
+    "enrollmentStepNotAllowed": "ارسال گام مجاز نیست",
     "idempotencyKeyInUse": "کلید Idempotency-Key در حال پردازش است",
     "idempotencyKeyInvalid": "کلید Idempotency-Key نامعتبر است",
     "idempotencyKeyRequired": "کلید Idempotency-Key الزامی است",

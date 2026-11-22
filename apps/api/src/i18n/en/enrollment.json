@@ -1,0 +1,4 @@
+{
+  "expired": "This enrollment has expired and can no longer be continued.",
+  "stepNotAllowed": "This step cannot be submitted in the current enrollment state."
+}

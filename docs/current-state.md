@@ -226,8 +226,8 @@ its shared entity base plus the first feature entity (`Enrollment`, table
   `en` (default) and `fa`, resolved per request by the
   `AcceptLanguageLocaleResolver` (the only active resolver; q-values,
   regional identifiers like `fa-IR` → base language, missing/unsupported →
-  default). JSON catalogs in `src/i18n/{en,fa}/{common,errors,health,otp,
-  validation}.json`, delivered to production via nest-cli assets into
+  default). JSON catalogs in `src/i18n/{en,fa}/{common,errors,enrollment,health,
+  otp,validation}.json`, delivered to production via nest-cli assets into
   `dist/i18n`; the English catalog registers compile-time-checked keys
   (`src/i18n/i18n.types.ts`). Localized surfaces: envelope `message`,
   Problem Details `title`/`detail`, OTP error details, Zod validation
@@ -316,6 +316,41 @@ its shared entity base plus the first feature entity (`Enrollment`, table
   rate limit (5 sends / rolling 60 min) is
   enforced atomically via Redis sorted set. No registration or authentication
   steps yet.
+- Feature module `enrollments` (pure-domain lifecycle; no endpoint surface
+  yet): `EnrollmentStateMachine`
+  (`src/modules/enrollments/enrollment-state-machine.service.ts`, registered
+  as a provider in `EnrollmentsModule`,
+  `prompts/_062-enrollment-state-machine.md`) governs the `Enrollment`
+  lifecycle: an exported legal transition table
+  (`ENROLLMENT_LEGAL_TRANSITIONS` — `INITIAL` → `IN_PROGRESS`/`EXPIRED`,
+  `IN_PROGRESS` → `PENDING_REVIEW`/`EXPIRED`, and `PENDING_REVIEW`,
+  `REJECTED`, `APPROVED`, `EXPIRED` terminal), `expireIfDue(enrollment, now)`
+  (lazy expiration — an `INITIAL`/`IN_PROGRESS` enrollment whose `expiresAt`
+  instant has arrived transitions to `EXPIRED` through the central transition
+  method and returns `true`; an already-expired record never re-expires), and
+  `executeStep(enrollment, step, now, apply)` (expiration guard first, then
+  the step-receptive guard — only `INITIAL`/`IN_PROGRESS` accept steps —
+  `COMPLETED` is never submittable, a future step is rejected before its
+  predecessors, an earlier-step edit applies without moving `currentStep`
+  backwards, the first submission moves `INITIAL` → `IN_PROGRESS`, and
+  completing `VIDEO_VERIFICATION` sets `currentStep = COMPLETED` and the
+  status to `PENDING_REVIEW`). The machine is pure domain: no database, no
+  Redis, no clock — `now` is always passed explicitly — and an illegal
+  internal transition throws a plain `Error` as a programming error, never
+  mapped to a client response. Its domain rejections are the typed
+  `EnrollmentStateMachineError` (`enrollment-state-machine.error.ts`),
+  carrying the `ErrorCode`, the i18n detail key, and the HTTP status; a
+  future request-scoped caller maps them to localized Problem Details and
+  must persist any pending expiration first (the transition is already
+  applied to the entity when the error is thrown). New error codes
+  `ENROLLMENT_EXPIRED` (410 Gone) and `ENROLLMENT_STEP_NOT_ALLOWED`
+  (409 Conflict) gained bilingual titles in both `errors.json` catalogs, and
+  their detail keys live in the new `src/i18n/{en,fa}/enrollment.json`
+  catalogs. No HTTP endpoint invokes the machine yet — the endpoint surface
+  is still challenge/verify only; it is exercised by the table-driven unit
+  suite (`enrollment-state-machine.spec.ts`) and by database-tier scenarios
+  (lazy-expiration persistence, phone release, optimistic-lock conflict
+  mapping through the machine — see the Tests bullet).
 - Conditional requests (restored Fastify-era behavior, ADR-032; hardened and
   made opt-in by ADR-038): weak entity tags (`W/"<sha256>"`) composed over
   the serialized application payload **and the request's resolved locale** on
@@ -342,14 +377,18 @@ its shared entity base plus the first feature entity (`Enrollment`, table
   parameter and the bodyless `304` only for decorator-marked JSON-success
   GET operations (`x-conditional-get`); proxy trust is optionally narrowed
   by `TRUST_PROXY_PROXIES` (see the env table in `apps/api/ONBOARDING.md`).
-- Tests: Vitest unit (54 files / 505 tests), e2e (17 files / 115 tests), Redis
+- Tests: Vitest unit (55 files / 528 tests), e2e (17 files / 115 tests), Redis
   integration (6 files / 89 tests via `pnpm test:redis`), database
-  integration (6 files / 49 tests via `pnpm test:db`,
+  integration (6 files / 53 tests via `pnpm test:db`,
   ADR-027/029/030/031/033/034/036/041/042 — `base-entity.db-spec.ts`,
   `enrollment.db-spec.ts` (the first feature entity: schema shape, the
   persistence round-trip with the database-generated version-7 `public_id`,
-  the one-active-per-phone invariant, the ADR-042 step-data columns, and the
-  database-enforced column contracts), `database.db-spec.ts`,
+  the one-active-per-phone invariant, the ADR-042 step-data columns, the
+  database-enforced column contracts, and the `EnrollmentStateMachine`
+  scenarios — a due lazy expiration driven through the real machine and
+  persisted before its `ENROLLMENT_EXPIRED` rejection, the phone number
+  released once the expiration is persisted, and an optimistic-lock
+  VersionConflict mapped through the machine's step application), `database.db-spec.ts`,
   `database-health.db-spec.ts` (bounded probe: deadline eviction, exactly-once
   client release, single-flight/TTL cache, forced-failure recovery, and the
   Toxiproxy established-connection black-hole proof),
@@ -379,7 +418,7 @@ its shared entity base plus the first feature entity (`Enrollment`, table
   (`@vitest/coverage-v8`, text/html/lcov reports under `apps/api/coverage/`;
   measured baseline ≈ 75% statements). Future workspaces join the pipeline
   by exposing the conventional `test`/`test:coverage` scripts. All four tiers
-  verified 2026-11-22 (unit 505/505, database 49/49, e2e 115/115,
+  verified 2026-11-22 (unit 528/528, database 53/53, e2e 115/115,
   Redis 89/89); integration-tier runs through the new
   orchestration and the pre-push failure proof are pending per
   `prompts/_052-*.md` (registry outage).
@@ -391,9 +430,11 @@ its shared entity base plus the first feature entity (`Enrollment`, table
   schema (lifecycle columns and the one-active-per-phone invariant index)
   plus the ADR-042 step-data schema (identity, prose, birth-date, and
   password-hash columns with their CHECKs and identifier-release indexes),
-  and its `enrollments` table exists (registered via `forFeature`), but no
-  flow writes rows yet — SMS delivery and the registration flow after
-  verification are planned.
+  and its `enrollments` table exists (registered via `forFeature`); the
+  module also carries the pure-domain `EnrollmentStateMachine` (legal
+  transition table, lazy expiration, typed step rejections), but no HTTP
+  endpoint invokes it yet and no flow writes rows yet — SMS delivery and
+  the registration flow after verification are planned.
 
 **Planned / Not started**
 

@@ -5,6 +5,8 @@ import type { I18nKey } from '@nestjs/i18n';
 export enum ErrorCode {
   ApplicationError = 'APPLICATION_ERROR',
   BadRequest = 'BAD_REQUEST',
+  EnrollmentExpired = 'ENROLLMENT_EXPIRED',
+  EnrollmentStepNotAllowed = 'ENROLLMENT_STEP_NOT_ALLOWED',
   IdempotencyKeyInUse = 'IDEMPOTENCY_KEY_IN_USE',
   IdempotencyKeyInvalid = 'IDEMPOTENCY_KEY_INVALID',
   IdempotencyKeyRequired = 'IDEMPOTENCY_KEY_REQUIRED',
@@ -38,6 +40,8 @@ export const APPLICATION_ERROR_PROBLEM_TYPE = '/problems/application-error';
 
 const ERROR_CODE_PROBLEM_TYPES: ReadonlyMap<ErrorCode, string> = new Map([
   [ErrorCode.ApplicationError, APPLICATION_ERROR_PROBLEM_TYPE],
+  [ErrorCode.EnrollmentExpired, APPLICATION_ERROR_PROBLEM_TYPE],
+  [ErrorCode.EnrollmentStepNotAllowed, APPLICATION_ERROR_PROBLEM_TYPE],
   [ErrorCode.IdempotencyKeyInUse, APPLICATION_ERROR_PROBLEM_TYPE],
   [ErrorCode.IdempotencyKeyInvalid, APPLICATION_ERROR_PROBLEM_TYPE],
   [ErrorCode.IdempotencyKeyRequired, APPLICATION_ERROR_PROBLEM_TYPE],
@@ -59,6 +63,8 @@ export function problemTypeForErrorCode(code: ErrorCode): string | undefined {
 // keyed by the family's representative codes.
 const ERROR_CODE_TITLES: ReadonlyMap<ErrorCode, string> = new Map([
   [ErrorCode.ApplicationError, 'Application Error'],
+  [ErrorCode.EnrollmentExpired, 'Enrollment Expired'],
+  [ErrorCode.EnrollmentStepNotAllowed, 'Enrollment Step Not Allowed'],
   [ErrorCode.IdempotencyKeyInUse, 'Idempotency Key In Use'],
   [ErrorCode.IdempotencyKeyInvalid, 'Invalid Idempotency Key'],
   [ErrorCode.IdempotencyKeyRequired, 'Idempotency Key Required'],
@@ -84,6 +90,8 @@ export function titleForErrorCode(code: ErrorCode): string | undefined {
 // keys, which serve as the title source for those codes.
 const ERROR_CODE_TITLE_KEYS: ReadonlyMap<ErrorCode, I18nKey> = new Map([
   [ErrorCode.ApplicationError, 'errors.titles.applicationError'],
+  [ErrorCode.EnrollmentExpired, 'errors.titles.enrollmentExpired'],
+  [ErrorCode.EnrollmentStepNotAllowed, 'errors.titles.enrollmentStepNotAllowed'],
   [ErrorCode.IdempotencyKeyInUse, 'errors.titles.idempotencyKeyInUse'],
   [ErrorCode.IdempotencyKeyInvalid, 'errors.titles.idempotencyKeyInvalid'],
   [ErrorCode.IdempotencyKeyRequired, 'errors.titles.idempotencyKeyRequired'],
