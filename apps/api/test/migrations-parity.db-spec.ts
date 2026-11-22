@@ -42,7 +42,11 @@ beforeAll(async () => {
     clientUrl: databaseUrl,
     metadataProvider: ReflectMetadataProvider,
     entities: [BaseEntity, Enrollment],
-    migrations: { migrationsList: MIGRATIONS_LIST },
+    // Snapshot generation is disabled: the replay owns no snapshot, and
+    // without a migrations path the Migrator would write `.snapshot-<db>`
+    // relative to the CWD on every run — the CLI owns the real snapshot
+    // next to the migrations (ADR-033).
+    migrations: { migrationsList: MIGRATIONS_LIST, snapshot: false },
   });
   await orm.migrator.up();
 });
