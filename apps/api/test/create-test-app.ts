@@ -7,6 +7,7 @@ import { Test } from '@nestjs/testing';
 import type { Redis } from 'ioredis';
 import { Logger } from 'nestjs-pino';
 import { inject } from 'vitest';
+import { EntityManager } from '@mikro-orm/core';
 
 import type { RedisConfig } from '#config/redis.config.js';
 import { AppModule } from '#modules/app/app.module.js';
@@ -52,6 +53,14 @@ export interface CreateTestAppOptions {
    * exercise the database (e2e, test:db) must NOT set this.
    */
   stubDatabaseConnect?: boolean;
+  /**
+   * Overrides the per-request EntityManager for specs that need a controlled
+   * DB path without wiring a live container (Phase 5 enrollment upsert
+   * regression tests). Set to null to force the new-create branch; set to
+   * an object to force the reuse-return branch; leave undefined for the
+   * default (live EM via the injected DATABASE_URL).
+   */
+  emOverride?: unknown;
 }
 
 export async function createTestApp(
@@ -77,6 +86,14 @@ export async function createTestApp(
     });
   }
   options?.configureModule?.(moduleBuilder);
+  if (options?.emOverride !== undefined) {
+    // The per-request EntityManager; overriding it isolates specs from a live
+    // database without touching the ORM configuration. Set to null for the
+    // new-create branch in tests that only exercise the Redis path; set to an
+    // object to force the reuse-return branch. Applied AFTER configureModule
+    // so spec-provided EM overrides inside configureModule cannot mask it.
+    moduleBuilder.overrideProvider(EntityManager).useValue(options.emOverride);
+  }
   const module = await moduleBuilder.compile();
   const adapter = new NodeAdapter({
     trustProxy: options?.adapterTrustProxy ?? trustProxy,
@@ -155,7 +172,7 @@ export async function createTestApp(
  */
 export async function createE2eTestApp(
   beforeInit?: (app: NestNodeApplication) => void,
-  options?: Omit<CreateTestAppOptions, 'redisConfig'>,
+  options?: Omit<CreateTestAppOptions, 'redisConfig'> & { emOverride?: unknown },
 ): Promise<NestNodeApplication> {
   const databaseUrl = inject('e2ePostgresUrl');
   return createTestApp(beforeInit, {
@@ -174,5 +191,6 @@ export async function createE2eTestApp(
       // Spec-provided overrides keep precedence (applied after this one).
       options?.configureModule?.(builder);
     },
+    emOverride: options?.emOverride,
   });
 }

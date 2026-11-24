@@ -437,6 +437,91 @@ validation never replaces database constraints.
 - A migration with unresolved blocking findings is never marked complete or
   executed.
 
+## Concurrency, TOCTOU, and Atomicity
+
+Every operation that checks a condition before acting on state is vulnerable to
+time-of-check-to-time-of-use (TOCTOU) races when another request or background
+job can change that same state concurrently. In a bank, these races surface as
+duplicate enrollments, overspent balances, double-booked slots, or inconsistent
+state transitions — none of which are recoverable by retries.
+
+### Identify TOCTOU Risks
+
+Scan every `Read → Check → Act/Write` flow for this pattern. Pay particular
+attention to:
+
+- Concurrent HTTP requests targeting the same entity (same phone number, account,
+  or balance row).
+- Background jobs running in parallel with API requests.
+- Multiple application instances handling the same logical key.
+- Operations that mutate state without holding a lock stronger than the implicit
+  per-request isolation.
+
+If another actor could change the checked condition between the read and the
+write, the flow has a TOCTOU gap regardless of whether any single branch looks
+correct in isolation.
+
+### Prefer Atomic Operations
+
+Whenever possible, fold validation and mutation into a single atomic database
+operation instead of issuing a check and then an independent write:
+
+- Use **conditional updates** (`WHERE` clauses that encode the invariant, e.g.
+  `WHERE phone_number = :phone AND status <> 'EXPIRED'`) and verify the affected
+  row count — zero rows means the precondition was false at the point of write.
+- Use **atomic Redis commands** (`SET NX`, `INCR`, `GETSET`) or **Lua scripts**
+  when the state lives in Redis; never replace an atomic script with an
+  application-side check-then-act sequence. (See [[Redis Conventions]])
+- Use **upsert / INSERT … ON CONFLICT** for create-if-not-exists patterns so
+  the database enforces uniqueness, not the application.
+
+### Use Appropriate Concurrency Control
+
+- **Transactions + pessimistic locks** (`SELECT … FOR UPDATE`) when two
+  incompatible actions must exclude each other entirely.
+- **Optimistic locking** (version column, conflict-retry) when contention is low
+  and the cost of a failed write is cheaper than holding a lock.
+- **Distributed locks** only when single-instance guarantees are insufficient and
+  the architecture explicitly requires them; design failure modes (missed
+  releases, dead owners) deliberately — they are the common path under load.
+- Never rely on application-level lookups to enforce invariants that the database
+  can enforce with constraints (see [[Database Entity and Migration Governance]]).
+
+### Never Trust Previously Read State
+
+A successful existence check or validation at time _t_ does not guarantee the
+same condition holds at time _t + δ_. When the subsequent operation executes,
+revalidate the critical invariant at the point of mutation — either through the
+database constraint itself (preferred) or by re-reading under a transaction.
+
+### Idempotency Is Not Atomicity
+
+Idempotency keys prevent duplicate processing of the same submitted request;
+they do not prevent two distinct concurrent requests from both passing their
+individual checks and both succeeding. Do not treat idempotency as a replacement
+for proper atomicity or concurrency control — use both where required.
+
+### Test Concurrent Execution
+
+For critical operations, write tests that exercise simultaneous requests or
+parallel workers:
+
+- Two concurrent enrollment starts for the same phone number — exactly one must
+  succeed.
+- Two concurrent deductions against the same balance — total must not exceed the
+  available amount.
+- Rapid repeated attempts against an OTP challenge — lockout and attempt gates
+  must hold.
+- Verify invariants under concurrency, including preventing overspending,
+  duplicate records, overbooking, quota violations, and inconsistent state
+  transitions.
+
+Simulate concurrency with controlled parallelism (e.g. `Promise.all` of request
+batches inside a single transactional test, or shared-test fixtures with
+intentionally reduced timeouts). If the test passes serially but fails under
+load, document the race and fix it with the techniques above — do not widen
+assertions to hide the issue.
+
 ## Error Response Security
 
 - Never expose unnecessary internal information through API responses, especially error responses; disclose the minimum information a client needs.

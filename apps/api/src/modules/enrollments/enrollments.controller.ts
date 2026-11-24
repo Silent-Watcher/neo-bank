@@ -120,6 +120,7 @@ export class EnrollmentsController {
   @Post('verify')
   // Tighter per-IP verification limit: 5 requests per 120 seconds (aligned
   // with the max verification attempts and OTP validity window).
+  @HttpCode(HttpStatus.CREATED)
   @Throttle({ short: { limit: 5, ttl: seconds(120) } })
   @ApiOperation({
     summary: 'Verify an enrollment challenge',
@@ -133,13 +134,21 @@ export class EnrollmentsController {
   })
   @ApiOkResponse({
     description:
-      'Verification succeeded and the stored code was consumed, wrapped in the standard response envelope. The OTP is never part of any response.',
+      'Verification succeeded and the stored code was consumed; the enrollment for this phone now exists (or is reset to INITIAL if it had expired). Wrapped in the standard response envelope.',
     schema: successEnvelopeSchema({
       type: 'object',
       properties: {
         phoneNumber: { type: 'string', examples: ['09121234567'] },
+        // Only present on success — the enrollment's primary client-visible
+        // identifier (ADR-041/ADR-040). An identifier, never proof of
+        // authorization (Phase 6 auth guard required before using it as one).
+        publicId: {
+          type: 'string',
+          format: 'uuid',
+          example: '018f4b2e-7c0a-7d3f-a5b9-1e2c3d4f5a6b',
+        },
       },
-      required: ['phoneNumber'],
+      required: ['phoneNumber', 'publicId'],
     }),
   })
   @ApiBadRequestResponse({

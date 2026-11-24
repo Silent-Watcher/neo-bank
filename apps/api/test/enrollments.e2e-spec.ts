@@ -12,6 +12,7 @@ import {
   computeOtpDigest,
 } from '#src/modules/enrollments/enrollments.otp-digest.js';
 import type { RedisClient } from '#redis/inject-redis.decorator.js';
+import { Enrollment } from '#modules/enrollments/entities/enrollment.entity.js';
 
 let inspectClient: RedisClient;
 
@@ -62,15 +63,20 @@ afterAll(async () => {
   await inspectClient.quit();
 });
 
-function createE2eTestAppWithMockRedis(): Promise<{
-  app: Awaited<ReturnType<typeof createE2eTestApp>>;
-  close: () => Promise<void>;
-}> {
+/**
+ * Base factory: stubs Redis (per-path overrides assigned later) and bumps
+ * rate limits high enough that validation errors surface without throttling.
+ * Accepts an optional `emOverride` to isolate specs from the un-migrated
+ * e2e PostgreSQL — the DB path behaviour is exercised in unit and db-specs.
+ * The EM override lands after `configureModule` inside `create-test-app.ts`,
+ * guaranteeing it wins over any provider wiring performed inside the callback.
+ */
+function createBaseApp(options?: { emOverride?: unknown }) {
   return createE2eTestApp(undefined, {
+    ...options,
     configureModule: (builder) =>
       builder
         .overrideProvider(RedisService)
-        // Stub instance: overrideRedisService assigns the per-test methods.
         .useValue({})
         .overrideProvider(RATE_LIMIT_CONFIG)
         .useValue({
@@ -79,6 +85,7 @@ function createE2eTestAppWithMockRedis(): Promise<{
           longLimit: 100000,
           longTtlMinutes: 1,
         }),
+    emOverride: options?.emOverride,
   }).then((app) => ({
     app,
     close: () => app.close(),
@@ -115,7 +122,7 @@ describe('EnrollmentsController (e2e)', () => {
     const checkOtpRateLimit = vi
       .fn<(rateLimitKey: string, maxSends: number, windowMinutes: number) => Promise<boolean>>()
       .mockResolvedValue(true);
-    const { app, close } = await createE2eTestAppWithMockRedis();
+    const { app, close } = await createBaseApp();
     overrideRedisService(app, { issueOtp, checkOtpRateLimit });
 
     // Act
@@ -162,7 +169,7 @@ describe('EnrollmentsController (e2e)', () => {
     const checkOtpRateLimit = vi
       .fn<(rateLimitKey: string, maxSends: number, windowMinutes: number) => Promise<boolean>>()
       .mockResolvedValue(true);
-    const { app, close } = await createE2eTestAppWithMockRedis();
+    const { app, close } = await createBaseApp();
     overrideRedisService(app, { issueOtp, checkOtpRateLimit });
 
     // Act
@@ -187,7 +194,7 @@ describe('EnrollmentsController (e2e)', () => {
   it('rejects invalid phone numbers with Problem Details validation errors', async () => {
     // Arrange — each request uses a distinct X-Forwarded-For so the per-IP
     // rate limiter does not interfere (TRUST_PROXY=true in test env).
-    const { app, close } = await createE2eTestAppWithMockRedis();
+    const { app, close } = await createBaseApp();
     overrideRedisService(app, {
       issueOtp: vi.fn().mockResolvedValue('issued'),
       checkOtpRateLimit: vi.fn().mockResolvedValue(true),
@@ -212,7 +219,7 @@ describe('EnrollmentsController (e2e)', () => {
 
   it('serves an application-error Problem Details response when OTP storage fails', async () => {
     // Arrange
-    const { app, close } = await createE2eTestAppWithMockRedis();
+    const { app, close } = await createBaseApp();
     overrideRedisService(app, {
       issueOtp: vi.fn().mockRejectedValue(new Error('connection lost')),
       checkOtpRateLimit: vi.fn().mockResolvedValue(true),
@@ -237,7 +244,7 @@ describe('EnrollmentsController (e2e)', () => {
     const checkOtpRateLimit = vi
       .fn<(rateLimitKey: string, maxSends: number, windowMinutes: number) => Promise<boolean>>()
       .mockResolvedValue(false);
-    const { app, close } = await createE2eTestAppWithMockRedis();
+    const { app, close } = await createBaseApp();
     overrideRedisService(app, { issueOtp, checkOtpRateLimit });
 
     // Act
@@ -262,7 +269,7 @@ describe('EnrollmentsController (e2e)', () => {
     const checkOtpRateLimit = vi
       .fn<(rateLimitKey: string, maxSends: number, windowMinutes: number) => Promise<boolean>>()
       .mockResolvedValue(true);
-    const { app, close } = await createE2eTestAppWithMockRedis();
+    const { app, close } = await createBaseApp();
     overrideRedisService(app, { issueOtp, checkOtpRateLimit });
 
     // Act
@@ -282,7 +289,7 @@ describe('EnrollmentsController (e2e)', () => {
 
   it('serves a generic 500 when the rate limit check fails (Redis error)', async () => {
     // Arrange
-    const { app, close } = await createE2eTestAppWithMockRedis();
+    const { app, close } = await createBaseApp();
     overrideRedisService(app, {
       issueOtp: vi.fn().mockResolvedValue('issued'),
       checkOtpRateLimit: vi.fn().mockRejectedValue(new Error('connection lost')),
@@ -304,8 +311,12 @@ describe('EnrollmentsController (e2e)', () => {
   });
 
   describe('POST /enrollments/verify', () => {
-    function createAppWithVerifyMock(resolveResult: boolean | Error, storedValue?: string) {
-      return createE2eTestAppWithMockRedis().then(({ app, close }) => {
+    function createAppWithVerifyMock(
+      resolveResult: boolean | Error,
+      storedValue?: string,
+      emOverride?: unknown,
+    ) {
+      return createBaseApp({ emOverride }).then(({ app, close }) => {
         const resolveOtpVerification =
           resolveResult instanceof Error
             ? vi.fn().mockRejectedValue(resolveResult)
@@ -327,18 +338,35 @@ describe('EnrollmentsController (e2e)', () => {
       });
     }
 
-    it('verifies a correct OTP and returns only the phone number', async () => {
-      // Arrange
-      const { app, close, resolveOtpVerification } = await createAppWithVerifyMock(true);
+    it('verifies a correct OTP and returns both phoneNumber and publicId', async () => {
+      // Arrange — EM override forces the new-create branch (no row in DB).
+      const mockEnrollment = { publicId: randomUUID() };
+      const emOverride = {
+        getRepository: vi.fn(),
+        findOne: vi.fn().mockResolvedValue(null),
+        create: vi.fn().mockReturnValue(mockEnrollment),
+        flush: vi.fn().mockResolvedValue(undefined),
+      };
+      const { app, close, resolveOtpVerification } = await createAppWithVerifyMock(
+        true,
+        undefined,
+        emOverride,
+      );
 
       // Act
       const response = await request(app.getHttpServer())
         .post('/api/v1/enrollments/verify')
         .send({ phoneNumber: '09123456789', otp: '048391' });
 
-      // Assert
+      // Assert — success envelope carries both fields; OTP never surfaces.
       expect(response.status).toBe(201);
-      expect(response.body.data).toEqual({ phoneNumber: '09123456789' });
+      expect(response.body.data.phoneNumber).toBe('09123456789');
+      expect(response.body.data.publicId).toBe(mockEnrollment.publicId);
+      expect(emOverride.create).toHaveBeenCalledTimes(1);
+      expect(emOverride.create).toHaveBeenCalledWith(Enrollment, {
+        phoneNumber: '09123456789',
+      });
+      expect(emOverride.flush).toHaveBeenCalledTimes(1);
       expect(JSON.stringify(response.body)).not.toContain('048391');
       expect(resolveOtpVerification).toHaveBeenCalledWith(
         'neo-bank:enrollments:challenge:otp:09123456789',
@@ -352,15 +380,24 @@ describe('EnrollmentsController (e2e)', () => {
       await close();
     });
 
-    it('normalizes the phone number before the Redis lookup', async () => {
+    it('normalizes the phone number before the Redis lookup and returns its publicId', async () => {
       // Arrange — stored challenge is computed for the normalized number and
       // the submitted OTP, so the phone normalization is exercised end to end.
+      // EM override forces the new-create branch (no row in DB).
+      const mockEnrollment = { publicId: randomUUID() };
+      const emOverride = {
+        getRepository: vi.fn(),
+        findOne: vi.fn().mockResolvedValue(null),
+        create: vi.fn().mockReturnValue(mockEnrollment),
+        flush: vi.fn().mockResolvedValue(undefined),
+      };
       const { app, close, resolveOtpVerification } = await createAppWithVerifyMock(
         true,
         composeOtpChallengeValue(
           randomUUID(),
           computeOtpDigest('09123456789', '000001', _env.ENROLLMENTS_OTP_HMAC_SECRET),
         ),
+        emOverride,
       );
 
       // Act
@@ -368,9 +405,14 @@ describe('EnrollmentsController (e2e)', () => {
         .post('/api/v1/enrollments/verify')
         .send({ phoneNumber: '+989123456789', otp: '000001' });
 
-      // Assert
+      // Assert — normalized phone number appears in response; OTP stays hidden.
       expect(response.status).toBe(201);
-      expect(response.body.data).toEqual({ phoneNumber: '09123456789' });
+      expect(response.body.data.phoneNumber).toBe('09123456789');
+      expect(response.body.data.publicId).toBe(mockEnrollment.publicId);
+      expect(emOverride.create).toHaveBeenCalledTimes(1);
+      expect(emOverride.create).toHaveBeenCalledWith(Enrollment, {
+        phoneNumber: '09123456789',
+      });
       expect(resolveOtpVerification).toHaveBeenCalledWith(
         'neo-bank:enrollments:challenge:otp:09123456789',
         'neo-bank:enrollments:challenge:attempts:09123456789',

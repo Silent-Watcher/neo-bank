@@ -3306,3 +3306,16 @@ forward-looking — persisted per the developer's standing rule:
   **Resolved** — fail-fast programming error added to the machine (in
   component, trivially small) with a dedicated unit case; the dangerous
   `INITIAL`+`VIDEO_VERIFICATION` pair was already pinned.
+
+## Wave 37 — Phase 5 implementation code review (_063, code-reviewer, 2026-11-24)
+
+Scope: `enrollments.service.ts` (`verifyChallenge` + `ensureEnrollment`), controller envelope update, spec/e2e fixes, test helper (`create-test-app.ts` emOverride).
+
+- **CR-01 (Suggestion, Explicitness) — `verify` handler relied on NestJS NodeAdapter default 201 for POST rather than declaring it with `@HttpCode`.** **Resolved** — added `@HttpCode(HttpStatus.CREATED)` to the `verify` handler, matching the explicit convention used by `challenge` (`@HttpCode(HttpStatus.ACCEPTED)`). E2E assertion already expected 201 and passes.
+- **CR-02 (Suggestion, Test harness correctness) — e2e-spec comment stated "emOverride must land last inside configureModule" while the actual implementation in `create-test-app.ts` applied it before `configureModule`, winning only because no caller overrode EM inside configureModule.** **Resolved** — moved the `emOverride` application to AFTER `options?.configureModule?.(moduleBuilder)` so precedence is structural not accidental; updated the e2e-spec comment to accurately describe the ordering.
+
+## Wave 38 — Phase 5 security remediation (_063, code-security-analyzer, 2026-11-24)
+
+**Remediation of SEC-01 (HIGH)** — Race condition in `ensureEnrollment` could cause unhandled database unique constraint violation when concurrent requests with different valid OTPs for the same phone number both reach the create branch. **Resolved** — added try/catch around `em.create()` + `em.flush()` in `ensureEnrollment`; on unique constraint violation, re-reads the existing row and returns it, preserving the one-active-per-phone invariant and surfacing its `publicId` gracefully instead of propagating a database error. The fix matches the security analyst's recommended correction and all four test tiers pass (unit 534 · e2e 115 · redis 89 · db 53).
+
+**Final status: SECURITY_APPROVED_WITH_INFORMATIONAL_FINDINGS** — SEC-01 (HIGH) resolved per the security analyst's recommended correction. SEC-02 (LOW, UUIDv7 timing leakage — noted as low practical exploitability, documented as identifier-not-authorization) and SEC-03 (INFORMATIONAL, HTTP status 201 change) remain as informational findings and do not block approval.

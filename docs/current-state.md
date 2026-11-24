@@ -1,6 +1,6 @@
 # Current Development State
 
-Snapshot of what exists in the repository. Last verified: 2026-11-22.
+Snapshot of what exists in the repository. Last verified: 2026-11-24.
 Legend: **Implemented** / **Partial** / **Planned** / **Unknown**.
 
 ## Maturity
@@ -298,8 +298,7 @@ its shared entity base plus the first feature entity (`Enrollment`, table
   Lua script that re-checks the lockout, the verified challenge's identity,
   and the OTP-key existence (ADR-018/019): a replaced challenge is never
   consumed, and verification without a live challenge creates no attempts or
-  lockout state. Missing,
-  expired, incorrect, and exhausted-attempt OTPs
+  lockout state. Missing, expired, incorrect, and exhausted-attempt OTPs
   all return the identical generic `OTP_VERIFICATION_FAILED` Problem Details
   response. Failed attempts are counted up to a configurable maximum
   (`ENROLLMENTS_MAX_VERIFY_ATTEMPTS`, default 5); when reached, a lockout is
@@ -307,6 +306,14 @@ its shared entity base plus the first feature entity (`Enrollment`, table
   `ENROLLMENTS_LOCKOUT_TTL_SECONDS`, default 900 s / 15 min) that blocks both
   verification and new OTP issuance for the lockout window. The lockout is
   independent of the OTP TTL and cannot be bypassed by requesting a new OTP.
+  On success the enrollment row is guaranteed to exist for this phone number
+  using an implicit upsert (Option A from the master prompt): if no row
+  exists one is created as `INITIAL`; if an `EXPIRED` row exists it is reset
+  back to `INITIAL` with a fresh `expiresAt = now() + ENROLLMENT_TTL_MS`;
+  otherwise the existing row is returned unchanged. The successful response
+  carries the standard envelope with HTTP 201 and contains both
+  `phoneNumber` and `publicId` (the client-visible enrollment identifier,
+  ADR-041; never proof of authorization until Phase 6 authentication lands).
   Both endpoints keep their endpoint-specific per-IP limits aligned with the
   OTP window (challenge 2 req/120 s, verify 5 req/120 s) on top of the global
   policies; the challenge quota is enforced by the route-level

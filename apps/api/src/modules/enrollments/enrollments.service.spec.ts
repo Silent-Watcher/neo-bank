@@ -1,6 +1,7 @@
 import { ConfigService } from '@nestjs/config';
 import { Test } from '@nestjs/testing';
 import { I18nService } from '@nestjs/i18n';
+import { EntityManager } from '@mikro-orm/core';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Unit tests must not depend on ambient environment state, so the env
@@ -40,16 +41,28 @@ import { RedisService } from '#redis/redis.service.js';
 import type { IssueOtpResult } from '#redis/redis.service.js';
 import { AppHttpException } from '#errors/app-http.exception.js';
 import { ErrorCode } from '#errors/error.code.js';
+import { Enrollment } from '#modules/enrollments/entities/enrollment.entity.js';
 import {
   composeOtpChallengeValue,
   computeOtpDigest,
   parseOtpChallengeValue,
 } from './enrollments.otp-digest.js';
 import { CHALLENGE_OTP_TTL_SECONDS, EnrollmentsService } from './enrollments.service.js';
+import {
+  ENROLLMENT_INITIAL_STATUS,
+  ENROLLMENT_INITIAL_STEP,
+  ENROLLMENT_STATUS_EXPIRED,
+} from './enrollments.enums.js';
 
 const TEST_SECRET = '1111111111111111111111111111111111111111111111111111111111111111';
 const TEST_PHONE = '09123456789';
 const TEST_OTP = '483921';
+
+type MockEm = {
+  create: ReturnType<typeof vi.fn>;
+  findOne: ReturnType<typeof vi.fn>;
+  flush: ReturnType<typeof vi.fn>;
+};
 
 describe('EnrollmentsService', () => {
   const redisService = {
@@ -90,6 +103,7 @@ describe('EnrollmentsService', () => {
         : 'Phone number verification failed.',
     ),
   };
+  let em: MockEm;
   let service: EnrollmentsService;
 
   beforeEach(async () => {
@@ -109,12 +123,19 @@ describe('EnrollmentsService', () => {
     });
     i18n.t.mockClear();
 
+    em = {
+      create: vi.fn(),
+      findOne: vi.fn(),
+      flush: vi.fn(),
+    };
+
     const module = await Test.createTestingModule({
       providers: [
         EnrollmentsService,
         { provide: RedisService, useValue: redisService },
         { provide: ConfigService, useValue: configService },
         { provide: I18nService, useValue: i18n },
+        { provide: EntityManager, useValue: em },
       ],
     }).compile();
 
@@ -269,16 +290,41 @@ describe('EnrollmentsService', () => {
     const storedChallengeValue = (otp: string, secret = TEST_SECRET): string =>
       composeOtpChallengeValue(STORED_CHALLENGE_ID, computeOtpDigest(TEST_PHONE, otp, secret));
 
-    it('reads the stored value, compares digests in Node, and resolves with the observed challenge ID and matched=true for the correct OTP', async () => {
-      // Arrange
-      const otpKey = 'neo-bank:enrollments:challenge:otp:09123456789';
+    // Helper: set up a successful verify path and run it. Pass the EM
+    // observation shape (null → new-create branch; object → reuse-return).
+    function succeedWith(emResponse: unknown) {
       redisService.get.mockResolvedValue(storedChallengeValue(TEST_OTP));
       redisService.resolveOtpVerification.mockResolvedValue(true);
+      em.findOne.mockResolvedValue(emResponse);
+      if (emResponse !== null) {
+        // Reuse-return branch does not call create or flush.
+        em.create.mockReset();
+        em.flush.mockReset();
+      } else {
+        // New-create branch: create+flush called once, returning the same
+        // object (as a live EM would read back after insert).
+        const enrollment = { publicId: 'created-id' };
+        em.create.mockReturnValue(enrollment);
+        em.flush.mockResolvedValue(undefined);
+        em.findOne.mockResolvedValue(enrollment);
+      }
+      return service.verifyChallenge(TEST_PHONE, TEST_OTP);
+    }
+
+    it('reads the stored value, compares digests in Node, resolves the OTP, ensures an enrollment exists, and returns both phoneNumber and publicId', async () => {
+      // Arrange — new enrollment: EM finds nothing.
+      redisService.get.mockResolvedValue(storedChallengeValue(TEST_OTP));
+      redisService.resolveOtpVerification.mockResolvedValue(true);
+      em.findOne.mockResolvedValue(null);
+      const enrollment = { publicId: 'created-id' };
+      em.create.mockReturnValue(enrollment);
+      em.flush.mockResolvedValue(undefined);
 
       // Act
       const result = await service.verifyChallenge(TEST_PHONE, TEST_OTP);
 
-      // Assert
+      // Assert — OTP path.
+      const otpKey = 'neo-bank:enrollments:challenge:otp:09123456789';
       expect(redisService.get).toHaveBeenCalledWith(otpKey);
       expect(redisService.resolveOtpVerification).toHaveBeenCalledWith(
         otpKey,
@@ -289,8 +335,69 @@ describe('EnrollmentsService', () => {
         5,
         900,
       );
-      expect(result).toEqual({ phoneNumber: TEST_PHONE });
-      expect(Object.keys(result).length).toBe(1);
+      // Assert — enrollment creation explicitness (DEFERRED _060 #4 SEC-03):
+      // only phoneNumber is supplied; lifecycle fields come from defaults.
+      expect(em.findOne).toHaveBeenCalledTimes(1);
+      expect(em.findOne).toHaveBeenCalledWith(Enrollment, { phoneNumber: TEST_PHONE });
+      expect(em.create).toHaveBeenCalledTimes(1);
+      expect(em.create).toHaveBeenCalledWith(Enrollment, { phoneNumber: TEST_PHONE });
+      expect(em.flush).toHaveBeenCalledTimes(1);
+      // Assert — response shape.
+      expect(typeof result.phoneNumber).toBe('string');
+      expect(typeof result.publicId).toBe('string');
+      expect(Object.keys(result).sort()).toEqual(['phoneNumber', 'publicId']);
+    });
+
+    it("returns the existing enrollment's publicId when the phone already has an active enrollment", async () => {
+      // Arrange — reuse-return branch: a live enrollment is found.
+      const existingPublicId = 'live-id';
+      const result = await succeedWith({
+        phoneNumber: TEST_PHONE,
+        publicId: existingPublicId,
+        status: ENROLLMENT_INITIAL_STATUS,
+        currentStep: ENROLLMENT_INITIAL_STEP,
+        expiresAt: new Date(Date.now() + 60_000),
+      });
+
+      // Assert — no create or flush touched; the service reused the row.
+      expect(em.create).not.toHaveBeenCalled();
+      expect(em.flush).not.toHaveBeenCalled();
+      expect(result.publicId).toBe(existingPublicId);
+    });
+
+    it('resets an expired enrollment to INITIAL/NATIONAL_CODE with a fresh expiresAt and returns its publicId', async () => {
+      // Arrange — EXPIRED row is found; the service resets it through the
+      // explicit-field branch and flushes the change.
+      const expiredPublicId = 'expired-id';
+      const result = await succeedWith({
+        phoneNumber: TEST_PHONE,
+        publicId: expiredPublicId,
+        status: ENROLLMENT_STATUS_EXPIRED,
+        currentStep: ENROLLMENT_INITIAL_STEP,
+        expiresAt: new Date(Date.now() - 1_000),
+      });
+
+      // Assert — status/currentStep/expiry are restored; no create fires.
+      expect(em.create).not.toHaveBeenCalled();
+      expect(em.flush).toHaveBeenCalledTimes(1);
+      expect(em.findOne).toHaveBeenCalledTimes(1);
+      expect(result.publicId).toBe(expiredPublicId);
+    });
+
+    it('throws when Redis reports a failed verify instead of touching the DB', async () => {
+      // Arrange
+      redisService.get.mockResolvedValue(storedChallengeValue(TEST_OTP));
+      redisService.resolveOtpVerification.mockResolvedValue(false);
+
+      // Act & Assert
+      await expect(service.verifyChallenge(TEST_PHONE, TEST_OTP)).rejects.toThrow(AppHttpException);
+      await expect(service.verifyChallenge(TEST_PHONE, TEST_OTP)).rejects.toMatchObject({
+        code: ErrorCode.OtpVerificationFailed,
+      });
+      // No DB access — the OTP gate short-circuits before ensureEnrollment.
+      expect(em.create).not.toHaveBeenCalled();
+      expect(em.findOne).not.toHaveBeenCalled();
+      expect(em.flush).not.toHaveBeenCalled();
     });
 
     it('resolves with matched=false but the observed challenge ID when the submitted OTP is wrong', async () => {
@@ -309,6 +416,10 @@ describe('EnrollmentsService', () => {
         5,
         900,
       );
+      // The EM is never reached because verify fails first.
+      expect(em.findOne).not.toHaveBeenCalled();
+      expect(em.create).not.toHaveBeenCalled();
+      expect(em.flush).not.toHaveBeenCalled();
     });
 
     it('resolves with matched=false — never an exception — when Redis holds no value', async () => {
@@ -327,6 +438,7 @@ describe('EnrollmentsService', () => {
         5,
         900,
       );
+      expect(em.findOne).not.toHaveBeenCalled();
     });
 
     it('resolves with matched=false when Redis holds a malformed stored value', async () => {
@@ -345,6 +457,7 @@ describe('EnrollmentsService', () => {
         5,
         900,
       );
+      expect(em.findOne).not.toHaveBeenCalled();
     });
 
     it('rejects every failure condition with the same generic error', async () => {
@@ -402,6 +515,8 @@ describe('EnrollmentsService', () => {
       await expect(service.verifyChallenge(TEST_PHONE, TEST_OTP)).rejects.toThrow(
         'connection lost',
       );
+      // DB is never reached when Redis throws.
+      expect(em.findOne).not.toHaveBeenCalled();
     });
 
     it('uses the configured max verification attempts, lockout TTL, and HMAC secret from environment', async () => {
@@ -414,6 +529,10 @@ describe('EnrollmentsService', () => {
       });
       redisService.get.mockResolvedValue(storedChallengeValue(TEST_OTP, customSecret));
       redisService.resolveOtpVerification.mockResolvedValue(true);
+      em.findOne.mockResolvedValue(null);
+      const enrollment = { publicId: 'fresh-created' };
+      em.create.mockReturnValue(enrollment);
+      em.flush.mockResolvedValue(undefined);
 
       // Act
       const result = await service.verifyChallenge(TEST_PHONE, TEST_OTP);
@@ -429,7 +548,8 @@ describe('EnrollmentsService', () => {
         3,
         300,
       );
-      expect(result).toEqual({ phoneNumber: TEST_PHONE });
+      expect(result.phoneNumber).toBe(TEST_PHONE);
+      expect(result.publicId).toBe(enrollment.publicId);
     });
   });
 });
