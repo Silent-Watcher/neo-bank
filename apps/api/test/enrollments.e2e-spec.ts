@@ -346,6 +346,7 @@ describe('EnrollmentsController (e2e)', () => {
         findOne: vi.fn().mockResolvedValue(null),
         create: vi.fn().mockReturnValue(mockEnrollment),
         flush: vi.fn().mockResolvedValue(undefined),
+        refresh: vi.fn().mockResolvedValue(undefined),
       };
       const { app, close, resolveOtpVerification } = await createAppWithVerifyMock(
         true,
@@ -390,6 +391,7 @@ describe('EnrollmentsController (e2e)', () => {
         findOne: vi.fn().mockResolvedValue(null),
         create: vi.fn().mockReturnValue(mockEnrollment),
         flush: vi.fn().mockResolvedValue(undefined),
+        refresh: vi.fn().mockResolvedValue(undefined),
       };
       const { app, close, resolveOtpVerification } = await createAppWithVerifyMock(
         true,

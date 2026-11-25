@@ -48,11 +48,18 @@ import {
   parseOtpChallengeValue,
 } from './enrollments.otp-digest.js';
 import { CHALLENGE_OTP_TTL_SECONDS, EnrollmentsService } from './enrollments.service.js';
+import { EnrollmentStateMachine } from './enrollment-state-machine.service.js';
 import {
   ENROLLMENT_INITIAL_STATUS,
   ENROLLMENT_INITIAL_STEP,
   ENROLLMENT_STATUS_EXPIRED,
+  ENROLLMENT_STATUS_IN_PROGRESS,
+  ENROLLMENT_STATUS_PENDING_REVIEW,
+  ENROLLMENT_STEP_COMPLETED,
+  ENROLLMENT_TTL_MS,
 } from './enrollments.enums.js';
+
+import type { EnrollmentStatus, EnrollmentStep } from './enrollments.enums.js';
 
 const TEST_SECRET = '1111111111111111111111111111111111111111111111111111111111111111';
 const TEST_PHONE = '09123456789';
@@ -62,6 +69,7 @@ type MockEm = {
   create: ReturnType<typeof vi.fn>;
   findOne: ReturnType<typeof vi.fn>;
   flush: ReturnType<typeof vi.fn>;
+  refresh: ReturnType<typeof vi.fn>;
 };
 
 describe('EnrollmentsService', () => {
@@ -127,11 +135,13 @@ describe('EnrollmentsService', () => {
       create: vi.fn(),
       findOne: vi.fn(),
       flush: vi.fn(),
+      refresh: vi.fn().mockResolvedValue(undefined),
     };
 
     const module = await Test.createTestingModule({
       providers: [
         EnrollmentsService,
+        EnrollmentStateMachine,
         { provide: RedisService, useValue: redisService },
         { provide: ConfigService, useValue: configService },
         { provide: I18nService, useValue: i18n },
@@ -140,6 +150,75 @@ describe('EnrollmentsService', () => {
     }).compile();
 
     service = module.get(EnrollmentsService);
+  });
+
+  describe('hashPassword (Argon2id)', () => {
+    it('hashes a valid input into an Argon2id PHC string', async () => {
+      const hash = await service.hashPassword('ValidInput123');
+      expect(hash).toMatch(/^\$argon2id\$v=\d+\$m=19456,t=2,p=1\$[A-Za-z0-9+/]+\$[A-Za-z0-9+/]+$/);
+    });
+
+    it('uses a different salt on each call — same input produces different hashes', async () => {
+      const hash1 = await service.hashPassword('SameInput123');
+      const hash2 = await service.hashPassword('SameInput123');
+      expect(hash1).not.toBe(hash2);
+    });
+
+    it('generated hashes verify against the correct input', async () => {
+      const argon2 = await import('argon2');
+      const hash = await service.hashPassword('CorrectInput1');
+      const valid = await argon2.verify(hash, 'CorrectInput1');
+      expect(valid).toBe(true);
+    });
+
+    it('fails verification for an incorrect input', async () => {
+      const argon2 = await import('argon2');
+      const hash = await service.hashPassword('CorrectInput1');
+      const valid = await argon2.verify(hash, 'WrongInput1');
+      expect(valid).toBe(false);
+    });
+
+    it('handles malformed stored hashes without throwing during verify', async () => {
+      const argon2 = await import('argon2');
+      await expect(argon2.verify('not-a-valid-hash', 'Input123')).rejects.toThrow();
+    });
+
+    it('needsRehash returns false for a hash created with current parameters', async () => {
+      const argon2 = await import('argon2');
+      const hash = await service.hashPassword('Input123');
+      const needsRehash = await argon2.needsRehash(hash, {
+        memoryCost: 19456,
+        timeCost: 2,
+        parallelism: 1,
+      });
+      expect(needsRehash).toBe(false);
+    });
+
+    it('needsRehash returns true for a hash created with weaker parameters', async () => {
+      const argon2 = await import('argon2');
+      const weakHash = await argon2.hash('Input123', {
+        type: argon2.argon2id,
+        memoryCost: 1024,
+        timeCost: 1,
+        parallelism: 1,
+      });
+      const needsRehash = await argon2.needsRehash(weakHash, {
+        memoryCost: 19456,
+        timeCost: 2,
+        parallelism: 1,
+      });
+      expect(needsRehash).toBe(true);
+    });
+
+    it('handles Unicode input correctly', async () => {
+      const argon2 = await import('argon2');
+      const unicodeInput = `Input\u0631\u0645\u0632${Date.now()}`;
+      const hash = await service.hashPassword(unicodeInput);
+      const valid = await argon2.verify(hash, unicodeInput);
+      const invalid = await argon2.verify(hash, `${unicodeInput}X`);
+      expect(valid).toBe(true);
+      expect(invalid).toBe(false);
+    });
   });
 
   it('stores the challenge value (challenge ID + OTP HMAC digest) — never the plaintext OTP — in Redis under the naming-convention key with an exact 120-second TTL via the atomic issue script', async () => {
@@ -550,6 +629,395 @@ describe('EnrollmentsService', () => {
       );
       expect(result.phoneNumber).toBe(TEST_PHONE);
       expect(result.publicId).toBe(enrollment.publicId);
+    });
+  });
+});
+
+// ---- submitStep tests ----
+
+describe('submitStep', () => {
+  const TEST_PUBLIC_ID = '018f4b2e-7c0a-7d3f-a5b9-1e2c3d4f5a6b';
+  const NOW = new Date('2026-01-01T00:00:00.000Z');
+
+  let redisService: {
+    issueOtp: ReturnType<typeof vi.fn>;
+    get: ReturnType<typeof vi.fn>;
+    resolveOtpVerification: ReturnType<typeof vi.fn>;
+    checkOtpRateLimit: ReturnType<typeof vi.fn>;
+  };
+  let configService: {
+    getOrThrow: ReturnType<typeof vi.fn>;
+  };
+  let i18n: {
+    t: ReturnType<typeof vi.fn>;
+  };
+  let em: {
+    findOneOrFail: ReturnType<typeof vi.fn>;
+    flush: ReturnType<typeof vi.fn>;
+    lock: ReturnType<typeof vi.fn>;
+    refresh: ReturnType<typeof vi.fn>;
+  };
+  let service: EnrollmentsService;
+  let stateMachine: EnrollmentStateMachine;
+
+  function makeEnrollment(
+    overrides: Partial<{
+      publicId: string;
+      status: EnrollmentStatus;
+      currentStep: EnrollmentStep;
+      expiresAt: Date;
+    }> = {},
+  ) {
+    return {
+      publicId: TEST_PUBLIC_ID,
+      status: ENROLLMENT_INITIAL_STATUS,
+      currentStep: ENROLLMENT_INITIAL_STEP,
+      expiresAt: new Date(NOW.getTime() + ENROLLMENT_TTL_MS),
+      ...overrides,
+      // Methods that the state machine may call
+      nationalCode: null,
+      firstName: null,
+      lastName: null,
+      birthDate: null,
+      referralCode: null,
+      username: null,
+      passwordHash: null,
+      occupation: null,
+      videoKey: null,
+    };
+  }
+
+  beforeEach(async () => {
+    vi.resetModules();
+
+    redisService = {
+      issueOtp: vi.fn(),
+      get: vi.fn(),
+      resolveOtpVerification: vi.fn(),
+      checkOtpRateLimit: vi.fn(),
+    };
+
+    configService = {
+      getOrThrow: vi.fn().mockReturnValue({
+        maxVerifyAttempts: 5,
+        lockoutTtlSeconds: 900,
+        otpHmacSecret: '11'.repeat(32),
+      }),
+    };
+
+    i18n = { t: vi.fn((key: string) => key) };
+
+    em = {
+      findOneOrFail: vi.fn(),
+      flush: vi.fn().mockResolvedValue(undefined),
+      lock: vi.fn(),
+      refresh: vi.fn().mockResolvedValue(undefined),
+    };
+
+    stateMachine = new EnrollmentStateMachine();
+
+    const module = await Test.createTestingModule({
+      providers: [
+        EnrollmentsService,
+        { provide: RedisService, useValue: redisService },
+        { provide: ConfigService, useValue: configService },
+        { provide: I18nService, useValue: i18n },
+        { provide: EntityManager, useValue: em },
+        { provide: EnrollmentStateMachine, useValue: stateMachine },
+      ],
+    }).compile();
+
+    service = module.get(EnrollmentsService);
+  });
+
+  describe('successful step submissions', () => {
+    it('submits NATIONAL_CODE: advances to FULL_NAME, status becomes IN_PROGRESS', async () => {
+      const enrollment = makeEnrollment();
+      em.findOneOrFail.mockResolvedValue(enrollment);
+
+      const result = await service.submitStep(TEST_PUBLIC_ID, 'NATIONAL_CODE', NOW, (e) => {
+        e.nationalCode = '1234567890';
+      });
+
+      expect(result.publicId).toBe(TEST_PUBLIC_ID);
+      expect(result.status).toBe(ENROLLMENT_STATUS_IN_PROGRESS);
+      expect(result.currentStep).toBe('FULL_NAME');
+      expect(enrollment.nationalCode).toBe('1234567890');
+      expect(em.flush).toHaveBeenCalledTimes(1);
+    });
+
+    it('submits FULL_NAME: advances to BIRTH_DATE', async () => {
+      const enrollment = makeEnrollment({
+        status: ENROLLMENT_STATUS_IN_PROGRESS,
+        currentStep: 'FULL_NAME',
+      });
+      em.findOneOrFail.mockResolvedValue(enrollment);
+
+      const result = await service.submitStep(TEST_PUBLIC_ID, 'FULL_NAME', NOW, (e) => {
+        e.firstName = 'Ali';
+        e.lastName = 'Rezaei';
+      });
+
+      expect(result.currentStep).toBe('BIRTH_DATE');
+      expect(result.status).toBe(ENROLLMENT_STATUS_IN_PROGRESS);
+      expect(enrollment.firstName).toBe('Ali');
+      expect(enrollment.lastName).toBe('Rezaei');
+    });
+
+    it('submits BIRTH_DATE: advances to REFERRAL_CODE', async () => {
+      const enrollment = makeEnrollment({
+        status: ENROLLMENT_STATUS_IN_PROGRESS,
+        currentStep: 'BIRTH_DATE',
+      });
+      em.findOneOrFail.mockResolvedValue(enrollment);
+
+      const result = await service.submitStep(TEST_PUBLIC_ID, 'BIRTH_DATE', NOW, (e) => {
+        e.birthDate = '1990-05-15';
+      });
+
+      expect(result.currentStep).toBe('REFERRAL_CODE');
+      expect(enrollment.birthDate).toBe('1990-05-15');
+    });
+
+    it('submits REFERRAL_CODE: advances to USERNAME', async () => {
+      const enrollment = makeEnrollment({
+        status: ENROLLMENT_STATUS_IN_PROGRESS,
+        currentStep: 'REFERRAL_CODE',
+      });
+      em.findOneOrFail.mockResolvedValue(enrollment);
+
+      const result = await service.submitStep(TEST_PUBLIC_ID, 'REFERRAL_CODE', NOW, (e) => {
+        e.referralCode = 'REF123';
+      });
+
+      expect(result.currentStep).toBe('USERNAME');
+      expect(enrollment.referralCode).toBe('REF123');
+    });
+
+    it('submits USERNAME: advances to PASSWORD', async () => {
+      const enrollment = makeEnrollment({
+        status: ENROLLMENT_STATUS_IN_PROGRESS,
+        currentStep: 'USERNAME',
+      });
+      em.findOneOrFail.mockResolvedValue(enrollment);
+
+      const result = await service.submitStep(TEST_PUBLIC_ID, 'USERNAME', NOW, (e) => {
+        e.username = 'ali.rezaei_123';
+      });
+
+      expect(result.currentStep).toBe('PASSWORD');
+      expect(enrollment.username).toBe('ali.rezaei_123');
+    });
+
+    it('submits PASSWORD: advances to OCCUPATION', async () => {
+      const enrollment = makeEnrollment({
+        status: ENROLLMENT_STATUS_IN_PROGRESS,
+        currentStep: 'PASSWORD',
+      });
+      em.findOneOrFail.mockResolvedValue(enrollment);
+
+      const result = await service.submitStep(TEST_PUBLIC_ID, 'PASSWORD', NOW, (e) => {
+        e.passwordHash = 'hashed-password';
+      });
+
+      expect(result.currentStep).toBe('OCCUPATION');
+      expect(enrollment.passwordHash).toBe('hashed-password');
+    });
+
+    it('submits OCCUPATION: advances to VIDEO_VERIFICATION', async () => {
+      const enrollment = makeEnrollment({
+        status: ENROLLMENT_STATUS_IN_PROGRESS,
+        currentStep: 'OCCUPATION',
+      });
+      em.findOneOrFail.mockResolvedValue(enrollment);
+
+      const result = await service.submitStep(TEST_PUBLIC_ID, 'OCCUPATION', NOW, (e) => {
+        e.occupation = 'Software Engineer';
+      });
+
+      expect(result.currentStep).toBe('VIDEO_VERIFICATION');
+      expect(enrollment.occupation).toBe('Software Engineer');
+    });
+
+    it('submits VIDEO_VERIFICATION: completes form to PENDING_REVIEW with COMPLETED step', async () => {
+      const enrollment = makeEnrollment({
+        status: ENROLLMENT_STATUS_IN_PROGRESS,
+        currentStep: 'VIDEO_VERIFICATION',
+      });
+      em.findOneOrFail.mockResolvedValue(enrollment);
+
+      const result = await service.submitStep(TEST_PUBLIC_ID, 'VIDEO_VERIFICATION', NOW, () => {
+        /* videoKey set by deferred upload flow */
+      });
+
+      expect(result.status).toBe(ENROLLMENT_STATUS_PENDING_REVIEW);
+      expect(result.currentStep).toBe(ENROLLMENT_STEP_COMPLETED);
+    });
+  });
+
+  describe('earlier-step edits (do not move currentStep backwards)', () => {
+    it('editing NATIONAL_CODE when currentStep is FULL_NAME keeps currentStep', async () => {
+      const enrollment = makeEnrollment({
+        status: ENROLLMENT_STATUS_IN_PROGRESS,
+        currentStep: 'FULL_NAME',
+      });
+      em.findOneOrFail.mockResolvedValue(enrollment);
+
+      const result = await service.submitStep(TEST_PUBLIC_ID, 'NATIONAL_CODE', NOW, (e) => {
+        e.nationalCode = '9876543210';
+      });
+
+      expect(result.currentStep).toBe('FULL_NAME');
+      expect(result.status).toBe(ENROLLMENT_STATUS_IN_PROGRESS);
+      expect(enrollment.nationalCode).toBe('9876543210');
+    });
+
+    it('editing FULL_NAME when currentStep is BIRTH_DATE keeps currentStep', async () => {
+      const enrollment = makeEnrollment({
+        status: ENROLLMENT_STATUS_IN_PROGRESS,
+        currentStep: 'BIRTH_DATE',
+      });
+      em.findOneOrFail.mockResolvedValue(enrollment);
+
+      const result = await service.submitStep(TEST_PUBLIC_ID, 'FULL_NAME', NOW, (e) => {
+        e.firstName = 'New';
+        e.lastName = 'Name';
+      });
+
+      expect(result.currentStep).toBe('BIRTH_DATE');
+      expect(enrollment.firstName).toBe('New');
+    });
+  });
+
+  describe('expiration handling', () => {
+    it('returns 410 GONE when enrollment is expired (expireIfDue transitions and flushes first)', async () => {
+      const expiredAt = new Date(NOW.getTime() - 1000);
+      const enrollment = makeEnrollment({ expiresAt: expiredAt });
+      em.findOneOrFail.mockResolvedValue(enrollment);
+
+      await expect(
+        service.submitStep(TEST_PUBLIC_ID, 'NATIONAL_CODE', NOW, () => {}),
+      ).rejects.toThrow();
+
+      // The error is thrown as AppHttpException; verify the enrollment was
+      // transitioned to EXPIRED and flushed BEFORE the error.
+      expect(enrollment.status).toBe(ENROLLMENT_STATUS_EXPIRED);
+      expect(em.flush).toHaveBeenCalledTimes(1);
+    });
+
+    it('returns 410 for already EXPIRED enrollment (expireIfDue returns false but status is EXPIRED)', async () => {
+      const enrollment = makeEnrollment({ status: ENROLLMENT_STATUS_EXPIRED });
+      em.findOneOrFail.mockResolvedValue(enrollment);
+
+      await expect(
+        service.submitStep(TEST_PUBLIC_ID, 'NATIONAL_CODE', NOW, () => {}),
+      ).rejects.toThrow();
+
+      // The state machine throws ENROLLMENT_STEP_NOT_ALLOWED for EXPIRED
+      // (since INCOMPLETE_ENROLLMENT_STATUSES doesn't include EXPIRED).
+    });
+  });
+
+  describe('step order validation', () => {
+    it('rejects future step (e.g., BIRTH_DATE before NATIONAL_CODE)', async () => {
+      const enrollment = makeEnrollment(); // currentStep = NATIONAL_CODE
+      em.findOneOrFail.mockResolvedValue(enrollment);
+
+      await expect(
+        service.submitStep(TEST_PUBLIC_ID, 'BIRTH_DATE', NOW, () => {}),
+      ).rejects.toThrow();
+
+      // Should not flush — the step was rejected before apply().
+      expect(em.flush).not.toHaveBeenCalled();
+    });
+
+    it('rejects COMPLETED step (never submittable)', async () => {
+      const enrollment = makeEnrollment({ currentStep: ENROLLMENT_STEP_COMPLETED });
+      em.findOneOrFail.mockResolvedValue(enrollment);
+
+      await expect(
+        service.submitStep(TEST_PUBLIC_ID, 'COMPLETED', NOW, () => {}),
+      ).rejects.toThrow();
+
+      expect(em.flush).not.toHaveBeenCalled();
+    });
+
+    it('rejects step when status is PENDING_REVIEW (non-receptive)', async () => {
+      const enrollment = makeEnrollment({ status: ENROLLMENT_STATUS_PENDING_REVIEW });
+      em.findOneOrFail.mockResolvedValue(enrollment);
+
+      await expect(
+        service.submitStep(TEST_PUBLIC_ID, 'NATIONAL_CODE', NOW, () => {}),
+      ).rejects.toThrow();
+
+      expect(em.flush).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('unique constraint violations', () => {
+    it('maps national_code unique violation to indistinguishable generic error', async () => {
+      const enrollment = makeEnrollment();
+      em.findOneOrFail.mockResolvedValue(enrollment);
+      em.flush.mockRejectedValueOnce({
+        code: '23505',
+        constraint: 'enrollments_national_code_active_unique',
+      });
+
+      await expect(
+        service.submitStep(TEST_PUBLIC_ID, 'NATIONAL_CODE', NOW, (e) => {
+          e.nationalCode = '1234567890';
+        }),
+      ).rejects.toMatchObject({
+        code: 'ENROLLMENT_STEP_NOT_ALLOWED',
+      });
+
+      // Verify the generic detail key is used (not the specific constraint).
+      expect(i18n.t).toHaveBeenCalledWith('enrollment.stepNotAllowed');
+    });
+
+    it('maps username unique violation to usernameTaken detail', async () => {
+      const enrollment = makeEnrollment({ currentStep: 'USERNAME' });
+      em.findOneOrFail.mockResolvedValue(enrollment);
+      em.flush.mockRejectedValueOnce({
+        code: '23505',
+        constraint: 'enrollments_username_active_unique',
+      });
+
+      await expect(
+        service.submitStep(TEST_PUBLIC_ID, 'USERNAME', NOW, (e) => {
+          e.username = 'taken';
+        }),
+      ).rejects.toMatchObject({
+        code: 'ENROLLMENT_STEP_NOT_ALLOWED',
+      });
+
+      expect(i18n.t).toHaveBeenCalledWith('enrollment.usernameTaken');
+    });
+  });
+
+  describe('optimistic locking', () => {
+    it('maps OptimisticLockError to VersionConflict via mapOptimisticLockError', async () => {
+      const enrollment = makeEnrollment();
+      em.findOneOrFail.mockResolvedValue(enrollment);
+      // The mapper throws AppHttpException with VersionConflict
+      const { OptimisticLockError } = await import('@mikro-orm/core');
+      em.flush.mockRejectedValueOnce(new OptimisticLockError('version conflict'));
+
+      await expect(
+        service.submitStep(TEST_PUBLIC_ID, 'NATIONAL_CODE', NOW, () => {}),
+      ).rejects.toMatchObject({
+        code: 'VERSION_CONFLICT',
+      });
+    });
+  });
+
+  describe('enrollment not found', () => {
+    it('throws when publicId does not exist (404 from findOneOrFail)', async () => {
+      em.findOneOrFail.mockRejectedValueOnce(new Error('Not found'));
+
+      await expect(
+        service.submitStep('non-existent-id', 'NATIONAL_CODE', NOW, () => {}),
+      ).rejects.toThrow('Not found');
     });
   });
 });

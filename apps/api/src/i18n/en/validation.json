@@ -1,5 +1,17 @@
 {
   "phoneNumber": "Phone number must be an Iranian mobile number in the format 09XXXXXXXXX.",
   "otp": "OTP must be a six-digit numeric string.",
+  "nationalCode": "National code must be a 10-digit numeric string.",
+  "firstName": "First name must be at most 50 characters.",
+  "lastName": "Last name must be at most 50 characters.",
+  "birthDate": "Birth date must be a valid date in YYYY-MM-DD format.",
+  "referralCode": "Referral code must be at most 20 characters.",
+  "username": "Username must be 3-30 characters, lowercase alphanumeric with . _ - only.",
+  "password": {
+    "min": "Password must be at least 8 characters.",
+    "max": "Password must be at most 128 characters.",
+    "complexity": "Password must contain at least one letter and one digit."
+  },
+  "occupation": "Occupation must be at most 100 characters.",
   "invalid_type": "Expected {expected}, but received {received}."
 }

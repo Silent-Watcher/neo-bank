@@ -184,6 +184,31 @@ original task requirements and must be addressed in future work.
 
 ---
 
+## Mandated by the Enrollment Step Submission APIs Phase (_064, master prompt §12 Phase 6)
+
+### 1. BOLA Exposure on Step-Submission Endpoints (Security — Deferred by Developer)
+
+**Origin**: master prompt §12 Phase 6 "Authorization Deferral" + security review of _064 (Wave 37 finding SEC-01, 2026-11-24, CWE-639) — the eight `POST /api/v1/enrollments/:publicId/step/:step-name` endpoints use `publicId` as the lookup key without ownership verification.
+**Status**: Open — explicitly deferred by the developer (master prompt §13.5). The temporary BOLA exposure is documented here per the master prompt's requirement.
+**Requirement**: Before production exposure of customer-specific Enrollment operations, implement an authentication/authorization guard that verifies the caller possesses the OTP challenge proof for the enrollment's phone number (e.g., a short-lived session token or signed JWT issued on `POST /enrollments/verify`). `publicId` must never be treated as proof of authorization. The guard must run before `EnrollmentStateMachine.executeStep` is invoked, and state-machine errors must never be mapped for unauthenticated/unauthorized callers (DEFERRED _062 #1).
+**Rationale**: Any party with a `publicId` can currently advance, edit, or complete another user's enrollment. UUIDv7 embeds a timestamp; combined with leakage vectors (logs, Referer, shoulder-surfing), this is a real takeover vector. The fix is a separate future feature (Phase 7+), not part of Phase 6.
+
+### 2. Password-Hash Column Bound (Security — Done)
+
+**Origin**: security review of _064 (Wave 37 finding SEC-03, 2026-11-24, CWE-20/CWE-770) — `password_hash` was `text` with no length cap.
+**Status**: **Done** (2026-11-24, Phase 6 / `_064`) — added `enrollments_password_hash_length` CHECK constraint (`char_length(password_hash) <= 72`) via `Migration20261124182507`, with the constraint name in `ENROLLMENT_SCHEMA_CONSTRAINT_NAMES` (single source). **Updated 2026-11-25 (Argon2id migration)**: bcrypt was replaced with Argon2id (ADR-043); PHC strings are ~98 chars, so `Migration20261125220000` raised the CHECK to `<= 255` (`PASSWORD_HASH_MAX_LENGTH`).
+**Requirement**: (met) Database-level bound on the password hash column.
+**Rationale**: Defense-in-depth against future regressions that bypass the application hashing layer.
+
+### 3. Expired-Condition Status Unification (Consistency — Done)
+
+**Origin**: security review of _064 (Wave 37 finding SEC-02, 2026-11-24, CWE-203) + DEFERRED _062 #2 — due-but-unpersisted expiration returned 410 while already-EXPIRED rows returned 409.
+**Status**: **Done** (2026-11-24, Phase 6 / `_064`) — `EnrollmentStateMachine.executeStep()` now checks `enrollment.status === ENROLLMENT_STATUS_EXPIRED` explicitly after `expireIfDue()` and throws `EnrollmentStateMachineError` with `ErrorCode.EnrollmentExpired` / `HttpStatus.GONE` (410), so both the just-expired and already-expired paths return the same 410 contract.
+**Requirement**: (met) Single representative status code (410 Gone) for the expired condition.
+**Rationale**: Eliminates the persistence-state oracle; clients can rely on 410 = expired regardless of when the transition was persisted.
+
+---
+
 ## How to Use This Registry
 
 - When starting work on a deferred item, move it from this file to a new ADR proposal (or link to an existing one).
@@ -202,6 +227,13 @@ Per the "Subagent Findings: Persistence, Derived Rules, and Test Integrity" rule
 **Origin**: code-reviewer finding CR-05 (Low, 2026-11-17) — `docs/judge-findings.md` Wave 23 iteration 2.
 **Status**: **Partially Done** (2026-11-17) — the Redis siblings (`REDIS_CONNECT_TIMEOUT_MS`, `REDIS_COMMAND_TIMEOUT_MS`, `REDIS_MAX_RETRIES_PER_REQUEST`, `REDIS_SHUTDOWN_TIMEOUT_MS`) were fixed during _054 (Wave 24 CR-01) via the shared `positiveIntegerEnv(field, default)` helper in `validation-helpers.ts`, with blank/whitespace spec coverage. **Still open**: `BODY_LIMIT` (`server.env.ts`) — same defect class, separate untouched file; apply the same helper plus its spec case.
 **Requirement**: Apply the blank-to-unset helper (see `validation-helpers.ts` `positiveIntegerEnv` and `docs/ai-decisions.md` #23/#25 for the Zod pitfall) to `BODY_LIMIT` and add the matching spec cases. An operator copying `.env.example` verbatim still cannot boot the API with that entry left empty.
+
+### 2. Trust-Proxy Configuration Hardening (SEC-03, 2026-11-25)
+
+**Origin**: code-security-analyzer finding SEC-03 (Low, 2026-11-25) — `docs/judge-findings.md` Argon2id migration security review.
+**Status**: **Open** — The current default `trustProxy=true` without a `TRUST_PROXY_PROXIES` allowlist allows IP spoofing via `X-Forwarded-For` header, enabling rate-limit bypass by cycling spoofed valid-looking IPs. The `boundedTracker` in `redis-throttler.guard.ts` only falls back to the socket address when the tracker is not a valid IP.
+**Requirement**: For production deployment, `TRUST_PROXY_PROXIES` **must** be set to a strict allowlist of known proxy CIDRs (load balancer, CDN). This is already documented in ADR-032 and the `TRUST_PROXY_PROXIES` env var description in `server.env.ts`. Add a deployment checklist item to `ONBOARDING.md` and verify in CI that the variable is set for non-development environments.
+**Rationale**: Without the allowlist, an attacker can bypass per-IP rate limits entirely, amplifying the Argon2id DoS surface (SEC-01) and enabling credential stuffing/OTP brute force.
 **Rationale**: one documented-contract violation remains for the last sibling.
 
 ### 2. Redis health-probe coalescing asymmetry (SEC-INFO-01)

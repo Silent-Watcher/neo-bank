@@ -353,11 +353,44 @@ its shared entity base plus the first feature entity (`Enrollment`, table
   `ENROLLMENT_EXPIRED` (410 Gone) and `ENROLLMENT_STEP_NOT_ALLOWED`
   (409 Conflict) gained bilingual titles in both `errors.json` catalogs, and
   their detail keys live in the new `src/i18n/{en,fa}/enrollment.json`
-  catalogs. No HTTP endpoint invokes the machine yet — the endpoint surface
-  is still challenge/verify only; it is exercised by the table-driven unit
-  suite (`enrollment-state-machine.spec.ts`) and by database-tier scenarios
-  (lazy-expiration persistence, phone release, optimistic-lock conflict
-  mapping through the machine — see the Tests bullet).
+  catalogs.
+- Feature module `enrollments` (Phase 6 — step submission endpoints,
+  `prompts/_064-enrollment-step-submission.md`): eight `POST /api/v1/enrollments/:publicId/step/:step-name`
+  endpoints, one per submittable form step (`NATIONAL_CODE`, `FULL_NAME`,
+  `BIRTH_DATE`, `REFERRAL_CODE`, `USERNAME`, `PASSWORD`, `OCCUPATION`,
+  `VIDEO_VERIFICATION`). Each endpoint validates its payload with a Zod schema
+  (single-source format constants from `enrollments.enums.ts` —
+  `ENROLLMENT_NATIONAL_CODE_FORMAT`, `ENROLLMENT_USERNAME_FORMAT`,
+  `ENROLLMENT_STEP_FIELD_MAX_LENGTHS`), then invokes
+  `EnrollmentsService.submitStep(publicId, step, now, apply)` which:
+  1. Loads the enrollment by `publicId` with `LockMode.PESSIMISTIC_WRITE` to
+     serialize concurrent submissions and the expiration race.
+  2. Runs lazy expiration via `stateMachine.expireIfDue()`; if due, persists
+     the `EXPIRED` transition BEFORE mapping the `ENROLLMENT_EXPIRED` (410)
+     rejection (master prompt §11.1 / DEFERRED _062 #2).
+  3. Executes the step through the pure domain `EnrollmentStateMachine`,
+     which validates guards (expiration, receptive status, step order,
+     `COMPLETED` never submittable) and invokes the `apply()` callback to
+     write the step data to the entity.
+  4. Flushes with optimistic locking (inherited `BaseEntity.version`);
+     `mapOptimisticLockError` maps `OptimisticLockError` → `VersionConflict`
+     (409).
+  5. Maps unique constraint violations (PostgreSQL 23505): `national_code`
+     collisions → indistinguishable generic `ENROLLMENT_STEP_NOT_ALLOWED`
+     (CWE-204 privacy — third-party enumeration prevention per DEFERRED
+     _061 #5 / SEC-04); `username` collisions → standard `usernameTaken`
+     disclosure. Both are wrapped in the standard Problem Details envelope.
+  6. Returns the updated state: `publicId`, `status`, `currentStep`, `expiresAt`
+     wrapped in the standard success envelope (timestamp, apiVersion,
+     requestId, status, message, data).
+     Password is hashed server-side with Argon2id (OWASP minimum: memory 19456 KiB, time cost 2, parallelism 1, ADR-043);
+     plaintext never reaches the `password_hash` column (DEFERRED _061 #3 /
+     SEC-02). Username is normalized to lowercase before persistence (ADR-042).
+     Per-IP rate limiting: 20 requests per 120 seconds (`@Throttle` on each
+     step endpoint). Authorization is explicitly deferred (master prompt §13.5):
+     the endpoints use `publicId` as the lookup key without ownership
+     verification — this is a temporary BOLA exposure documented in DEFERRED.md;
+     the Phase 6 auth guard will resolve it.
 - Conditional requests (restored Fastify-era behavior, ADR-032; hardened and
   made opt-in by ADR-038): weak entity tags (`W/"<sha256>"`) composed over
   the serialized application payload **and the request's resolved locale** on

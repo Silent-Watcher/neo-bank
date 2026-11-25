@@ -15,6 +15,7 @@ import {
   ENROLLMENT_STEPS,
   ENROLLMENT_TTL_MS,
   ENROLLMENT_USERNAME_FORMAT,
+  PASSWORD_HASH_MAX_LENGTH,
 } from '#modules/enrollments/enrollments.enums.js';
 import type { EnrollmentStatus, EnrollmentStep } from '#modules/enrollments/enrollments.enums.js';
 
@@ -77,6 +78,10 @@ const lengthCheck = (column: string, max: number): string => `char_length(${colu
 @Check({
   name: ENROLLMENT_SCHEMA_CONSTRAINT_NAMES.videoKeyLength,
   expression: lengthCheck('video_key', ENROLLMENT_STEP_FIELD_MAX_LENGTHS.videoKey),
+})
+@Check({
+  name: ENROLLMENT_SCHEMA_CONSTRAINT_NAMES.passwordHashLength,
+  expression: lengthCheck('password_hash', PASSWORD_HASH_MAX_LENGTH),
 })
 @Unique({
   name: ENROLLMENT_SCHEMA_CONSTRAINT_NAMES.phoneActiveUnique,

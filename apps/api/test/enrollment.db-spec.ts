@@ -326,7 +326,8 @@ describe('Enrollment persistence', () => {
       birthDate: '1991-09-06',
       referralCode: 'REF-42',
       username: 'arash.k',
-      passwordHash: 'argon2id$dummy-hash-value',
+      passwordHash:
+        '$argon2id$v=19$m=19456,t=2,p=1$OKQsonbz2gb+ijkidQc2Tg$7Y7Z259RTZBNWGCN8I9NY3ny6SoSPi8J8phV90eao1o',
       occupation: 'مهندس نرم‌افزار',
       videoKey: 'verification/arash-k-2026.mp4',
     });
@@ -360,7 +361,9 @@ describe('Enrollment persistence', () => {
     expect(persisted.birthDate).toBe('1991-09-06');
     expect(persisted.referralCode).toBe('REF-42');
     expect(persisted.username).toBe('arash.k');
-    expect(persisted.passwordHash).toBe('argon2id$dummy-hash-value');
+    expect(persisted.passwordHash).toBe(
+      '$argon2id$v=19$m=19456,t=2,p=1$OKQsonbz2gb+ijkidQc2Tg$7Y7Z259RTZBNWGCN8I9NY3ny6SoSPi8J8phV90eao1o',
+    );
     expect(persisted.occupation).toBe('مهندس نرم‌افزار');
     expect(persisted.videoKey).toBe('verification/arash-k-2026.mp4');
     expect(raw[0].national_code).toBe('0923456789');

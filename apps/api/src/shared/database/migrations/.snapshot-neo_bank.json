@@ -441,6 +441,11 @@
           "definition": "check (char_length(occupation) <= 100)"
         },
         {
+          "name": "enrollments_password_hash_length",
+          "expression": "char_length(password_hash) <= 72",
+          "definition": "check (char_length(password_hash) <= 72)"
+        },
+        {
           "name": "enrollments_phone_number_format",
           "expression": "phone_number ~ '^09[0-9]{9}$'",
           "definition": "check (phone_number ~ '^09[0-9]{9}$')"

@@ -114,6 +114,20 @@ export class EnrollmentStateMachine {
         HttpStatus.GONE,
       );
     }
+    // An enrollment that is already EXPIRED (status set by a prior lazy
+    // expiration or by the background job) must also return 410 with the
+    // same error code/detail so the client sees a consistent "expired"
+    // response regardless of whether the expiration happened just now or
+    // earlier. This is checked after expireIfDue() because that method
+    // returns false for already-EXPIRED records (they are not in
+    // INCOMPLETE_ENROLLMENT_STATUSES), so we handle them explicitly here.
+    if (enrollment.status === ENROLLMENT_STATUS_EXPIRED) {
+      throw new EnrollmentStateMachineError(
+        ErrorCode.EnrollmentExpired,
+        ENROLLMENT_EXPIRED_DETAIL_KEY,
+        HttpStatus.GONE,
+      );
+    }
     // The step-receptive statuses are exactly the expirable ones: the two
     // incomplete lifecycle states (master prompt §10.4 — PENDING_REVIEW,
     // APPROVED, REJECTED, and EXPIRED cannot receive user steps).

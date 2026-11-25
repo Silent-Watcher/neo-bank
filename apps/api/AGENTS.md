@@ -135,6 +135,19 @@ development/test.
   shared response schemas (envelope, Problem Details) live in
   `src/shared/swagger/openapi.schemas.ts`.
 
+### Swagger Endpoint Documentation Standard
+
+Every controller endpoint must have a dedicated custom Swagger decorator function following the one-endpoint-one-decorator convention. Follow `agents/rules/swagger-endpoint-documentation.md` and read `agents/skills/swagger-endpoint-documentation/SKILL.md` before creating or modifying endpoint documentation.
+
+Key conventions:
+
+- One endpoint = one `Swagger`-prefixed function = one `applyDecorators` composition.
+- Functions live in feature-local `<feature>.swagger.ts` (e.g., `enrollments.swagger.ts`).
+- Functions use `applyDecorators` directly with all endpoint-specific Swagger decorators.
+- Reuse existing schema constants (`toJsonSchemaObject` Zod schemas, `successEnvelopeSchema`, `problemDetailsSchema`).
+- Runtime decorators (`@Post`, `@Throttle`, etc.) remain separate from Swagger decorators.
+- Generated OpenAPI output must be verified via `test/swagger.e2e-spec.ts`.
+
 ## Internationalization
 
 The API is bilingual: `en` (default) and `fa`, via the official

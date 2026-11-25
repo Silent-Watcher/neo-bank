@@ -79,6 +79,7 @@ export const ENROLLMENT_SCHEMA_CONSTRAINT_NAMES = {
   videoKeyLength: 'enrollments_video_key_length',
   nationalCodeActiveUnique: 'enrollments_national_code_active_unique',
   usernameActiveUnique: 'enrollments_username_active_unique',
+  passwordHashLength: 'enrollments_password_hash_length',
 } as const;
 
 /**
@@ -104,3 +105,19 @@ export const ENROLLMENT_STEP_FIELD_MAX_LENGTHS = {
   occupation: 100,
   videoKey: 500,
 } as const;
+
+/**
+ * Argon2id parameters (OWASP minimum, ADR-043): the single source for the
+ * password hashing configuration. Set explicitly — never rely on library
+ * defaults. Memory cost is in KiB; 19456 KiB = 19 MiB per hash operation.
+ */
+export const ARGON2_MEMORY_COST = 19456;
+export const ARGON2_TIME_COST = 2;
+export const ARGON2_PARALLELISM = 1;
+
+/**
+ * Password hash length contract (ADR-043): an Argon2id PHC string
+ * (`$argon2id$v=19$m=19456,t=2,p=1$<salt>$<hash>`) is ~98 chars; 255 gives
+ * generous margin for future parameter or algorithm changes.
+ */
+export const PASSWORD_HASH_MAX_LENGTH = 255;

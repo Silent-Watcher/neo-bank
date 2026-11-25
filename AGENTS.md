@@ -582,6 +582,12 @@ For any task involving NestJS configuration, environment variables, environment 
 
 Treat this convention as the default project architecture. Inspect existing files before creating new ones, and do not introduce a competing configuration approach.
 
+### Swagger Endpoint Documentation
+
+For any task involving NestJS controller endpoints, Swagger/OpenAPI documentation, or request/response contract changes, follow `agents/rules/swagger-endpoint-documentation.md` and read `agents/skills/swagger-endpoint-documentation/SKILL.md` before making changes.
+
+Every controller endpoint must have a dedicated custom Swagger decorator function following the one-endpoint-one-decorator convention. See the Rule and Skill for the mandatory conventions and implementation workflow.
+
 ### Application Bootstrap
 
 - Keep all bootstrap-time application configuration — HTTP adapter options such as `trustProxy` and the body-parser limit, the global API prefix, URI versioning, and CORS — directly inside the `bootstrap` function in `apps/api/src/main.ts`.
@@ -673,6 +679,16 @@ locale tests have been updated and pass.
 - Fix regressions introduced by your changes and report checks that could not run.
 - Review the final diff for unintended changes.
 
+### Mandatory Test Integrity and Fully-Passing Suite
+
+The following rules are permanent and repository-wide:
+
+1. **All tests must pass.** The entire project's test suite must pass — not just tests related to the current task. Tests outside the scope of the current task are equally important and must not be ignored. A pre-existing failing test is still a blocking issue, even if it is unrelated to the requested implementation.
+2. **Resolve existing failures before implementation.** Before starting requested implementation, run the appropriate test suites and establish their current status. If any tests are already failing, investigate the root cause and resolve those failures before proceeding. Do not assume an unrelated failure can be safely ignored. If the cause or correct solution is unclear, or resolving it requires a product, architectural, or behavioral decision, stop and ask the user for clarification before proceeding.
+3. **Never bypass or weaken tests.** Under no circumstances may an agent skip failing tests to make the suite appear successful; use `.skip`, `.todo`, `.only`, or equivalent mechanisms to avoid executing tests; disable, exclude, or remove existing tests merely because they fail; weaken assertions, remove test cases, reduce meaningful coverage, or alter test expectations just to make tests pass; modify test configuration, scripts, or execution commands to conceal failures; or introduce mocks, stubs, or other workarounds that hide actual defects instead of testing the intended behavior.
+4. **Preserve test integrity.** Fix the underlying defect rather than hiding its symptoms. Existing tests must retain their original intent and meaningful coverage. Test modifications are allowed only when genuinely required by an intentional and justified behavior change — such changes must preserve the original level of verification and must never be used to bypass a failure. When the intended behavior or validity of an existing test is uncertain, ask the user before changing it.
+5. **Verify everything after implementation.** Once the requested task and any necessary prerequisite fixes are complete, run the full relevant test suite again. Do not consider the task complete while any test remains failing. Report the exact test commands executed and their actual results. Never claim that tests passed unless they were actually executed successfully.
+
 ## Semantic Versioning & Release Rules
 
 - Follow Semantic Versioning 2.0.0 (`MAJOR.MINOR.PATCH`, https://semver.org/spec/v2.0.0.html).
@@ -721,7 +737,116 @@ Available subagents:
 - `documentation-writer` — documentation-only writes (enforced by hook where
   the platform supports it, otherwise returns ready-to-apply patches).
 
-Orchestration rules for the primary agent:
+### Sub-Agent Review Workflow (Mandatory)
+
+The following sub-agents must be invoked **sequentially** in this exact order
+for every substantive implementation task:
+
+1. **Code Reviewer** (always first)
+2. **Security Reviewer** (always second, after Code Reviewer verifies)
+3. **Migration Reviewer** (conditional: only when task adds, modifies, or removes database migration files)
+4. **Documentation Sync** (always last, after all applicable review stages complete)
+
+**Never execute Code Reviewer and Security Reviewer in parallel.**
+**Never skip Security Reviewer, even for small tasks.**
+**Skip Migration Reviewer only when no migration files are changed.**
+**Documentation Sync is mandatory and must always be the final stage.**
+
+#### Mandatory Finding-Resolution Lifecycle (Applies to Every Review Sub-Agent)
+
+Every review sub-agent must follow the same review-resolution-verification lifecycle:
+
+**Step 1 — Initial Review**
+
+- Invoke the relevant sub-agent against the current implementation with sufficient task context.
+- Wait for its complete report before proceeding.
+- Do not start another review stage while the current sub-agent's findings are still being processed.
+
+**Step 2 — Triage Every Finding**
+Carefully inspect every finding, recommendation, suggestion, and important observation. Classify each item:
+
+**A. Relevant to the current task**
+
+- Investigate the finding.
+- Fix and implement the necessary changes within the scope of the current task.
+- Add or update tests when required.
+- Do not dismiss a finding simply because fixing it requires refactoring or modifying related code.
+
+**B. Outside the current task scope**
+
+- Do not silently ignore it.
+- Do not unnecessarily expand the current implementation scope.
+- Document the finding in the appropriate existing project documentation (findings, deferred work, security notes, etc.).
+- Preserve the original concern, its technical context, impact, and recommended follow-up.
+- Make it clear why the item was not addressed in the current task.
+
+**Every reported item must have an explicit disposition. No finding, suggestion, or important observation may be silently discarded.**
+
+**Step 3 — Re-Invoke the Same Sub-Agent for Verification**
+After implementing relevant fixes and documenting out-of-scope findings, invoke **the same sub-agent again**. The verification invocation must:
+
+- Receive the updated implementation and relevant changes.
+- Receive its original report or a complete reference to its previous findings.
+- Explicitly verify whether the previously reported, in-scope issues have been resolved.
+- Check whether the fixes introduced new problems related to its review responsibilities.
+
+Do not treat the initial review as complete without this verification step. If verification identifies unresolved findings or new actionable problems:
+
+1. Investigate and address the relevant issues.
+2. Document anything that remains outside the current scope.
+3. Invoke the same sub-agent again.
+4. Repeat until all in-scope findings are verified as resolved.
+
+A sub-agent's initial report is **not** proof of resolution. Only its subsequent verification can establish that reported issues have been addressed.
+
+#### Code Reviewer — First Stage
+
+- Always invoke first.
+- Responsibility: code quality, correctness, maintainability, consistency, unnecessary complexity.
+- After report: triage every finding → fix relevant → document out-of-scope → re-invoke Code Reviewer → obtain explicit verification.
+- Only after this lifecycle completes may Security Reviewer be invoked.
+
+#### Security Reviewer — Second Stage (Highest Priority)
+
+- Always invoke after Code Reviewer verifies.
+- Security findings have significantly higher priority than ordinary review findings.
+- For each reported security issue: investigate root cause, evaluate exploitability/attack surface/impact/abuse scenarios, prefer robust defensive solutions over narrow workarounds, consider relevant security boundaries, add/update tests for regressions, assess whether remediation introduces other risks.
+- Security findings must not be dismissed or deferred casually.
+- If a security issue cannot be addressed within current task scope: document it prominently with severity, technical evidence, potential impact, and recommended remediation. Do not hide unresolved security risks among ordinary deferred suggestions.
+- After implementing and documenting: re-invoke Security Reviewer, provide updated implementation and original report, require explicit verification, address remaining relevant findings and repeat verification as necessary.
+- Do not proceed to next stage until this lifecycle is complete.
+
+#### Migration Reviewer — Third Stage (Conditional)
+
+- Invoke after Security Reviewer completes, **only when** the task adds, modifies, or removes database migration files.
+- Review: migration correctness/schema consistency, data integrity/preservation, backward compatibility, deployment/rollback safety, locking/downtime, migration ordering/dependencies, ORM entity ↔ database schema consistency.
+- Apply the same mandatory finding-resolution lifecycle.
+- If no migration files changed, skip this stage entirely.
+
+#### Documentation Sync — Final Stage
+
+- Always invoke last, after all applicable review stages and verification cycles complete.
+- Responsibilities: synchronize existing documentation with final implementation, create new documentation when required, update architecture/technical/API/configuration/operational documentation, ensure documented behavior matches actual implementation, ensure important findings/out-of-scope recommendations are recorded in appropriate project documentation, remove/correct outdated documentation.
+- Must consider the **final** implementation, not an intermediate state.
+- Must not introduce unnecessary documentation, duplicate existing information, or invent architectural decisions never made.
+- No other sub-agent should be invoked after Documentation Sync in the normal task workflow.
+
+#### General Enforcement Rules
+
+- No review report may be ignored.
+- Every finding must either be resolved or explicitly documented with its disposition.
+- Never claim a finding is fixed without verifying the actual implementation.
+- Never consider a review complete based only on its initial report.
+- Always use the same sub-agent for verification of its original findings.
+- Never execute review stages concurrently.
+- Do not skip Security Reviewer, even for apparently small tasks.
+- Skip Migration Reviewer only when no migration files have been added, modified, or removed.
+- Documentation Sync is mandatory and must always be the final stage.
+- Preserve the existing task scope. Do not implement unrelated suggestions merely because a reviewer mentioned them.
+- Follow all existing project testing rules. Review-related fixes must not be considered complete while relevant tests are failing.
+- Do not hide unresolved findings or present deferred work as completed work.
+
+### Orchestration Rules for the Primary Agent
 
 - **Session initialization:** invoke `project-explorer` at the beginning of
   every new development session, before substantive task analysis or

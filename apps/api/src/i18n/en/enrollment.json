@@ -1,4 +1,7 @@
 {
   "expired": "This enrollment has expired and can no longer be continued.",
-  "stepNotAllowed": "This step cannot be submitted in the current enrollment state."
+  "stepNotAllowed": "This step cannot be submitted in the current enrollment state.",
+  "stepSubmitted": "Step submitted successfully.",
+  "enrollmentNotFound": "Enrollment not found.",
+  "usernameTaken": "This username is already taken."
 }

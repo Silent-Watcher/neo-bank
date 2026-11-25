@@ -11,6 +11,8 @@ import { ENROLLMENT_SCHEMA_CONSTRAINT_NAMES } from '#modules/enrollments/enrollm
 import { Migration20261116181139 } from '#database/migrations/Migration20261116181139.js';
 import { Migration20261122000737 } from '#database/migrations/Migration20261122000737.js';
 import { Migration20261122011051 } from '#database/migrations/Migration20261122011051.js';
+import { Migration20261124182507 } from '#database/migrations/Migration20261124182507.js';
+import { Migration20261125220000 } from '#database/migrations/Migration20261125220000.js';
 
 import { startTestPostgres } from './testcontainers.js';
 import type { TestPostgres } from './testcontainers.js';
@@ -33,6 +35,8 @@ const MIGRATIONS_LIST = [
   { name: 'Migration20261116181139', class: Migration20261116181139 },
   { name: 'Migration20261122000737', class: Migration20261122000737 },
   { name: 'Migration20261122011051', class: Migration20261122011051 },
+  { name: 'Migration20261124182507', class: Migration20261124182507 },
+  { name: 'Migration20261125220000', class: Migration20261125220000 },
 ];
 
 beforeAll(async () => {

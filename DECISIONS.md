@@ -2264,3 +2264,197 @@ PostgreSQL integration tests must prove: two active enrollments cannot share a `
 - Master prompt §7.5 (step data), §8.2/8.3 (uniqueness), §8.5 (legacy), §12 Phase 3, §14.5–7 (approval gates); prompt record `_061`
 - ADR-041 (type-contract precedent, constraint-name single source), ADR-040 (PG 18.7), ADR-033 (migration immutability)
 - `DEFERRED.md` _051 (national code is PII — protection decisions still open); `DEFERRED.md` _060 entries 1–2 (implemented in this phase)
+
+---
+
+## ADR-043: Adopt Argon2id for Password Hashing
+
+- **Status:** Accepted
+- **Date:** 2026-11-25
+
+### Context
+
+The Neo Bank API's Enrollment module (Phase 6) collects a user-provided password during the multi-step onboarding form. The password must be hashed before persistence — plaintext passwords are never stored. The original implementation used bcrypt with a cost factor of 12 (OWASP minimum at the time of implementation). The project is in active development with no production users, no existing password hashes, and no backward-compatibility requirements.
+
+Bcrypt remains a widely deployed and well-understood adaptive hashing algorithm. However, Argon2id — the winner of the 2015 Password Hashing Competition and standardized in RFC 9106 — offers a memory-hard design that provides stronger resistance against large-scale parallel password-guessing attacks using specialized hardware (GPUs, ASICs, FPGAs). For a new banking application establishing its security baseline, Argon2id is the recommended choice per the OWASP Password Storage Cheat Sheet.
+
+### Problem Statement
+
+Establish the password hashing algorithm for the Enrollment module's PASSWORD step (and any future authentication flows) using a modern, memory-hard adaptive hashing algorithm with no legacy migration burden.
+
+### Decision
+
+Use **Argon2id** via the official `argon2` npm package (node-argon2) with the following OWASP-recommended minimum parameters:
+
+| Parameter   |              Value | Rationale                                                                      |
+| ----------- | -----------------: | ------------------------------------------------------------------------------ |
+| Algorithm   |           Argon2id | Hybrid of Argon2i and Argon2d; resists both side-channel and trade-off attacks |
+| Memory cost | 19456 KiB (19 MiB) | OWASP minimum; forces significant memory allocation per guess                  |
+| Time cost   |                  2 | OWASP minimum; 2 passes over memory                                            |
+| Parallelism |                  1 | OWASP minimum; single-threaded to maximize memory cost per operation           |
+
+All parameters are set explicitly in `enrollments.enums.ts` as named constants (`ARGON2_MEMORY_COST`, `ARGON2_TIME_COST`, `ARGON2_PARALLELISM`) — never relying on library defaults. The complete PHC-formatted hash string is stored in the `password_hash` column (`text`, CHECK `char_length <= 255`).
+
+### Alternatives Considered
+
+| Alternative                        | Assessment                                                                                                                                                                                                  |
+| ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **bcrypt (cost 12)**               | Battle-tested, widely deployed. Rejected for new code: lacks memory-hardness; GPU/ASIC cracking is significantly more efficient than against Argon2id at equivalent CPU time.                               |
+| **scrypt**                         | Memory-hard predecessor. Rejected: Argon2id improves on scrypt's design (better memory-hardness tuning, native parallelism support, side-channel resistance).                                               |
+| **PBKDF2**                         | Not memory-hard; vulnerable to GPU/ASIC acceleration. Rejected.                                                                                                                                             |
+| **Native Node.js `crypto.argon2`** | See ADR-044 for detailed comparison. Rejected: low-level KDF API requiring hand-rolled PHC serialization, salt generation, verification, and rehash detection — introducing security-sensitive custom code. |
+| **Argon2i**                        | Side-channel resistant but vulnerable to trade-off attacks. Rejected: Argon2id is the hybrid that resists both.                                                                                             |
+
+### Security Considerations
+
+**Why adaptive password hashing (not encryption or general-purpose hashing):**
+
+- Encryption is reversible — if the key is compromised, all passwords are exposed.
+- General-purpose hashes (SHA-256, BLAKE3) are fast by design — an attacker can compute billions of guesses per second.
+- Adaptive hashing (bcrypt, scrypt, Argon2) is intentionally slow and (for Argon2/scrypt) memory-hard, raising the cost of each guess.
+
+**Why Argon2id for new password hashes:**
+
+- **Memory-hard design**: The attacker must allocate ~19 MiB per concurrent guess, severely limiting parallelism on GPUs/ASICs where memory is expensive.
+- **Resistance to large-scale parallel guessing**: At the OWASP minimum (19 MiB, 2 passes, 1 lane), a single hash takes ~50–100 ms on a modern CPU core. An attacker with 1000 GPU cores would need ~19 GiB of VRAM to attack at full parallelism — cost-prohibitive for large dictionaries.
+- **Parameter roles**: Memory cost (KiB) dominates ASIC/GPU resistance; time cost (passes) adds sequential latency; parallelism (lanes) can increase throughput for legitimate multi-core servers but reduces per-lane memory, so we set it to 1 to maximize the memory cost per operation.
+
+**Why the chosen parameters satisfy OWASP minimum:**
+
+- OWASP Password Storage Cheat Sheet (2024) recommends: Argon2id, `m=19456`, `t=2`, `p=1` — exactly our configuration.
+- This is a **minimum**; the application can increase parameters via a forward migration (using `argon2.needsRehash`) as hardware improves, without a breaking change.
+
+**Resource consumption & DoS considerations:**
+
+- Each hash allocates ~19 MiB. A **global concurrency semaphore** (`MAX_CONCURRENT_HASHES = 10`) in `EnrollmentsService` bounds peak memory to ~190 MiB regardless of IP diversity or rate-limit bypass (SEC-01 mitigation, 2026-11-25 security review).
+- The rate limit (20 req/120s per IP) and existing throttler remain the first line of defense; the semaphore is the hard backstop.
+
+**Password length policy:** The Zod validation schema (`passwordStepSchema`) limits passwords to **72 characters** (NIST SP 800-63B), reduced from 128 in response to SEC-02 (2026-11-25 security review). This aligns with bcrypt's effective limit and eliminates unnecessary DoS surface per request.
+
+**Future parameter upgrades:**
+
+- `argon2.needsRehash()` is used to detect when stored hashes need upgrading. A future migration can increase parameters; the next login/verification will rehash transparently.
+
+**Explicitly: no legacy hashes to migrate.** This is a new application with zero production password hashes. No backward-compatibility mechanism, no opportunistic rehashing, no dual-algorithm support — clean break.
+
+### Performance and Resource Considerations
+
+- Hash time: ~50–100 ms per operation on modern CPUs (single-threaded).
+- Memory: ~19 MiB per concurrent hash.
+- At 20 req/120s sustained: peak ~380 MiB, average well below.
+- No database migration for existing hashes (none exist).
+
+### Consequences and Trade-offs
+
+**Positive:**
+
+- Stronger brute-force resistance than bcrypt at equivalent CPU time.
+- Industry standard (RFC 9106, OWASP recommended).
+- Future-proof: parameters can be increased via `needsRehash` without breaking changes.
+- Clean implementation: single abstraction (`EnrollmentsService.hashPassword()`), centralized constants, no custom crypto code.
+
+**Negative:**
+
+- Native dependency (`node-argon2` via `node-gyp-build`) complicates Docker builds slightly (requires build tools in the image).
+- Slower than bcrypt for legitimate users (mitigated: PASSWORD step is infrequent; rate-limited; async).
+
+### Future Considerations
+
+- Monitor hardware advances; increase memory/time cost via forward migration when OWASP recommendations shift.
+- When authentication lands (Phase 7+), add `verifyPassword()` using `argon2.verify()` and `needsRehash()` on successful verification.
+
+### References
+
+- OWASP Password Storage Cheat Sheet: https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html
+- RFC 9106 — Argon2: https://www.rfc-editor.org/rfc/rfc9106
+- `argon2` npm package: https://github.com/ranisalt/node-argon2
+
+---
+
+## ADR-044: Choose node-argon2 Instead of Node.js Native Argon2
+
+- **Status:** Accepted
+- **Date:** 2026-11-25
+
+### Context
+
+Node.js 24.20.0 (the project's minimum supported runtime, per `engines.node >=24.15 <25` and `.nvmrc`) exposes a native `crypto.argon2` API (added in Node 20.0.0, stabilized in 22.x). This API provides a low-level Argon2 key derivation function. The project must decide whether to use this built-in API directly or depend on the higher-level `argon2` npm package (node-argon2) which wraps the native C library via Node-API.
+
+### Decision
+
+Use the **`argon2` npm package (node-argon2)** for password hashing. Do not implement password storage directly on top of Node.js native `crypto.argon2`.
+
+### Alternatives Considered
+
+| Alternative                                                | Assessment                                                                                                                                                                                                                                                                            |
+| ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Native `crypto.argon2` + custom PHC/verify/needsRehash** | Technically possible but requires writing ~200 lines of security-sensitive code: PHC string serialization/parsing, cryptographically secure salt generation, constant-time verification, `needsRehash` logic, malformed-hash handling, version negotiation. High risk of subtle bugs. |
+| **`argon2` npm package**                                   | Provides complete password-storage API: `hash()`, `verify()`, `needsRehash()`, automatic salt generation, PHC string I/O, typed errors, TypeScript definitions. Battle-tested (10M+ weekly downloads), maintained by the node-argon2 team, used by major frameworks.                  |
+
+### Technical Rationale
+
+**Node.js native `crypto.argon2` (as of Node 24.x) is a KDF primitive, not a password storage solution:**
+
+| Capability                                      | Native `crypto.argon2` | `argon2` npm package                           |
+| ----------------------------------------------- | ---------------------- | ---------------------------------------------- |
+| Raw derived bytes output                        | ✅                     | ❌ (returns PHC string)                        |
+| Accepts explicit `nonce` (salt)                 | ✅ required            | ✅ auto-generates                              |
+| Accepts `memory`, `passes`, `parallelism`       | ✅                     | ✅                                             |
+| **PHC string serialization**                    | ❌ manual              | ✅ built-in (`$argon2id$v=19$m=...$salt$hash`) |
+| **Cryptographically secure salt generation**    | ❌ caller must supply  | ✅ built-in (random per hash)                  |
+| **Password verification (`verify(hash, pwd)`)** | ❌ manual              | ✅ built-in (timing-safe)                      |
+| **Rehash detection (`needsRehash`)**            | ❌ manual              | ✅ built-in                                    |
+| **Hash format validation / parsing**            | ❌ manual              | ✅ built-in (throws on malformed)              |
+| **Algorithm negotiation (argon2d/i/id)**        | ✅ string parameter    | ✅ enum constant                               |
+
+**Building a complete password storage layer on the native API requires implementing:**
+
+1. PHC string format: `$argon2id$v=19$m=19456,t=2,p=1$<base64-salt>$<base64-hash>`
+2. Secure random salt generation per hash (16+ bytes, base64-encoded in PHC)
+3. Constant-time verification: parse stored PHC → extract params/salt/hash → derive key from submitted password → `timingSafeEqual` against stored hash
+4. `needsRehash`: parse stored PHC → compare parameters against current policy
+5. Error handling for malformed/truncated/non-PHC stored values
+
+**Each of these is security-sensitive code.** A bug in salt generation, verification, or PHC parsing can silently weaken or break authentication. The `argon2` package has already solved these problems correctly across millions of deployments.
+
+### Deployment and Operational Trade-offs
+
+| Factor                    | Native `crypto.argon2` | `argon2` npm                                                                                   |
+| ------------------------- | ---------------------- | ---------------------------------------------------------------------------------------------- |
+| **Native dependency**     | None (built into Node) | Yes — `node-gyp-build` fetches prebuilt binaries or compiles via `node-addon-api`              |
+| **Docker (alpine) build** | No extra tools         | Requires `python3 make g++` in build stage (prebuilds usually avoid compile)                   |
+| **Supply chain**          | Zero extra deps        | One extra direct dep (`argon2`), transitive: `@phc/format`, `node-addon-api`, `node-gyp-build` |
+| **Runtime compatibility** | Node ≥20.0.0           | Node ≥16.17.0 (our min: 24.15 ✅)                                                              |
+| **API stability**         | Stable (Node core)     | Stable (semver, widely used)                                                                   |
+
+The `argon2` package uses `node-gyp-build` which downloads prebuilt binaries for common platforms (linux/arm64, linux/x64, darwin/arm64, darwin/x64, win32/x64). The project's Docker images (`node:24-alpine`) will need build tools in the build stage — a one-time Dockerfile addition. This is an acceptable operational cost for the security and correctness guarantees.
+
+### Consequences
+
+**Positive:**
+
+- Zero hand-rolled cryptographic code in the application.
+- Complete, tested password storage API (hash/verify/needsRehash/PHC).
+- Centralized configuration via `enrollments.enums.ts` constants.
+- Future-proof: library handles PHC version/parameter evolution.
+
+**Negative:**
+
+- Extra native dependency in the supply chain (mitigated: pinned version, `pnpm-workspace.yaml` `allowBuilds` approval, prebuilt binaries for target platforms).
+- Slightly more complex Docker build (one-time `apk add python3 make g++` in build stage).
+
+### Future Reconsideration Criteria
+
+This decision should be revisited if and only if **Node.js native crypto exposes an equivalent high-level password hashing API** — specifically:
+
+- A function `crypto.createPasswordHasher('argon2id', options)` returning an object with `.hash(password)`, `.verify(hash, password)`, `.needsRehash(hash)`, and PHC string I/O.
+- OR the project adopts a shared, independently audited internal library that implements the above on top of the native API (and that library passes the same security review bar as `argon2`).
+
+Until then, the higher-level package API remains the correct architectural fit for a banking application.
+
+### References
+
+- Node.js Crypto Documentation — `crypto.argon2`: https://nodejs.org/api/crypto.html#cryptoargon2algorithm-parameters-callback
+- `argon2` (node-argon2) Documentation: https://github.com/ranisalt/node-argon2
+- OWASP Password Storage Cheat Sheet: https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html
+- ADR-043 (Adopt Argon2id for Password Hashing)
